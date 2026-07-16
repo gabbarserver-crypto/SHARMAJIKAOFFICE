@@ -1,0 +1,15 @@
+{
+  "name": "Sharma Ji Ka Office",
+  "short_name": "SJO",
+  "description": "Sharma Ji Ka Office — RTO Services ERP",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1b3d",
+  "theme_color": "#0f1b3d",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
