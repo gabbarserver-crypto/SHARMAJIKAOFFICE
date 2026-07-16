@@ -8,6 +8,7 @@
     "dev": "node --watch index.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.2",
     "axios": "^1.7.9",
     "cors": "^2.8.5",
     "express": "^4.21.2"

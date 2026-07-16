@@ -28,13 +28,13 @@ export default function Dashboard() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-slate-800 mb-1">Dashboard</h2>
-      <p className="text-slate-400 mb-6">Live snapshot of office activity</p>
+      <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-1">Dashboard</h2>
+      <p className="text-slate-400 dark:text-slate-500 mb-6">Live snapshot of office activity</p>
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {tiles.map((t) => (
           <Card key={t.label}>
-            <p className="text-2xl font-bold text-slate-800">{t.value ?? "—"}</p>
-            <p className="text-sm text-slate-500 mt-1">{t.label}</p>
+            <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">{t.value ?? "—"}</p>
+            <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">{t.label}</p>
           </Card>
         ))}
       </div>

@@ -26,7 +26,7 @@ export default function Reports() {
 
   const rows = summary
     ? [
-        { label: "Total Collection", value: summary.total_collection, color: "text-slate-800" },
+        { label: "Total Collection", value: summary.total_collection, color: "text-slate-800 dark:text-slate-100" },
         { label: "Government Fee Paid", value: -summary.govt_fee_paid, color: "text-rose-600" },
         { label: "Agency Paid", value: -summary.agency_paid, color: "text-rose-600" },
         { label: "Expenses", value: -summary.total_expenses, color: "text-rose-600" },
@@ -53,8 +53,8 @@ export default function Reports() {
       {summary && (
         <Card title={`Summary: ${start} to ${end}`}>
           {rows.map((r) => (
-            <div key={r.label} className={`flex justify-between py-2.5 ${r.bold ? "border-t border-slate-200 mt-2 pt-3" : "border-b border-slate-100"}`}>
-              <span className={`text-sm ${r.bold ? "font-bold text-slate-800" : "text-slate-600"}`}>{r.label}</span>
+            <div key={r.label} className={`flex justify-between py-2.5 ${r.bold ? "border-t border-slate-200 dark:border-slate-800 mt-2 pt-3" : "border-b border-slate-100 dark:border-slate-800"}`}>
+              <span className={`text-sm ${r.bold ? "font-bold text-slate-800 dark:text-slate-100" : "text-slate-600 dark:text-slate-300"}`}>{r.label}</span>
               <span className={`text-sm font-semibold ${r.color}`}>
                 {r.value < 0 ? "-" : ""}₹{Math.abs(Number(r.value)).toLocaleString("en-IN")}
               </span>

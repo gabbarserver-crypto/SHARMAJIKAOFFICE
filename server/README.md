@@ -46,3 +46,24 @@ Certificate" button — reflects the real data instead of placeholders.
 
 - `DELHI_PCC_BASE_URL` — defaults to `https://pcccvr.delhipolice.gov.in/api/PccForm`.
 - `PORT` — defaults to `5000`.
+- `SUPABASE_URL` — your Supabase project URL (same one in `src/lib/supabase.js`).
+- `SUPABASE_SERVICE_ROLE_KEY` — **secret**, from Settings → API → service_role.
+  Only ever set this here, never in the React app. It's what lets this
+  server create a login (email + password) for a dealer or dealer's
+  sub-staff without them having to self-register first.
+
+## Account-creation endpoints
+
+- `POST /api/admin/create-dealer-login` — staff-only. Body:
+  `{ accessToken, dealerId, email, password }`. Creates the dealer's
+  primary login and links it, replacing the old "must sign up first, then
+  admin links the email" flow.
+- `POST /api/create-dealer-staff-login` — staff OR the dealer themself
+  (only for their own `dealerId`). Body:
+  `{ accessToken, dealerId, fullName, email, password }`. Creates a
+  sub-staff login under that dealer (see `dealer_staff` table).
+
+`accessToken` is the caller's current Supabase session access token
+(`(await supabase.auth.getSession()).data.session.access_token` from the
+React app) — used server-side to check whether they're staff or the dealer
+in question before creating anything.
