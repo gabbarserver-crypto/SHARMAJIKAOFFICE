@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton, GhostButton, Modal, Toast } from "../components/UI";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import { identityFor } from "../lib/chat";
+import { Phone, MessageCircle } from "lucide-react";
 import { createDealerLogin, createDealerStaffLogin } from "../lib/serverApi";
 
 const TABS = ["RTO", "Staff", "Service", "Dealer", "Agency"];
@@ -64,7 +65,7 @@ function ListTable({ rows, columns, onEdit, onDelete, onAdd, addLabel }) {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search…"
-            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
           />
           <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 text-sm">🔍</span>
         </div>
@@ -74,15 +75,15 @@ function ListTable({ rows, columns, onEdit, onDelete, onAdd, addLabel }) {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
             <tr>
-              {columns.map((c) => <th key={c.key} className="text-left font-medium px-4 py-3">{c.label}</th>)}
-              <th className="px-4 py-3"></th>
+              {columns.map((c) => <th key={c.key} className="text-left font-medium px-3 py-2">{c.label}</th>)}
+              <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody>
             {filteredRows.map((r) => (
               <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
-                {columns.map((c) => <td key={c.key} className="px-4 py-3 text-slate-700 dark:text-slate-300">{c.render ? c.render(r) : r[c.key]}</td>)}
-                <td className="px-4 py-3 text-right whitespace-nowrap">
+                {columns.map((c) => <td key={c.key} className="px-3 py-2 text-slate-700 dark:text-slate-300">{c.render ? c.render(r) : r[c.key]}</td>)}
+                <td className="px-3 py-2 text-right whitespace-nowrap">
                   <GhostButton onClick={() => onEdit(r)} className="mr-2">Edit</GhostButton>
                   <GhostButton onClick={() => onDelete(r)} className="!text-rose-500">Delete</GhostButton>
                 </td>
@@ -550,6 +551,23 @@ function DealerMaster({ notify }) {
         rows={rows}
         columns={[
           { key: "name", label: "Dealer Name" }, { key: "short_name", label: "Short Name", render: (r) => r.short_name || "—" }, { key: "code", label: "Code" }, { key: "contact_name", label: "Contact" },
+          { key: "mobile", label: "Mobile", render: (r) => r.mobile ? (
+            <div className="flex items-center gap-2 whitespace-nowrap">
+              <span>{r.mobile}</span>
+              <a href={`tel:${r.mobile}`} title="Call" className="text-slate-400 hover:text-blue-600">
+                <Phone size={14} />
+              </a>
+              <a
+                href={`https://wa.me/${r.mobile.replace(/\D/g, "")}`}
+                target="_blank"
+                rel="noreferrer"
+                title="WhatsApp"
+                className="text-slate-400 hover:text-emerald-600"
+              >
+                <MessageCircle size={14} />
+              </a>
+            </div>
+          ) : <span className="text-slate-300 text-xs">—</span> },
           { key: "wallet_balance", label: "Wallet", render: (r) => `₹${Number(r.wallet_balance||0).toLocaleString("en-IN")}` },
           { key: "credit_limit", label: "Credit Limit", render: (r) => `₹${Number(r.credit_limit||0).toLocaleString("en-IN")}` },
           { key: "status", label: "Status", render: (r) => {

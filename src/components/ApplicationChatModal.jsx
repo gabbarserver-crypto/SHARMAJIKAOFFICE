@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Minus } from "lucide-react";
+import { X, Minus, ExternalLink } from "lucide-react";
 import ChatPanel from "./ChatPanel";
 import Avatar from "./Avatar";
 
@@ -13,12 +13,14 @@ import Avatar from "./Avatar";
 // pattern) rather than immediately popping open the full detail view —
 // clicking the bar's header expands it. Minimize collapses it back to that
 // same bar without losing your place; only the X actually calls onClose
-// (which unmounts this from the parent).
+// (which unmounts this from the parent). onOpenDetail (optional — staff
+// side only) opens the full application detail modal alongside the chat,
+// for when you need to see/edit applicant details, documents, etc.
 //
 // Visibility (dealer + their sub-staff + our staff) is enforced by RLS on
 // chat_threads/chat_messages, keyed off dealerId — this component just
 // needs to be told which dealer + application it's scoped to.
-export default function ApplicationChatModal({ dealerId, applicationId, applicationLabel, identity, onClose }) {
+export default function ApplicationChatModal({ dealerId, applicationId, applicationLabel, identity, onClose, onOpenDetail }) {
   const [expanded, setExpanded] = useState(false);
 
   if (!expanded) {
@@ -58,6 +60,11 @@ export default function ApplicationChatModal({ dealerId, applicationId, applicat
         <span onClick={(e) => { e.stopPropagation(); setExpanded(false); }} title="Minimize" className="w-7 h-7 shrink-0 rounded-md hover:bg-white/15 flex items-center justify-center">
           <Minus size={16} />
         </span>
+        {onOpenDetail && (
+          <span onClick={(e) => { e.stopPropagation(); onOpenDetail(); }} title="Open full detail view" className="w-7 h-7 shrink-0 rounded-md hover:bg-white/15 flex items-center justify-center">
+            <ExternalLink size={15} />
+          </span>
+        )}
         <span onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close" className="w-7 h-7 shrink-0 rounded-md hover:bg-white/15 flex items-center justify-center">
           <X size={16} />
         </span>

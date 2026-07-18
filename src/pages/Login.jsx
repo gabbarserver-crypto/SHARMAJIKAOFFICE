@@ -1,12 +1,17 @@
 // src/pages/Login.jsx
 import React, { useState } from "react";
+import { Eye, EyeOff, Fingerprint } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import logo from "../assets/sjo-logo-full.png";
 
 export default function Login({ authError }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -23,46 +28,96 @@ export default function Login({ authError }) {
     // will feed back `authError` (via props) if that check fails.
   };
 
+  // Fingerprint/Face ID login (point 17) — experimental Supabase Passkeys.
+  // Requires the person to have already registered a passkey once (from
+  // inside the dealer/staff portal after a normal password login — see the
+  // "Set up Fingerprint Login" button there), and requires Passkeys enabled
+  // + this domain set as the Relying Party in Supabase Dashboard →
+  // Authentication → Passkeys.
+  const submitWithPasskey = async () => {
+    setError("");
+    setPasskeyLoading(true);
+    const { error: passkeyError } = await supabase.auth.signInWithPasskey();
+    setPasskeyLoading(false);
+    if (passkeyError) setError(passkeyError.message);
+  };
+
   const displayError = error || authError;
 
   return (
-    <div className="min-h-screen bg-[#0f1b3d] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm p-8">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-sm border border-slate-100">
         <div className="text-center mb-6">
-          <div className="w-16 h-16 rounded-full border-2 border-amber-500 mx-auto flex items-center justify-center mb-3">
-            <span className="font-extrabold text-lg tracking-wide text-slate-800">SJO</span>
-          </div>
-          <h1 className="font-bold text-slate-800 text-lg">Sharma Ji Ka Office</h1>
-          <p className="text-slate-400 text-sm">Admin / Staff Login</p>
+          <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[240px] mx-auto mb-2" />
         </div>
 
+        <h1 className="text-2xl font-extrabold text-slate-900 text-center leading-tight">Login to your account.</h1>
+        <p className="text-slate-400 text-sm text-center mt-1 mb-6">Hello, welcome back to your account</p>
+
         <form onSubmit={submit}>
-          <label className="block text-sm font-semibold text-slate-700 mb-1.5">Email</label>
+          <label className="block text-xs font-semibold text-blue-600 mb-1">E-mail</label>
           <input
             type="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-            placeholder="you@office.com"
+            className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-400"
+            placeholder="example@email.com"
           />
-          <label className="block text-sm font-semibold text-slate-700 mb-1.5">Password</label>
-          <input
-            type="password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-          />
+
+          <label className="block text-xs font-semibold text-slate-500 mb-1">Password</label>
+          <div className="relative mb-2">
+            <input
+              type={showPassword ? "text" : "password"}
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-400"
+              placeholder="Your Password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((s) => !s)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between text-xs mb-4 mt-3">
+            <label className="flex items-center gap-1.5 text-slate-500">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="rounded" />
+              Remember me
+            </label>
+            <a href="#" className="text-blue-600 font-medium hover:underline">Forgot Password?</a>
+          </div>
+
           {displayError && <p className="text-rose-500 text-xs mb-3">{displayError}</p>}
+
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-lg mt-3 disabled:opacity-50"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl disabled:opacity-50"
           >
             {loading ? "Signing in..." : "Login"}
           </button>
         </form>
+
+        <div className="flex items-center gap-3 my-4">
+          <div className="flex-1 h-px bg-slate-200" />
+          <span className="text-xs text-slate-400">or</span>
+          <div className="flex-1 h-px bg-slate-200" />
+        </div>
+
+        <button
+          onClick={submitWithPasskey}
+          disabled={passkeyLoading}
+          className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl disabled:opacity-50"
+        >
+          <Fingerprint size={18} />
+          {passkeyLoading ? "Waiting for fingerprint / Face ID…" : "Sign in with Fingerprint / Face ID"}
+        </button>
       </div>
     </div>
   );

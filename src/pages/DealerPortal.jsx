@@ -14,6 +14,9 @@ import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
 import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
 import { createDealerStaffLogin } from "../lib/serverApi";
+import { useDarkMode } from "../lib/theme";
+import { Sun, Moon, Fingerprint } from "lucide-react";
+import SearchableSelect from "../components/SearchableSelect";
 
 const TABS = ["Applications", "Chats", "Ledger"];
 
@@ -63,9 +66,22 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
   };
 
   const visibleTabs = identity?.type === "dealer" ? [...TABS, "Staff"] : TABS;
+  const [dark, toggleDark] = useDarkMode();
+  const [passkeyMsg, setPasskeyMsg] = useState("");
+
+  // Registers a passkey (fingerprint/Face ID/device PIN) for the currently
+  // signed-in account so they can use "Sign in with Fingerprint / Face ID"
+  // on the login screen afterward. Experimental Supabase API — see the note
+  // in lib/supabase.js. Needs Passkeys enabled + this domain set as the
+  // Relying Party in Supabase Dashboard first, or this will error out.
+  const setUpPasskey = async () => {
+    setPasskeyMsg("Follow your device's prompt…");
+    const { error } = await supabase.auth.registerPasskey();
+    setPasskeyMsg(error ? "Couldn't set up: " + error.message : "Fingerprint / Face ID login is set up on this device.");
+  };
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-950">
       <header className="bg-[#0f1b3d] text-white px-6 py-4 flex items-center justify-between">
         <div>
           <p className="font-bold text-lg">{dealer.name}</p>
@@ -73,13 +89,37 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
             Dealer Portal · Code {dealer.code}{identity?.type === "dealer_staff" ? ` · ${identity.name}` : ""}
           </p>
         </div>
-        <button
-          onClick={onLogout}
-          className="text-sm font-semibold bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg"
-        >
-          Logout
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={setUpPasskey}
+            title="Set up Fingerprint / Face ID login on this device"
+            aria-label="Set up fingerprint login"
+            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+          >
+            <Fingerprint size={16} />
+          </button>
+          <button
+            onClick={toggleDark}
+            title={dark ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label="Toggle dark mode"
+            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+          >
+            {dark ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            onClick={onLogout}
+            className="text-sm font-semibold bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg"
+          >
+            Logout
+          </button>
+        </div>
       </header>
+      {passkeyMsg && (
+        <div className="bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 text-sm px-6 py-2 flex items-center justify-between">
+          <span>{passkeyMsg}</span>
+          <button onClick={() => setPasskeyMsg("")} className="text-blue-400 hover:text-blue-600">×</button>
+        </div>
+      )}
 
       <main className="max-w-5xl mx-auto p-6">
         <div className="grid sm:grid-cols-2 gap-4 mb-6">
@@ -199,7 +239,12 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
     }
     setSaving(true);
     setError("");
-    const draftCode = "DFT" + Math.floor(1000 + Math.random() * 9000);
+    const { data: draftCode, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: dealer.id });
+    if (codeError) {
+      setSaving(false);
+      setError("Failed: " + codeError.message);
+      return;
+    }
     const { data: newApp, error: insertError } = await supabase
       .from("applications")
       .insert({
@@ -253,14 +298,12 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
   return (
     <Modal title="New Application" onClose={onClose}>
       <Field label="Service" required>
-        <Select value={f.service_id} onChange={set("service_id")}>
-          <option value="">Select a service</option>
-          {services.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.parent_service}{s.short_name ? ` (${s.short_name})` : ""}
-            </option>
-          ))}
-        </Select>
+        <SearchableSelect
+          value={f.service_id}
+          options={services.map((s) => ({ id: s.id, name: `${s.parent_service}${s.short_name ? ` (${s.short_name})` : ""}` }))}
+          onChange={(id) => setF((s) => ({ ...s, service_id: id }))}
+          placeholder="Search or select a service…"
+        />
       </Field>
       <Field label="Applicant Name" required><Input value={f.applicant_name} onChange={set("applicant_name")} /></Field>
       <Field label="Father / Husband Name"><Input value={f.father_husband_name} onChange={set("father_husband_name")} /></Field>

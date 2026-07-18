@@ -183,7 +183,7 @@ export default function Chats({ staff }) {
                 <button
                   key={t.threadId}
                   onClick={() => setSelectedThreadId(t.threadId)}
-                  className={`w-full text-left px-4 py-3 hover:bg-slate-50 dark:bg-slate-800/60 ${selectedThreadId === t.threadId ? "bg-blue-50" : ""}`}
+                  className={`w-full text-left px-3 py-2 hover:bg-slate-50 dark:bg-slate-800/60 ${selectedThreadId === t.threadId ? "bg-blue-50" : ""}`}
                 >
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 truncate">{t.applicantName}</span>
@@ -198,7 +198,7 @@ export default function Chats({ staff }) {
         </div>
 
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
-          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 shrink-0">
+          <div className="px-3 py-2 border-b border-slate-200 dark:border-slate-800 shrink-0">
             <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
               {selected ? `${selected.draftCode} — ${selected.applicantName}` : "Select a conversation"}
             </h3>
@@ -238,7 +238,7 @@ export default function Chats({ staff }) {
                   <button
                     key={t.threadId}
                     onClick={() => setSelectedDealerThreadId(t.threadId)}
-                    className={`w-full text-left px-4 py-3 hover:bg-slate-50 dark:bg-slate-800/60 ${selectedDealerThreadId === t.threadId ? "bg-blue-50" : ""}`}
+                    className={`w-full text-left px-3 py-2 hover:bg-slate-50 dark:bg-slate-800/60 ${selectedDealerThreadId === t.threadId ? "bg-blue-50" : ""}`}
                   >
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 truncate">{t.dealerLabel}</span>
@@ -252,7 +252,7 @@ export default function Chats({ staff }) {
           </div>
 
           <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
-            <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 shrink-0">
+            <div className="px-3 py-2 border-b border-slate-200 dark:border-slate-800 shrink-0">
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
                 {selectedDealerThread ? selectedDealerThread.dealerLabel : "Select a conversation"}
               </h3>

@@ -1,8 +1,10 @@
 // src/pages/Applications.jsx
-import React, { useEffect, useState, useCallback, useMemo, useContext, createContext } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useContext, createContext, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Input, Select, Modal, Toast, STATUS_DISPLAY_LABELS } from "../components/UI";
 import ChatPanel from "../components/ChatPanel";
+import ApplicationChatModal from "../components/ApplicationChatModal";
+import SearchableSelect from "../components/SearchableSelect";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
@@ -70,6 +72,52 @@ function ddmmyyyyToISO(input) {
   return trimmed; // leave as-is, let DB flag invalid dates
 }
 
+// Minimal CSV parser for the Import feature — handles quoted fields
+// (including embedded commas/newlines and "" escaped quotes) without
+// pulling in an extra dependency. Returns an array of row objects keyed by
+// the (trimmed) header row.
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  const pushField = () => { row.push(field); field = ""; };
+  const pushRow = () => { rows.push(row); row = []; };
+  // Normalize line endings, then walk character by character.
+  const s = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") pushField();
+    else if (c === "\n") { pushField(); pushRow(); }
+    else field += c;
+  }
+  if (field.length || row.length) { pushField(); pushRow(); }
+  const nonEmptyRows = rows.filter((r) => r.some((v) => v.trim() !== ""));
+  if (!nonEmptyRows.length) return [];
+  const headers = nonEmptyRows[0].map((h) => h.trim());
+  return nonEmptyRows.slice(1).map((r) => {
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = (r[i] ?? "").trim(); });
+    return obj;
+  });
+}
+
+// Looks a free-text CSV value up against a master list by name/short
+// name/code, case-insensitively — used to resolve "Dealer", "Service",
+// "RTO", "Agency" columns to their real IDs during import.
+function findByLabel(list, value, fields) {
+  if (!value) return null;
+  const needle = value.trim().toLowerCase();
+  if (!needle) return null;
+  return list.find((item) => fields.some((f) => item[f] && String(item[f]).trim().toLowerCase() === needle)) || null;
+}
+
 function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false }) {
   const canEdit = useContext(CanEditContext);
   const locked = disabled || !canEdit;
@@ -85,7 +133,9 @@ function EditableCell({ value, onSave, type = "text", width = "w-24", placeholde
       onChange={(e) => setVal(e.target.value)}
       onBlur={() => { if (String(val) !== String(value ?? "")) onSave(val); }}
       className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
-        locked ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-300 placeholder:text-slate-300 cursor-not-allowed" : "border-slate-300 dark:border-slate-700"
+        locked
+          ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 placeholder:text-slate-300 dark:placeholder:text-slate-600 cursor-not-allowed"
+          : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100"
       }`}
     />
   );
@@ -101,7 +151,9 @@ function EditableSelect({ value, options, onSave, width = "w-32", placeholder = 
       disabled={locked}
       title={!canEdit && !disabled ? "You don't have edit access for this section" : undefined}
       className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
-        locked ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-300 cursor-not-allowed" : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+        locked
+          ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 cursor-not-allowed"
+          : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100"
       }`}
     >
       <option value="">{disabled ? "Not required" : placeholder}</option>
@@ -173,7 +225,7 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
                     value={localNo}
                     onChange={(e) => setLocalNo(e.target.value)}
                     placeholder="DLSB-PCC/…"
-                    className="w-full rounded border border-slate-300 dark:border-slate-700 px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    className="w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
                   />
                 </td>
               </tr>
@@ -183,7 +235,7 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
                   <select
                     value={localStatus}
                     onChange={(e) => setLocalStatus(e.target.value)}
-                    className="w-full rounded border border-slate-300 dark:border-slate-700 px-1.5 py-1 text-xs bg-white dark:bg-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    className="w-full rounded border border-slate-300 dark:border-slate-700 px-1.5 py-1 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-400"
                   >
                     <option value="">Not Started</option>
                     {PCC_STATUS_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
@@ -336,7 +388,7 @@ function PCCStatusCheckModal({ row, onClose }) {
               type="text"
               value={applicationNumber}
               onChange={(e) => setApplicationNumber(e.target.value)}
-              className="flex-1 rounded-r-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+              className="flex-1 rounded-r-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
           </div>
         </Field>
@@ -365,7 +417,7 @@ function PCCStatusCheckModal({ row, onClose }) {
 
         {application && (
           <div className="mt-4">
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-4 py-3">
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-3 py-2">
               <div className="text-sm">
                 <div className="text-xs text-slate-400 dark:text-slate-500">Application Number</div>
                 <div className="font-semibold text-slate-700 dark:text-slate-300">{applicationNumber}</div>
@@ -453,7 +505,7 @@ function SortableTh({ column, label, sortKey, sortDir, onSort }) {
   const active = sortKey === column;
   const Icon = active ? (sortDir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
   return (
-    <th className="text-left font-medium px-4 py-3 whitespace-nowrap">
+    <th className="text-left font-medium px-3 py-2 whitespace-nowrap">
       <button
         onClick={() => onSort(column)}
         className={`flex items-center gap-1 hover:text-slate-700 dark:hover:text-slate-200 ${active ? "text-slate-800 dark:text-slate-100 font-semibold" : ""}`}
@@ -468,10 +520,21 @@ function SortableTh({ column, label, sortKey, sortDir, onSort }) {
 export default function Applications({ restricted = false, canEdit = true, canApprove = true } = {}) {
   const [tab, setTab] = useState("All");
   const [chatOnly, setChatOnly] = useState(false);
+  const [compactView, setCompactView] = useState(false); // point 9
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [modalMode, setModalMode] = useState(null); // "customer" | "status"
+  const [chatApp, setChatApp] = useState(null); // row whose small floating chat is open (point 10)
+  const [detailPopup, setDetailPopup] = useState(null); // row shown in the Draft ID quick-detail popup (point 13)
+  const [staffIdentity, setStaffIdentity] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const { data: userData } = await supabase.auth.getUser();
+      const { data: staffRow } = await supabase.from("staff").select("id, full_name").eq("auth_user_id", userData?.user?.id).maybeSingle();
+      if (staffRow) setStaffIdentity(identityFor({ staff: staffRow }));
+    })();
+  }, []);
   const [staffList, setStaffList] = useState([]);
   const [dealerList, setDealerList] = useState([]);
   const [dealerHold, setDealerHold] = useState({}); // dealer_id -> true when out of usable credit
@@ -479,6 +542,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [rtoList, setRtoList] = useState([]);
   const [agencyList, setAgencyList] = useState([]);
   const [showNew, setShowNew] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [toast, setToast] = useState(null);
   const [pccCheckRow, setPccCheckRow] = useState(null);
   const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: true } when awaiting our reply
@@ -570,7 +634,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setDealerList(d || []);
       const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, available_limit");
       setDealerHold(Object.fromEntries((summaries || []).filter((s) => s.available_limit <= 0).map((s) => [s.dealer_id, true])));
-      const { data: sv } = await supabase.from("services").select("id, parent_service, short_name").order("parent_service");
+      const { data: sv } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, rto_required, agency_required, slot_booking_required, chat_in_app").order("parent_service");
       setServiceList(sv || []);
       const { data: rt } = await supabase.from("rtos").select("id, name, code, type").order("name");
       setRtoList(rt || []);
@@ -713,6 +777,22 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
+  // Changing dealer/service on a Draft mid-flight (point 5/6) needs to also
+  // refresh the row's joined `dealers`/`services` objects locally — other
+  // cells (RTO/PCC/Agency/Slot required flags, dealer HOLD badge) read off
+  // those joined objects, not the raw *_id, so without this they'd show
+  // stale requirements until the next full page reload.
+  const updateDealerOrService = async (id, field, value, list) => {
+    const { error } = await supabase.from("applications").update({ [field]: value }).eq("id", id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    const picked = list.find((item) => item.id === value);
+    const joinedKey = field === "dealer_id" ? "dealers" : "services";
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value, [joinedKey]: picked || r[joinedKey] } : r)));
+  };
+
   const openSarathi = async (row) => {
     if (!row.application_no) {
       setToast("Enter Application No first");
@@ -787,7 +867,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   };
 
   const createApplication = async (form) => {
-    const draftCode = "DFT" + Math.floor(1000 + Math.random() * 9000);
+    const { data: draftCode, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: form.dealer_id });
+    if (codeError) {
+      setToast("Failed: " + codeError.message);
+      return;
+    }
     const { data: newApp, error } = await supabase.from("applications").insert({
       draft_code: draftCode,
       dealer_id: form.dealer_id,
@@ -891,6 +975,22 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredRows, sortKey, sortDir, rtoList, agencyList]);
 
+  // Pagination — 10 rows per page (point 8). Export CSV still uses the full
+  // sortedRows (unpaginated), only the on-screen table is sliced.
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
+  useEffect(() => {
+    setPage(1);
+  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly]);
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+  const pagedRows = useMemo(
+    () => sortedRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [sortedRows, page]
+  );
+
   const exportCSV = () => {
     const headers = restricted
       ? ["Draft ID", "Service", "Applicant", "DOB", "RTO Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
@@ -958,6 +1058,9 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             {filteredRows.length} record{filteredRows.length !== 1 ? "s" : ""}
             {filteredRows.length !== rows.length && ` (of ${rows.length})`}
           </p>
+          <p className="text-sm font-semibold text-amber-600 dark:text-amber-400 mt-0.5">
+            Draft: {rows.filter((r) => r.status === "Draft Submitted").length}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
@@ -992,6 +1095,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             </span>
           )}
         </button>
+        <button
+          onClick={() => setCompactView((c) => !c)}
+          title="Toggle a denser, grouped-column table layout"
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+            compactView ? "bg-violet-600 text-white border-violet-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+          }`}
+        >
+          ▦ Compact View
+        </button>
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -1001,7 +1113,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search name, mobile, draft ID, application no…"
-            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
           />
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 text-sm">🔍</span>
         </div>
@@ -1071,7 +1183,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               type="date"
               value={filterDateFrom}
               onChange={(e) => setFilterDateFrom(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
             />
           </div>
           <div>
@@ -1080,12 +1192,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               type="date"
               value={filterDateTo}
               onChange={(e) => setFilterDateTo(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
             />
           </div>
         </div>
       )}
 
+      {!compactView && (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl dark:bg-slate-900 dark:border-slate-800 overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -1111,16 +1224,24 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {visibleCols.mobile && <SortableTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.remark && <SortableTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               <SortableTh column="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <th className="text-left font-medium px-4 py-3 whitespace-nowrap">Chat</th>
-              <th className="text-left font-medium px-4 py-3 whitespace-nowrap">Appointment</th>
+              <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Chat</th>
+              <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Appointment</th>
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((r) => (
+            {pagedRows.map((r) => (
               <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60/60 dark:hover:bg-slate-800/40">
-                <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.draft_code}</td>
+                <td className="px-3 py-2 font-medium whitespace-nowrap">
+                  <button
+                    onClick={() => setDetailPopup(r)}
+                    className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                    title="View full customer details and service charges"
+                  >
+                    {r.draft_code}
+                  </button>
+                </td>
                 {visibleCols.applicationDate && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell
                       width="w-24"
                       value={r.application_date ? isoToDDMMYYYY(r.application_date) : ""}
@@ -1130,13 +1251,23 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.amount && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell type="number" width="w-20" value={r.amount} onSave={(v) => updateRowField(r.id, "amount", v === "" ? null : parseFloat(v))} />
                   </td>
                 )}
                 {visibleCols.dealer && (
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                    {dealerLabel(r.dealers)}
+                  <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                    {r.status === "Draft Submitted" ? (
+                      <EditableSelect
+                        width="w-36"
+                        value={r.dealer_id}
+                        options={dealerList.map((d) => ({ id: d.id, name: dealerLabel(d) }))}
+                        placeholder="Select Dealer"
+                        onSave={(v) => v && updateDealerOrService(r.id, "dealer_id", v, dealerList)}
+                      />
+                    ) : (
+                      dealerLabel(r.dealers)
+                    )}
                     {dealerHold[r.dealer_id] && (
                       <span
                         title="This dealer is out of usable credit"
@@ -1147,17 +1278,31 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     )}
                   </td>
                 )}
-                {visibleCols.service && <td className="px-4 py-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">{serviceLabel(r.services)}</td>}
+                {visibleCols.service && (
+                  <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                    {r.status === "Draft Submitted" ? (
+                      <EditableSelect
+                        width="w-36"
+                        value={r.service_id}
+                        options={serviceList.map((s) => ({ id: s.id, name: serviceLabel(s) }))}
+                        placeholder="Select Service"
+                        onSave={(v) => v && updateDealerOrService(r.id, "service_id", v, serviceList)}
+                      />
+                    ) : (
+                      serviceLabel(r.services)
+                    )}
+                  </td>
+                )}
                 {visibleCols.applicant && (
-                  <td className="px-4 py-3 whitespace-nowrap">
+                  <td className="px-3 py-2 whitespace-nowrap">
                     <button onClick={() => openDetail(r, "customer")} className="text-blue-600 font-semibold hover:underline text-left">
                       {r.applicant_name}
                     </button>
                   </td>
                 )}
-                {visibleCols.dob && <td className="px-4 py-3 text-slate-500 dark:text-slate-500 whitespace-nowrap">{isoToDDMMYYYY(r.date_of_birth)}</td>}
+                {visibleCols.dob && <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{isoToDDMMYYYY(r.date_of_birth)}</td>}
                 {visibleCols.rtoFee && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell
                       type="number"
                       width="w-20"
@@ -1168,7 +1313,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.pccFee && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell
                       type="number"
                       width="w-20"
@@ -1179,7 +1324,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.agencyFee && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell
                       type="number"
                       width="w-20"
@@ -1190,14 +1335,14 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.profit && (
-                  <td className="px-4 py-3 whitespace-nowrap">
+                  <td className="px-3 py-2 whitespace-nowrap">
                     <span className={`font-semibold ${profitOf(r) < 0 ? "text-rose-600" : "text-emerald-600"}`}>
                       ₹{profitOf(r).toLocaleString("en-IN")}
                     </span>
                   </td>
                 )}
                 {visibleCols.application && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
                       <EditableCell width="w-24" value={r.application_no} onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
                       <button
@@ -1211,12 +1356,12 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.lldl && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell width="w-24" value={r.ll_dl_no} onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
                   </td>
                 )}
                 {visibleCols.pccno && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     {r.services?.pcc_required ? (
                       <div className="flex items-center gap-1.5">
                         <PCCNoPopup
@@ -1242,7 +1387,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.rto && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableSelect
                       width="w-32"
                       value={r.rto_id}
@@ -1254,7 +1399,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.agency && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableSelect
                       width="w-32"
                       value={r.agency_id}
@@ -1266,7 +1411,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.slot && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell
                       width="w-28"
                       value={r.slot_time}
@@ -1277,7 +1422,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.mobile && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
                       <EditableCell width="w-28" value={r.mobile} onSave={(v) => updateRowField(r.id, "mobile", v || null)} />
                       {r.mobile && (
@@ -1293,11 +1438,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.remark && (
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2">
                     <EditableCell width="w-36" value={r.remarks} onSave={(v) => updateRowField(r.id, "remarks", v || null)} />
                   </td>
                 )}
-                <td className="px-4 py-3">
+                <td className="px-3 py-2">
                   <button
                     onClick={() => openDetail(r, "status")}
                     title="Assign staff, update status, view history"
@@ -1306,10 +1451,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     <StatusBadge status={r.status} />
                   </button>
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap">
+                <td className="px-3 py-2 whitespace-nowrap">
                   {r.services?.chat_in_app ? (
                     <button
-                      onClick={() => openDetail(r, "customer")}
+                      onClick={() => setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })}
                       className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
                         chatStatus[r.id]
                           ? "bg-rose-50 text-rose-600 border-rose-200 animate-pulse"
@@ -1323,7 +1468,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     <span className="text-slate-300 text-xs">—</span>
                   )}
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap">
+                <td className="px-3 py-2 whitespace-nowrap">
                   {isEligibleForAppointment(r, convertedSourceIds) ? (
                     <button
                       onClick={() => setBookingApp({ sourceApp: r, nextService: serviceList.find((s) => s.id === r.services.next_service_id) })}
@@ -1343,7 +1488,48 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           </tbody>
         </table>
         </div>
+        {sortedRows.length > 0 && (
+          <div className="flex items-center justify-between px-1 py-3 text-sm text-slate-500 dark:text-slate-400">
+            <span>
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, sortedRows.length)} of {sortedRows.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                Prev
+              </button>
+              <span>Page {page} of {totalPages}</span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+      )}
+
+      {compactView && (
+        <CompactApplicationsTable
+          rows={pagedRows}
+          onOpenDetail={(r) => setDetailPopup(r)}
+          onOpenChat={(r) => setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })}
+          profitOf={profitOf}
+          rtoList={rtoList}
+          agencyList={agencyList}
+          page={page}
+          totalPages={totalPages}
+          setPage={setPage}
+          totalCount={sortedRows.length}
+          pageSize={PAGE_SIZE}
+        />
+      )}
 
       {selected && (
         <ApplicationDetailModal
@@ -1359,6 +1545,25 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           onSaveApplicant={updateApplicantDetails}
           onDocsChanged={() => openDetail(selected, modalMode)}
         />
+      )}
+
+      {chatApp && (
+        <ApplicationChatModal
+          dealerId={chatApp.dealer_id}
+          applicationId={chatApp.id}
+          applicationLabel={chatApp.label}
+          identity={staffIdentity}
+          onClose={() => setChatApp(null)}
+          onOpenDetail={() => {
+            const row = rows.find((r) => r.id === chatApp.id);
+            if (row) openDetail(row, "customer");
+            setChatApp(null);
+          }}
+        />
+      )}
+
+      {detailPopup && (
+        <DraftDetailPopup row={detailPopup} profitOf={profitOf} onClose={() => setDetailPopup(null)} />
       )}
 
       {showNew && (
@@ -1386,6 +1591,446 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
     </CanEditContext.Provider>
+  );
+}
+
+// Compact/grouped-column table (point 9) — pairs two related fields into a
+// single two-line cell so the whole table fits in far less horizontal and
+// vertical space. Read-only by design: editing individual fields (RTO fee,
+// PCC no, etc.) needs the full table's per-cell inputs, so switch back to
+// the normal view to edit — this view is for fast scanning across many
+// applications at once.
+function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rtoList, agencyList, page, totalPages, setPage, totalCount, pageSize }) {
+  const fee = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+  const rtoName = (id) => rtoList.find((x) => x.id === id)?.name || "—";
+  const agencyName = (id) => agencyList.find((x) => x.id === id)?.name || "—";
+
+  const Pair = ({ top, bottom }) => (
+    <div className="leading-tight">
+      <div className="text-slate-800 dark:text-slate-100">{top}</div>
+      <div className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">{bottom}</div>
+    </div>
+  );
+
+  return (
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500">
+            <tr>
+              <th className="text-left font-medium px-3 py-2">Draft / Date</th>
+              <th className="text-left font-medium px-3 py-2">Amount / Service</th>
+              <th className="text-left font-medium px-3 py-2">Dealer / Customer</th>
+              <th className="text-left font-medium px-3 py-2">App No / PCC No</th>
+              <th className="text-left font-medium px-3 py-2">RTO Fee / PCC Fee</th>
+              <th className="text-left font-medium px-3 py-2">Agency Fee / Profit</th>
+              <th className="text-left font-medium px-3 py-2">LL-DL No / DOB</th>
+              <th className="text-left font-medium px-3 py-2">RTO / Agency</th>
+              <th className="text-left font-medium px-3 py-2">Slot / Remark</th>
+              <th className="text-left font-medium px-3 py-2">Status / Chat</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                <td className="px-3 py-2">
+                  <button onClick={() => onOpenDetail(r)} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
+                    {r.draft_code}
+                  </button>
+                  <div className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">
+                    {r.application_date ? isoToDDMMYYYY(r.application_date) : "—"}
+                  </div>
+                </td>
+                <td className="px-3 py-2"><Pair top={fee(r.amount)} bottom={serviceLabel(r.services)} /></td>
+                <td className="px-3 py-2"><Pair top={dealerLabel(r.dealers)} bottom={r.applicant_name} /></td>
+                <td className="px-3 py-2"><Pair top={r.application_no || "—"} bottom={r.pcc_no || "—"} /></td>
+                <td className="px-3 py-2"><Pair top={fee(r.rto_fee)} bottom={fee(r.pcc_fee)} /></td>
+                <td className="px-3 py-2"><Pair top={fee(r.agency_fee)} bottom={fee(profitOf(r))} /></td>
+                <td className="px-3 py-2"><Pair top={r.ll_dl_no || "—"} bottom={r.date_of_birth ? isoToDDMMYYYY(r.date_of_birth) : "—"} /></td>
+                <td className="px-3 py-2"><Pair top={rtoName(r.rto_id)} bottom={agencyName(r.agency_id)} /></td>
+                <td className="px-3 py-2"><Pair top={r.slot_time || "—"} bottom={r.remarks || "—"} /></td>
+                <td className="px-3 py-2">
+                  <StatusBadge status={r.status} />
+                  {r.services?.chat_in_app && (
+                    <div className="mt-1">
+                      <button onClick={() => onOpenChat(r)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
+                        Chat
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={10} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search / filters</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {totalCount > 0 && (
+        <div className="flex items-center justify-between px-4 py-3 text-sm text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800">
+          <span>Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalCount)} of {totalCount}</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800">Prev</button>
+            <span>Page {page} of {totalPages}</span>
+            <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800">Next</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Header names accepted in an import CSV, normalized (lowercase, letters/
+// numbers only) -> internal field key. Several aliases per field so a
+// dealer/staff-exported sheet with slightly different wording still works.
+const IMPORT_HEADER_MAP = {
+  draftid: "draft_code", draftcode: "draft_code",
+  dealer: "dealer", dealername: "dealer",
+  service: "service",
+  applicant: "applicant_name", applicantname: "applicant_name",
+  fatherhusband: "father_husband_name", fatherhusbandname: "father_husband_name",
+  dob: "date_of_birth", dateofbirth: "date_of_birth",
+  mobile: "mobile", mobileno: "mobile", phone: "mobile",
+  address: "address",
+  amount: "amount",
+  rtofee: "rto_fee",
+  pccfee: "pcc_fee",
+  agencyfee: "agency_fee",
+  applicationno: "application_no", application: "application_no",
+  lldlno: "ll_dl_no",
+  pccno: "pcc_no",
+  pccstatus: "pcc_status",
+  rto: "rto",
+  agency: "agency",
+  slot: "slot_time", slottime: "slot_time",
+  remark: "remarks", remarks: "remarks",
+  applicationdate: "application_date",
+  status: "status",
+};
+
+const IMPORT_STATUS_MAP = {
+  "draft submitted": "Draft Submitted",
+  "under review": "Under Review",
+  "on hold": "On Hold",
+  rejected: "Rejected",
+  accepted: "Accepted",
+  approved: "Accepted", // display label round-trips back to the stored value
+  completed: "Completed",
+};
+
+function normalizeHeader(h) {
+  return String(h || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function toNumberOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const cleaned = String(v).replace(/[₹,\s]/g, "");
+  if (cleaned === "") return null;
+  const n = Number(cleaned);
+  return Number.isNaN(n) ? null : n;
+}
+
+function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList, onClose, onImported }) {
+  const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState([]); // { included, errors: [], payload }
+  const [parsing, setParsing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState(null); // { imported, skipped }
+  const [error, setError] = useState("");
+
+  const downloadTemplate = () => {
+    const headers = [
+      "Draft ID", "Dealer", "Service", "Applicant", "Father/Husband", "DOB", "Mobile", "Address",
+      "Amount", "RTO Fee", "PCC Fee", "Agency Fee", "Application No", "LL/DL No", "PCC No",
+      "PCC Status", "RTO", "Agency", "Slot", "Remark", "Application Date", "Status",
+    ];
+    const example = [
+      "", dealerList[0] ? dealerLabel(dealerList[0]) : "Dealer Name", serviceList[0]?.short_name || serviceList[0]?.parent_service || "Service Name",
+      "Ramesh Kumar", "Suresh Kumar", "15-08-1990", "9876543210", "123 Main St",
+      "1500", "500", "300", "200", "", "", "", "", "", "", "", "", "17-07-2026", "Draft Submitted",
+    ];
+    const escapeCsv = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+    const csv = [headers.join(","), example.map(escapeCsv).join(",")].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "applications-import-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    setError("");
+    setParsing(true);
+    try {
+      const text = await file.text();
+      const rawRows = parseCSV(text);
+      if (!rawRows.length) {
+        setError("No data rows found in that file.");
+        setPreview([]);
+        setParsing(false);
+        return;
+      }
+
+      const built = rawRows.map((raw) => {
+        // Remap this row's headers to internal field keys.
+        const row = {};
+        Object.entries(raw).forEach(([h, v]) => {
+          const key = IMPORT_HEADER_MAP[normalizeHeader(h)];
+          if (key) row[key] = v;
+        });
+
+        const errors = [];
+        const dealer = findByLabel(dealerList, row.dealer, ["name", "short_name", "code"]);
+        if (row.dealer && !dealer) errors.push(`Dealer "${row.dealer}" not found`);
+        if (!row.dealer) errors.push("Dealer is required");
+
+        const service = findByLabel(serviceList, row.service, ["parent_service", "short_name"]);
+        if (row.service && !service) errors.push(`Service "${row.service}" not found`);
+        if (!row.service) errors.push("Service is required");
+
+        if (!row.applicant_name) errors.push("Applicant name is required");
+
+        const rto = row.rto ? findByLabel(rtoList, row.rto, ["name", "code"]) : null;
+        if (row.rto && !rto) errors.push(`RTO "${row.rto}" not found`);
+
+        const agency = row.agency ? findByLabel(agencyList, row.agency, ["name", "code"]) : null;
+        if (row.agency && !agency) errors.push(`Agency "${row.agency}" not found`);
+
+        const statusRaw = (row.status || "Draft Submitted").trim().toLowerCase();
+        const status = IMPORT_STATUS_MAP[statusRaw];
+        if (row.status && !status) errors.push(`Status "${row.status}" not recognized`);
+
+        const dob = row.date_of_birth ? ddmmyyyyToISO(row.date_of_birth) : null;
+        const applicationDate = row.application_date ? ddmmyyyyToISO(row.application_date) : null;
+
+        const payload = {
+          draft_code: row.draft_code || null, // real sequential code assigned in runImport, per-dealer, at actual import time
+          dealer_id: dealer?.id,
+          service_id: service?.id,
+          applicant_name: row.applicant_name,
+          father_husband_name: row.father_husband_name || null,
+          date_of_birth: dob,
+          mobile: row.mobile || null,
+          address: row.address || null,
+          amount: toNumberOrNull(row.amount),
+          rto_fee: toNumberOrNull(row.rto_fee),
+          pcc_fee: toNumberOrNull(row.pcc_fee),
+          agency_fee: toNumberOrNull(row.agency_fee),
+          application_no: row.application_no || null,
+          ll_dl_no: row.ll_dl_no || null,
+          pcc_no: row.pcc_no || null,
+          pcc_status: row.pcc_status || null,
+          rto_id: rto?.id || null,
+          agency_id: agency?.id || null,
+          slot_time: row.slot_time || null,
+          remarks: row.remarks || null,
+          application_date: applicationDate,
+          status: status || "Draft Submitted",
+        };
+
+        return { raw, errors, payload, dealerRaw: row.dealer || "", serviceRaw: row.service || "", included: errors.length === 0 };
+      });
+
+      setPreview(built);
+    } catch (err) {
+      setError("Couldn't read that file: " + err.message);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const toggleIncluded = (i) => {
+    setPreview((rows) => rows.map((r, idx) => (idx === i ? { ...r, included: !r.included } : r)));
+  };
+
+  const includedCount = preview.filter((r) => r.included).length;
+  const errorCount = preview.filter((r) => r.errors.length > 0).length;
+
+  const runImport = async () => {
+    const rowsToImport = preview.filter((r) => r.included && r.errors.length === 0);
+    if (!rowsToImport.length) return;
+    setImporting(true);
+    setError("");
+    try {
+      // Assign each row's real sequential draft code now (not during preview) so
+      // cancelling after preview doesn't burn/skip numbers in a dealer's counter.
+      // Rows where the CSV itself specified a draft_code keep that value as-is.
+      const payloads = [];
+      for (const r of rowsToImport) {
+        if (r.payload.draft_code) {
+          payloads.push(r.payload);
+          continue;
+        }
+        const { data: generated, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: r.payload.dealer_id });
+        if (codeError) {
+          setError(`Import failed generating a draft code for "${r.payload.applicant_name}": ` + codeError.message);
+          setImporting(false);
+          return;
+        }
+        payloads.push({ ...r.payload, draft_code: generated });
+      }
+
+      const { error: insertError } = await supabase.from("applications").insert(payloads);
+      if (insertError) {
+        setError("Import failed: " + insertError.message);
+        setImporting(false);
+        return;
+      }
+      setResult({ imported: rowsToImport.length, skipped: preview.length - rowsToImport.length });
+      setImporting(false);
+      onImported();
+    } catch (err) {
+      setError("Import failed: " + err.message);
+      setImporting(false);
+    }
+  };
+
+  return (
+    <Modal title="Import Application Records" onClose={onClose} wide>
+      <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+        Upload a CSV of existing application records. Dealer, Service, RTO, and Agency are matched by name — make sure
+        they match what's set up in Masters. Not sure of the format?{" "}
+        <button onClick={downloadTemplate} className="text-blue-600 font-semibold hover:underline">Download a template</button>.
+      </p>
+
+      <div className="flex items-center gap-3 mb-4">
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleFile}
+          className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-slate-700 dark:file:text-slate-300 file:font-semibold file:text-sm"
+        />
+        {fileName && <span className="text-xs text-slate-400 dark:text-slate-500">{fileName}</span>}
+      </div>
+
+      {parsing && <p className="text-sm text-slate-400 dark:text-slate-500">Reading file…</p>}
+      {error && <p className="text-sm text-rose-600 mb-3">{error}</p>}
+
+      {preview.length > 0 && !result && (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              {preview.length} row{preview.length !== 1 ? "s" : ""} found — {includedCount} ready to import
+              {errorCount > 0 && `, ${errorCount} with errors (excluded automatically, shown below)`}.
+            </p>
+          </div>
+          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-auto max-h-80 mb-4">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">Import?</th>
+                  <th className="px-3 py-2 text-left">Draft ID</th>
+                  <th className="px-3 py-2 text-left">Dealer</th>
+                  <th className="px-3 py-2 text-left">Service</th>
+                  <th className="px-3 py-2 text-left">Applicant</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-left">Issues</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {preview.map((r, i) => (
+                  <tr key={i} className={r.errors.length ? "bg-rose-50/50 dark:bg-rose-500/5" : ""}>
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={r.included}
+                        disabled={r.errors.length > 0}
+                        onChange={() => toggleIncluded(i)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.payload.draft_code || <span className="text-slate-400 dark:text-slate-500 italic">auto</span>}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.dealerRaw || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.serviceRaw || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.payload.applicant_name || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.payload.status}</td>
+                    <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <PrimaryButton disabled={importing || includedCount === 0} onClick={runImport}>
+            {importing ? "Importing…" : `Import ${includedCount} Row${includedCount !== 1 ? "s" : ""}`}
+          </PrimaryButton>
+        </>
+      )}
+
+      {result && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30 px-3 py-2">
+          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+            ✓ Imported {result.imported} record{result.imported !== 1 ? "s" : ""}
+            {result.skipped > 0 && ` (${result.skipped} skipped due to errors)`}.
+          </p>
+          <GhostButton className="mt-3" onClick={onClose}>Close</GhostButton>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// Quick-view popup opened by clicking a Draft ID — full customer details +
+// service charges breakdown, without needing to open the bigger status/
+// assignment modal. Admin panel only, for now (point 13).
+function DraftDetailPopup({ row, profitOf, onClose }) {
+  const fee = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+  return (
+    <Modal title={`${row.draft_code} — Details`} onClose={onClose}>
+      <div className="space-y-4">
+        <div>
+          <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase mb-2">Customer</p>
+          <div className="grid grid-cols-2 gap-y-1.5 text-sm">
+            <span className="text-slate-400 dark:text-slate-500">Name</span>
+            <span className="text-slate-800 dark:text-slate-100 font-medium">{row.applicant_name || "—"}</span>
+            <span className="text-slate-400 dark:text-slate-500">Father/Husband</span>
+            <span className="text-slate-700 dark:text-slate-200">{row.father_husband_name || "—"}</span>
+            <span className="text-slate-400 dark:text-slate-500">DOB</span>
+            <span className="text-slate-700 dark:text-slate-200">{row.date_of_birth ? isoToDDMMYYYY(row.date_of_birth) : "—"}</span>
+            <span className="text-slate-400 dark:text-slate-500">Mobile</span>
+            <span className="text-slate-700 dark:text-slate-200">{row.mobile || "—"}</span>
+            <span className="text-slate-400 dark:text-slate-500">Address</span>
+            <span className="text-slate-700 dark:text-slate-200">{row.address || "—"}</span>
+            <span className="text-slate-400 dark:text-slate-500">Dealer</span>
+            <span className="text-slate-700 dark:text-slate-200">{dealerLabel(row.dealers)}</span>
+            <span className="text-slate-400 dark:text-slate-500">Service</span>
+            <span className="text-slate-700 dark:text-slate-200">{serviceLabel(row.services)}</span>
+            <span className="text-slate-400 dark:text-slate-500">Status</span>
+            <span className="text-slate-700 dark:text-slate-200">{row.status}</span>
+          </div>
+        </div>
+
+        <div className="border-t border-slate-200 dark:border-slate-800 pt-3">
+          <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase mb-2">Service Charges</p>
+          <div className="grid grid-cols-2 gap-y-1.5 text-sm">
+            <span className="text-slate-400 dark:text-slate-500">Amount (charged)</span>
+            <span className="text-slate-800 dark:text-slate-100 font-medium">{fee(row.amount)}</span>
+            <span className="text-slate-400 dark:text-slate-500">RTO Fee</span>
+            <span className="text-slate-700 dark:text-slate-200">{fee(row.rto_fee)}</span>
+            <span className="text-slate-400 dark:text-slate-500">PCC Fee</span>
+            <span className="text-slate-700 dark:text-slate-200">{fee(row.pcc_fee)}</span>
+            <span className="text-slate-400 dark:text-slate-500">Agency Fee</span>
+            <span className="text-slate-700 dark:text-slate-200">{fee(row.agency_fee)}</span>
+            <span className="text-slate-500 dark:text-slate-400 font-semibold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1">Profit</span>
+            <span className="text-emerald-600 font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1">{fee(profitOf(row))}</span>
+          </div>
+        </div>
+
+        {row.remarks && (
+          <div className="border-t border-slate-200 dark:border-slate-800 pt-3">
+            <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase mb-1">Remark</p>
+            <p className="text-sm text-slate-700 dark:text-slate-200">{row.remarks}</p>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -1430,10 +2075,12 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
           </Select>
         </Field>
         <Field label="Service" required>
-          <Select value={form.service_id} onChange={set("service_id")}>
-            <option value="">Select Service</option>
-            {serviceList.map((s) => <option key={s.id} value={s.id}>{serviceLabel(s)}</option>)}
-          </Select>
+          <SearchableSelect
+            value={form.service_id}
+            options={serviceList.map((s) => ({ id: s.id, name: serviceLabel(s) }))}
+            onChange={(id) => setForm((s) => ({ ...s, service_id: id }))}
+            placeholder="Search or select a service…"
+          />
         </Field>
       </div>
       <Field label="Applicant Name" required>

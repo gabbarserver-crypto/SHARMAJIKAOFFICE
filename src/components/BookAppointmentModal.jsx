@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Modal, Field, Input, PrimaryButton } from "./UI";
+import { supabase } from "../lib/supabase";
 import { buildAppointmentDraft, daysSinceCompleted } from "../lib/nextService";
 
 // `nextService` is the { id, parent_service, short_name } row the source
@@ -14,7 +15,8 @@ export default function BookAppointmentModal({ sourceApp, nextService, onClose, 
     setSaving(true);
     setError("");
     try {
-      const draftCode = "DFT" + Math.floor(1000 + Math.random() * 9000);
+      const { data: draftCode, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: sourceApp.dealer_id });
+      if (codeError) throw new Error(codeError.message);
       const payload = buildAppointmentDraft(sourceApp, {
         serviceId: nextService.id,
         slotTime: date || null,

@@ -151,6 +151,16 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
         >
           <ImageIcon size={19} />
         </button>
+        {identity?.type === "staff" && (
+          <button
+            onClick={() => setDraft("Please share the OTP you received, so we can proceed with your application.")}
+            disabled={!identity}
+            title="Insert 'OTP Required' template"
+            className="px-2 h-8 shrink-0 rounded-full text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 disabled:opacity-40 whitespace-nowrap"
+          >
+            OTP Required
+          </button>
+        )}
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

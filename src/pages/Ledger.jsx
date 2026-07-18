@@ -113,19 +113,19 @@ export default function Ledger() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
             <tr>
-              <th className="text-left font-medium px-4 py-3">Date</th>
-              <th className="text-left font-medium px-4 py-3">Voucher No.</th>
-              <th className="text-left font-medium px-4 py-3">Description</th>
-              <th className="text-right font-medium px-4 py-3">Amount</th>
+              <th className="text-left font-medium px-3 py-2">Date</th>
+              <th className="text-left font-medium px-3 py-2">Voucher No.</th>
+              <th className="text-left font-medium px-3 py-2">Description</th>
+              <th className="text-right font-medium px-3 py-2">Amount</th>
             </tr>
           </thead>
           <tbody>
             {txns.map((t) => (
               <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
-                <td className="px-4 py-3 text-slate-500 dark:text-slate-500">{new Date(t.created_at).toLocaleDateString()}</td>
-                <td className="px-4 py-3 text-slate-500 dark:text-slate-500">{t.voucher_no}</td>
-                <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{t.description}</td>
-                <td className={`px-4 py-3 text-right font-medium whitespace-nowrap ${t.type === "debit" ? "text-rose-600" : "text-emerald-600"}`}>
+                <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{new Date(t.created_at).toLocaleDateString()}</td>
+                <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{t.voucher_no}</td>
+                <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{t.description}</td>
+                <td className={`px-3 py-2 text-right font-medium whitespace-nowrap ${t.type === "debit" ? "text-rose-600" : "text-emerald-600"}`}>
                   {t.type === "debit" ? "-" : "+"}₹{Number(t.amount).toLocaleString("en-IN")}
                 </td>
               </tr>
