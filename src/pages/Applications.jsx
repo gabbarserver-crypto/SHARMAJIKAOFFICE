@@ -917,7 +917,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
 
   const filteredRows = rows.filter((r) => {
-    if (chatOnly && !r.services?.chat_in_app) return false;
+    if (chatOnly && !chatStatus[r.id]) return false;
     if (filterDealer && r.dealer_id !== filterDealer) return false;
     if (filterRto && r.rto_id !== filterRto) return false;
     if (filterAgency && r.agency_id !== filterAgency) return false;
