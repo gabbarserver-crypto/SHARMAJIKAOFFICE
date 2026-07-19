@@ -1,7 +1,8 @@
 // src/pages/Payments.jsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, Field, Input, Select, PrimaryButton, Toast } from "../components/UI";
+import { Card, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "../components/UI";
+import { parseCSV, findByLabel } from "../lib/csv";
 
 export default function Payments() {
   const [dealers, setDealers] = useState([]);
@@ -11,6 +12,7 @@ export default function Payments() {
   const [recent, setRecent] = useState([]);
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.tagName === "SELECT" ? e.target.value : e.target.value.toUpperCase() }));
 
@@ -122,6 +124,10 @@ export default function Payments() {
 
   return (
     <div className="grid lg:grid-cols-2 gap-6">
+      <div className="lg:col-span-2 flex justify-end">
+        <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
+      </div>
+
       <Card title="Record New Payment">
         <Field label="Dealer" required>
           <Select value={form.dealer_id} onChange={set("dealer_id")}>
@@ -181,6 +187,257 @@ export default function Payments() {
       </Card>
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+
+      {showImport && (
+        <PaymentsImportModal
+          dealers={dealers}
+          agencies={agencies}
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            setShowImport(false);
+            loadRecent();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Bulk CSV import for Payments — mirrors the Applications import feature:
+// parse, resolve names to IDs, preview with per-row validation, then insert
+// only the valid+included rows. Each imported payment gets the exact same
+// ledger postings (dealer credit, + agency credit if "Paid At Agency" is
+// filled in) as a normal single payment via the form above, so bulk-
+// imported payments show up in Ledger identically to manually entered ones.
+//
+// Expected CSV headers (case-insensitive, flexible spacing): Dealer,
+// Application (optional — draft code), Amount, Payment Mode (optional,
+// defaults to Cash), Reference No (optional), Paid At Agency (optional),
+// Remarks (optional).
+function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
+  const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+
+  const handleFile = (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    setError("");
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const parsed = parseCSV(String(e.target.result));
+      const built = parsed.map((raw) => {
+        const get = (...keys) => {
+          for (const k of keys) {
+            const hit = Object.keys(raw).find((h) => h.toLowerCase().replace(/[^a-z0-9]/g, "") === k);
+            if (hit && raw[hit]) return raw[hit];
+          }
+          return "";
+        };
+        const dealerRaw = get("dealer", "dealername", "dealercode");
+        const applicationRaw = get("application", "draftcode", "draftid");
+        const amountRaw = get("amount");
+        const modeRaw = get("paymentmode", "mode") || "Cash";
+        const referenceRaw = get("referenceno", "reference", "utr");
+        const agencyRaw = get("paidatagency", "agency");
+        const remarksRaw = get("remarks", "remark");
+
+        const dealer = findByLabel(dealers, dealerRaw, ["name", "code", "short_name"]);
+        const agency = agencyRaw ? findByLabel(agencies, agencyRaw, ["name", "code"]) : null;
+        const amount = parseFloat(amountRaw);
+
+        const errors = [];
+        if (!dealer) errors.push(`Dealer "${dealerRaw}" not found`);
+        if (!amountRaw || Number.isNaN(amount) || amount <= 0) errors.push("Amount is missing or invalid");
+        if (agencyRaw && !agency) errors.push(`Agency "${agencyRaw}" not found`);
+
+        return {
+          dealerRaw, applicationRaw, agencyRaw,
+          included: errors.length === 0,
+          errors,
+          payload: {
+            dealer_id: dealer?.id,
+            dealer_name: dealer?.name,
+            agency_id: agency?.id,
+            agency_name: agency?.name,
+            application_draft_code: applicationRaw || null,
+            amount,
+            payment_mode: modeRaw,
+            reference_no: referenceRaw || null,
+            remarks: remarksRaw || null,
+          },
+        };
+      });
+      setPreview(built);
+    };
+    reader.readAsText(file);
+  };
+
+  const toggleIncluded = (i) => setPreview((p) => p.map((r, idx) => (idx === i ? { ...r, included: !r.included } : r)));
+  const includedCount = preview.filter((r) => r.included && r.errors.length === 0).length;
+
+  const runImport = async () => {
+    const rowsToImport = preview.filter((r) => r.included && r.errors.length === 0);
+    if (!rowsToImport.length) return;
+    setImporting(true);
+    setError("");
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
+
+      let imported = 0;
+      for (const r of rowsToImport) {
+        const { payload } = r;
+
+        // Resolve an application draft code to its id, if one was given —
+        // best-effort: an unmatched code just leaves the payment untied to
+        // a specific application rather than failing the whole row.
+        let applicationId = null;
+        if (payload.application_draft_code) {
+          const { data: appRow } = await supabase
+            .from("applications")
+            .select("id")
+            .eq("dealer_id", payload.dealer_id)
+            .eq("draft_code", payload.application_draft_code)
+            .maybeSingle();
+          applicationId = appRow?.id || null;
+        }
+
+        const { data: paymentRow, error: insertError } = await supabase
+          .from("payments")
+          .insert({
+            dealer_id: payload.dealer_id,
+            application_id: applicationId,
+            amount: payload.amount,
+            payment_mode: payload.payment_mode,
+            reference_no: payload.reference_no,
+            remarks: payload.remarks,
+            paid_at_agency_id: payload.agency_id || null,
+            received_by: staffRow?.id || null,
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          setError(`Import stopped at "${payload.dealer_name}" (₹${payload.amount}): ` + insertError.message);
+          setImporting(false);
+          return;
+        }
+
+        const voucherNo = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
+        const ledgerInserts = [
+          supabase.from("ledger_transactions").insert({
+            dealer_id: payload.dealer_id,
+            voucher_no: voucherNo,
+            type: "credit",
+            amount: payload.amount,
+            description: `Payment received (import) — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+          }),
+        ];
+        if (payload.agency_id) {
+          ledgerInserts.push(
+            supabase.from("agency_ledger_transactions").insert({
+              agency_id: payload.agency_id,
+              voucher_no: voucherNo,
+              type: "credit",
+              amount: payload.amount,
+              description: `Payment collected on behalf of ${payload.dealer_name || "dealer"} (import) — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+            })
+          );
+        }
+        await Promise.all(ledgerInserts);
+        imported++;
+      }
+
+      setResult({ imported, skipped: preview.length - rowsToImport.length });
+      setImporting(false);
+      onImported();
+    } catch (err) {
+      setError("Import failed: " + err.message);
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-slate-900 rounded-xl w-full max-w-4xl max-h-[85vh] overflow-y-auto p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-slate-800 dark:text-slate-100">Import Payments</h3>
+          <button onClick={onClose} className="text-slate-400 text-xl leading-none">×</button>
+        </div>
+
+        {!preview.length && (
+          <div>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+              CSV columns: <b>Dealer</b> (required — name or code), <b>Amount</b> (required), Application (optional — draft code),
+              Payment Mode (optional, defaults to Cash), Reference No, Paid At Agency, Remarks.
+            </p>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => handleFile(e.target.files?.[0])}
+              className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-slate-700 dark:file:text-slate-300 file:font-semibold file:text-sm"
+            />
+            {fileName && <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">{fileName}</span>}
+          </div>
+        )}
+
+        {preview.length > 0 && !result && (
+          <div>
+            <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-lg mb-4">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Import?</th>
+                    <th className="px-3 py-2 text-left">Dealer</th>
+                    <th className="px-3 py-2 text-left">Application</th>
+                    <th className="px-3 py-2 text-left">Amount</th>
+                    <th className="px-3 py-2 text-left">Mode</th>
+                    <th className="px-3 py-2 text-left">Agency</th>
+                    <th className="px-3 py-2 text-left">Errors</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.map((r, i) => (
+                    <tr key={i} className={`border-t border-slate-100 dark:border-slate-800 ${r.errors.length ? "bg-rose-50 dark:bg-rose-500/10" : ""}`}>
+                      <td className="px-3 py-2">
+                        <input type="checkbox" checked={r.included} disabled={r.errors.length > 0} onChange={() => toggleIncluded(i)} />
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.dealer_name || r.dealerRaw || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.applicationRaw || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">₹{r.payload.amount || 0}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.payment_mode}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.agency_name || "—"}</td>
+                      <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {error && <p className="text-rose-500 text-sm mb-3">{error}</p>}
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-500 dark:text-slate-400">{includedCount} of {preview.length} rows will be imported</p>
+              <div className="flex gap-2">
+                <GhostButton onClick={() => { setPreview([]); setFileName(""); }}>Start Over</GhostButton>
+                <PrimaryButton disabled={importing || includedCount === 0} onClick={runImport}>
+                  {importing ? "Importing…" : `Import ${includedCount} Row${includedCount !== 1 ? "s" : ""}`}
+                </PrimaryButton>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {result && (
+          <div className="text-center py-6">
+            <p className="text-lg font-semibold text-emerald-600">Imported {result.imported} payment{result.imported !== 1 ? "s" : ""}</p>
+            {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped</p>}
+            <PrimaryButton onClick={onClose} className="mt-4">Done</PrimaryButton>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

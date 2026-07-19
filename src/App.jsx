@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { supabase } from "./lib/supabase";
 import Sidebar from "./components/Sidebar";
 import Login from "./pages/Login";
+import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
 import Applications, { StaffApplications } from "./pages/Applications";
 import Payments from "./pages/Payments";
@@ -212,13 +213,27 @@ export default function App() {
     setAuthStatus("signed-in");
   }, []);
 
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => verifySession(data.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      // Supabase fires this when someone lands back on the app via a
+      // "Forgot Password" email link — show the reset-password screen
+      // instead of routing them into the normal Dashboard/DealerPortal,
+      // even though they technically now have a (temporary) session.
+      if (event === "PASSWORD_RECOVERY") {
+        setPasswordRecovery(true);
+        return;
+      }
       verifySession(session);
     });
     return () => listener.subscription.unsubscribe();
   }, [verifySession]);
+
+  if (passwordRecovery) {
+    return <ResetPassword onDone={() => { setPasswordRecovery(false); supabase.auth.signOut(); }} />;
+  }
 
   if (authStatus === "loading") {
     return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading…</div>;

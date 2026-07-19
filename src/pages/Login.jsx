@@ -13,6 +13,31 @@ export default function Login({ authError }) {
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
 
+  // Forgot Password (point 4) — swaps the login form for a small email-only
+  // form, sends a reset link via Supabase Auth. Clicking that link in the
+  // email brings them back here with a PASSWORD_RECOVERY session, which
+  // App.jsx intercepts and routes to ResetPassword.jsx instead of Login.
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState("");
+
+  const sendResetEmail = async (e) => {
+    e.preventDefault();
+    setForgotError("");
+    setForgotLoading(true);
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+      redirectTo: window.location.origin,
+    });
+    setForgotLoading(false);
+    if (resetError) {
+      setForgotError(resetError.message);
+      return;
+    }
+    setForgotSent(true);
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     setError("");
@@ -43,6 +68,65 @@ export default function Login({ authError }) {
   };
 
   const displayError = error || authError;
+
+  if (showForgot) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-sm border border-slate-100">
+          <div className="text-center mb-6">
+            <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[240px] mx-auto mb-2" />
+          </div>
+
+          {forgotSent ? (
+            <>
+              <h1 className="text-xl font-extrabold text-slate-900 text-center">Check your email</h1>
+              <p className="text-slate-400 text-sm text-center mt-1 mb-6">
+                We've sent a password reset link to <span className="font-medium text-slate-600">{forgotEmail}</span>.
+                Click it to set a new password.
+              </p>
+              <button
+                onClick={() => { setShowForgot(false); setForgotSent(false); }}
+                className="w-full border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl"
+              >
+                Back to Login
+              </button>
+            </>
+          ) : (
+            <>
+              <h1 className="text-xl font-extrabold text-slate-900 text-center">Reset your password</h1>
+              <p className="text-slate-400 text-sm text-center mt-1 mb-6">Enter your email and we'll send you a reset link</p>
+              <form onSubmit={sendResetEmail}>
+                <label className="block text-xs font-semibold text-blue-600 mb-1">E-mail</label>
+                <input
+                  type="email"
+                  required
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-400"
+                  placeholder="example@email.com"
+                />
+                {forgotError && <p className="text-rose-500 text-xs mb-3">{forgotError}</p>}
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl mt-3 disabled:opacity-50"
+                >
+                  {forgotLoading ? "Sending..." : "Send Reset Link"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowForgot(false)}
+                  className="w-full text-slate-400 hover:text-slate-600 text-sm mt-3"
+                >
+                  Back to Login
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -90,7 +174,7 @@ export default function Login({ authError }) {
               <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="rounded" />
               Remember me
             </label>
-            <a href="#" className="text-blue-600 font-medium hover:underline">Forgot Password?</a>
+            <a href="#" onClick={(e) => { e.preventDefault(); setShowForgot(true); setForgotEmail(email); }} className="text-blue-600 font-medium hover:underline">Forgot Password?</a>
           </div>
 
           {displayError && <p className="text-rose-500 text-xs mb-3">{displayError}</p>}

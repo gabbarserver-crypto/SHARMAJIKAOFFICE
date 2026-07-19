@@ -1,12 +1,15 @@
 // src/lib/serverApi.js
-// Talks to the small Express server in /server (same one that proxies the
-// PCC portal) for anything that needs the Supabase service role key —
-// i.e. creating a login with a password, which the browser can never do
-// safely with just the anon key.
+// Talks to the login-creation endpoints — deployed as Vercel Serverless
+// Functions under /api (see /api/admin/create-dealer-login.js and
+// /api/create-dealer-staff-login.js at the project root), which run
+// alongside the frontend on the same Vercel deployment. Defaulting to ""
+// means it hits the same origin the app is served from — no separate
+// server, no env var, no CORS to configure. VITE_SERVER_API_BASE is still
+// supported as an override if you ever want to point this at a different
+// backend instead.
 import { supabase } from "./supabase";
 
-export const SERVER_API_BASE =
-  import.meta.env.VITE_SERVER_API_BASE || import.meta.env.VITE_PCC_STATUS_API_BASE || "http://localhost:5000";
+export const SERVER_API_BASE = import.meta.env.VITE_SERVER_API_BASE || "";
 
 async function accessToken() {
   const { data } = await supabase.auth.getSession();

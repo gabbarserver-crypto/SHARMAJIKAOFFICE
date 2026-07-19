@@ -5,6 +5,7 @@ import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Inp
 import ChatPanel from "../components/ChatPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import SearchableSelect from "../components/SearchableSelect";
+import { parseCSV, findByLabel } from "../lib/csv";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
@@ -70,52 +71,6 @@ function ddmmyyyyToISO(input) {
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed; // already ISO
   return trimmed; // leave as-is, let DB flag invalid dates
-}
-
-// Minimal CSV parser for the Import feature — handles quoted fields
-// (including embedded commas/newlines and "" escaped quotes) without
-// pulling in an extra dependency. Returns an array of row objects keyed by
-// the (trimmed) header row.
-function parseCSV(text) {
-  const rows = [];
-  let row = [];
-  let field = "";
-  let inQuotes = false;
-  const pushField = () => { row.push(field); field = ""; };
-  const pushRow = () => { rows.push(row); row = []; };
-  // Normalize line endings, then walk character by character.
-  const s = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (s[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
-      } else field += c;
-    } else if (c === '"') inQuotes = true;
-    else if (c === ",") pushField();
-    else if (c === "\n") { pushField(); pushRow(); }
-    else field += c;
-  }
-  if (field.length || row.length) { pushField(); pushRow(); }
-  const nonEmptyRows = rows.filter((r) => r.some((v) => v.trim() !== ""));
-  if (!nonEmptyRows.length) return [];
-  const headers = nonEmptyRows[0].map((h) => h.trim());
-  return nonEmptyRows.slice(1).map((r) => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = (r[i] ?? "").trim(); });
-    return obj;
-  });
-}
-
-// Looks a free-text CSV value up against a master list by name/short
-// name/code, case-insensitively — used to resolve "Dealer", "Service",
-// "RTO", "Agency" columns to their real IDs during import.
-function findByLabel(list, value, fields) {
-  if (!value) return null;
-  const needle = value.trim().toLowerCase();
-  if (!needle) return null;
-  return list.find((item) => fields.some((f) => item[f] && String(item[f]).trim().toLowerCase() === needle)) || null;
 }
 
 function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false }) {
@@ -1064,6 +1019,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         </div>
         <div className="flex items-center gap-2">
           <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
+          {canEdit && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
           {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
         </div>
       </div>
