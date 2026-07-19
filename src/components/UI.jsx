@@ -47,33 +47,33 @@ export function Card({ title, children, className = "" }) {
   );
 }
 
-export function PrimaryButton({ children, ...props }) {
+export function PrimaryButton({ children, className = "", ...props }) {
   return (
     <button
       {...props}
-      className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+      className={`inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 ${className}`}
     >
       {children}
     </button>
   );
 }
 
-export function GhostButton({ children, ...props }) {
+export function GhostButton({ children, className = "", ...props }) {
   return (
     <button
       {...props}
-      className="inline-flex items-center gap-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-sm font-semibold px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 transition-colors"
+      className={`inline-flex items-center gap-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-sm font-semibold px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 transition-colors ${className}`}
     >
       {children}
     </button>
   );
 }
 
-export function DangerButton({ children, ...props }) {
+export function DangerButton({ children, className = "", ...props }) {
   return (
     <button
       {...props}
-      className="inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+      className={`inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 ${className}`}
     >
       {children}
     </button>
