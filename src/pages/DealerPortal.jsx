@@ -34,6 +34,18 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
   const [chatApp, setChatApp] = useState(null); // { id, label } | null
   const [unreadChats, setUnreadChats] = useState(0);
   const [showTopUp, setShowTopUp] = useState(false);
+  const [runningBalance, setRunningBalance] = useState(null);
+
+  // Running Balance shown beside Credit Limit in the summary cards — same
+  // computation as the "My Ledger" tab (DealerLedger below), just lifted up
+  // here too so it's visible without switching tabs.
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("ledger_transactions").select("type, amount").eq("dealer_id", dealer.id);
+      const balance = (data || []).reduce((acc, t) => acc + (t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0)), 0);
+      setRunningBalance(balance);
+    })();
+  }, [dealer.id, refreshKey]);
 
   const refreshUnreadChats = useCallback(async () => {
     try {
@@ -122,7 +134,7 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
       )}
 
       <main className="max-w-5xl mx-auto p-6">
-        <div className="grid sm:grid-cols-2 gap-4 mb-6">
+        <div className="grid sm:grid-cols-3 gap-4 mb-6">
           <Card title="Wallet Balance">
             <div className="flex items-center justify-between">
               <p className="text-2xl font-bold text-emerald-600">
@@ -131,6 +143,11 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
               <GhostButton onClick={() => setShowTopUp(true)}>Top Up</GhostButton>
             </div>
           </Card>
+          <Card title="Running Balance">
+            <p className={`text-2xl font-bold ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+              {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
+            </p>
+          </Card>
           <Card title="Credit Limit">
             <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">
               ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
@@ -138,8 +155,8 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
           </Card>
         </div>
 
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+          <div className="flex flex-wrap gap-2">
             {visibleTabs.map((t) => (
               <button
                 key={t}
@@ -157,7 +174,7 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
               </button>
             ))}
           </div>
-          <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>
+          <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center">+ New Application</PrimaryButton>
         </div>
 
         {tab === "Applications" && (
