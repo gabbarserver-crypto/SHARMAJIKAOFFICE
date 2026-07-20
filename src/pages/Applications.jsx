@@ -5,6 +5,7 @@ import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Inp
 import ChatPanel from "../components/ChatPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import SearchableSelect from "../components/SearchableSelect";
+import { parseCSV, findByLabel } from "../lib/csv";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
@@ -24,7 +25,7 @@ const TOGGLEABLE_COLUMNS = [
   { key: "service", label: "Service" },
   { key: "applicant", label: "Applicant" },
   { key: "dob", label: "DOB" },
-  { key: "rtoFee", label: "RTO Fee" },
+  { key: "rtoFee", label: "Fee" },
   { key: "pccFee", label: "PCC Fee" },
   { key: "agencyFee", label: "Agency Fee" },
   { key: "profit", label: "Profit" },
@@ -70,52 +71,6 @@ function ddmmyyyyToISO(input) {
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed; // already ISO
   return trimmed; // leave as-is, let DB flag invalid dates
-}
-
-// Minimal CSV parser for the Import feature — handles quoted fields
-// (including embedded commas/newlines and "" escaped quotes) without
-// pulling in an extra dependency. Returns an array of row objects keyed by
-// the (trimmed) header row.
-function parseCSV(text) {
-  const rows = [];
-  let row = [];
-  let field = "";
-  let inQuotes = false;
-  const pushField = () => { row.push(field); field = ""; };
-  const pushRow = () => { rows.push(row); row = []; };
-  // Normalize line endings, then walk character by character.
-  const s = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (s[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
-      } else field += c;
-    } else if (c === '"') inQuotes = true;
-    else if (c === ",") pushField();
-    else if (c === "\n") { pushField(); pushRow(); }
-    else field += c;
-  }
-  if (field.length || row.length) { pushField(); pushRow(); }
-  const nonEmptyRows = rows.filter((r) => r.some((v) => v.trim() !== ""));
-  if (!nonEmptyRows.length) return [];
-  const headers = nonEmptyRows[0].map((h) => h.trim());
-  return nonEmptyRows.slice(1).map((r) => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = (r[i] ?? "").trim(); });
-    return obj;
-  });
-}
-
-// Looks a free-text CSV value up against a master list by name/short
-// name/code, case-insensitively — used to resolve "Dealer", "Service",
-// "RTO", "Agency" columns to their real IDs during import.
-function findByLabel(list, value, fields) {
-  if (!value) return null;
-  const needle = value.trim().toLowerCase();
-  if (!needle) return null;
-  return list.find((item) => fields.some((f) => item[f] && String(item[f]).trim().toLowerCase() === needle)) || null;
 }
 
 function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false }) {
@@ -993,8 +948,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const exportCSV = () => {
     const headers = restricted
-      ? ["Draft ID", "Service", "Applicant", "DOB", "RTO Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
-      : ["Draft ID", "Amount", "RTO Fee", "PCC Fee", "Agency Fee", "Profit", "Dealer", "Service",
+      ? ["Draft ID", "Service", "Applicant", "DOB", "Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
+      : ["Draft ID", "Amount", "Fee", "PCC Fee", "Agency Fee", "Profit", "Dealer", "Service",
       "Applicant", "DOB", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency",
       "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"];
     const escapeCsv = (val) => {
@@ -1064,6 +1019,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         </div>
         <div className="flex items-center gap-2">
           <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
+          {canEdit && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
           {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
         </div>
       </div>
@@ -1211,7 +1167,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {visibleCols.service && <SortableTh column="service" label="Service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.applicant && <SortableTh column="applicant" label="Applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.dob && <SortableTh column="dob" label="DOB" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.rtoFee && <SortableTh column="rtoFee" label="RTO Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {visibleCols.rtoFee && <SortableTh column="rtoFee" label="Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.pccFee && <SortableTh column="pccFee" label="PCC Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.agencyFee && <SortableTh column="agencyFee" label="Agency Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.profit && <SortableTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
@@ -1307,7 +1263,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       type="number"
                       width="w-20"
                       value={r.rto_fee}
-                      disabled={!r.services?.rto_required}
                       onSave={(v) => updateRowField(r.id, "rto_fee", v === "" ? null : parseFloat(v))}
                     />
                   </td>
@@ -1622,7 +1577,7 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
               <th className="text-left font-medium px-3 py-2">Amount / Service</th>
               <th className="text-left font-medium px-3 py-2">Dealer / Customer</th>
               <th className="text-left font-medium px-3 py-2">App No / PCC No</th>
-              <th className="text-left font-medium px-3 py-2">RTO Fee / PCC Fee</th>
+              <th className="text-left font-medium px-3 py-2">Fee / PCC Fee</th>
               <th className="text-left font-medium px-3 py-2">Agency Fee / Profit</th>
               <th className="text-left font-medium px-3 py-2">LL-DL No / DOB</th>
               <th className="text-left font-medium px-3 py-2">RTO / Agency</th>
@@ -1742,7 +1697,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
   const downloadTemplate = () => {
     const headers = [
       "Draft ID", "Dealer", "Service", "Applicant", "Father/Husband", "DOB", "Mobile", "Address",
-      "Amount", "RTO Fee", "PCC Fee", "Agency Fee", "Application No", "LL/DL No", "PCC No",
+      "Amount", "Fee", "PCC Fee", "Agency Fee", "Application No", "LL/DL No", "PCC No",
       "PCC Status", "RTO", "Agency", "Slot", "Remark", "Application Date", "Status",
     ];
     const example = [
@@ -2012,7 +1967,7 @@ function DraftDetailPopup({ row, profitOf, onClose }) {
           <div className="grid grid-cols-2 gap-y-1.5 text-sm">
             <span className="text-slate-400 dark:text-slate-500">Amount (charged)</span>
             <span className="text-slate-800 dark:text-slate-100 font-medium">{fee(row.amount)}</span>
-            <span className="text-slate-400 dark:text-slate-500">RTO Fee</span>
+            <span className="text-slate-400 dark:text-slate-500">Fee</span>
             <span className="text-slate-700 dark:text-slate-200">{fee(row.rto_fee)}</span>
             <span className="text-slate-400 dark:text-slate-500">PCC Fee</span>
             <span className="text-slate-700 dark:text-slate-200">{fee(row.pcc_fee)}</span>
