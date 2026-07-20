@@ -531,7 +531,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setLoading(true);
     let query = supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id), staff:assigned_staff_id(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days), staff:assigned_staff_id(full_name)")
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
     const { data, error } = await query;
