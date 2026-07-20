@@ -25,7 +25,7 @@ const TOGGLEABLE_COLUMNS = [
   { key: "service", label: "Service" },
   { key: "applicant", label: "Applicant" },
   { key: "dob", label: "DOB" },
-  { key: "rtoFee", label: "RTO Fee" },
+  { key: "rtoFee", label: "Fee" },
   { key: "pccFee", label: "PCC Fee" },
   { key: "agencyFee", label: "Agency Fee" },
   { key: "profit", label: "Profit" },
@@ -948,8 +948,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const exportCSV = () => {
     const headers = restricted
-      ? ["Draft ID", "Service", "Applicant", "DOB", "RTO Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
-      : ["Draft ID", "Amount", "RTO Fee", "PCC Fee", "Agency Fee", "Profit", "Dealer", "Service",
+      ? ["Draft ID", "Service", "Applicant", "DOB", "Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
+      : ["Draft ID", "Amount", "Fee", "PCC Fee", "Agency Fee", "Profit", "Dealer", "Service",
       "Applicant", "DOB", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency",
       "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"];
     const escapeCsv = (val) => {
@@ -1167,7 +1167,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {visibleCols.service && <SortableTh column="service" label="Service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.applicant && <SortableTh column="applicant" label="Applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.dob && <SortableTh column="dob" label="DOB" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.rtoFee && <SortableTh column="rtoFee" label="RTO Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {visibleCols.rtoFee && <SortableTh column="rtoFee" label="Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.pccFee && <SortableTh column="pccFee" label="PCC Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.agencyFee && <SortableTh column="agencyFee" label="Agency Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.profit && <SortableTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
@@ -1263,7 +1263,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       type="number"
                       width="w-20"
                       value={r.rto_fee}
-                      disabled={!r.services?.rto_required}
                       onSave={(v) => updateRowField(r.id, "rto_fee", v === "" ? null : parseFloat(v))}
                     />
                   </td>
@@ -1578,7 +1577,7 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
               <th className="text-left font-medium px-3 py-2">Amount / Service</th>
               <th className="text-left font-medium px-3 py-2">Dealer / Customer</th>
               <th className="text-left font-medium px-3 py-2">App No / PCC No</th>
-              <th className="text-left font-medium px-3 py-2">RTO Fee / PCC Fee</th>
+              <th className="text-left font-medium px-3 py-2">Fee / PCC Fee</th>
               <th className="text-left font-medium px-3 py-2">Agency Fee / Profit</th>
               <th className="text-left font-medium px-3 py-2">LL-DL No / DOB</th>
               <th className="text-left font-medium px-3 py-2">RTO / Agency</th>
@@ -1698,7 +1697,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
   const downloadTemplate = () => {
     const headers = [
       "Draft ID", "Dealer", "Service", "Applicant", "Father/Husband", "DOB", "Mobile", "Address",
-      "Amount", "RTO Fee", "PCC Fee", "Agency Fee", "Application No", "LL/DL No", "PCC No",
+      "Amount", "Fee", "PCC Fee", "Agency Fee", "Application No", "LL/DL No", "PCC No",
       "PCC Status", "RTO", "Agency", "Slot", "Remark", "Application Date", "Status",
     ];
     const example = [
@@ -1968,7 +1967,7 @@ function DraftDetailPopup({ row, profitOf, onClose }) {
           <div className="grid grid-cols-2 gap-y-1.5 text-sm">
             <span className="text-slate-400 dark:text-slate-500">Amount (charged)</span>
             <span className="text-slate-800 dark:text-slate-100 font-medium">{fee(row.amount)}</span>
-            <span className="text-slate-400 dark:text-slate-500">RTO Fee</span>
+            <span className="text-slate-400 dark:text-slate-500">Fee</span>
             <span className="text-slate-700 dark:text-slate-200">{fee(row.rto_fee)}</span>
             <span className="text-slate-400 dark:text-slate-500">PCC Fee</span>
             <span className="text-slate-700 dark:text-slate-200">{fee(row.pcc_fee)}</span>

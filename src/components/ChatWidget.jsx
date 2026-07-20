@@ -31,7 +31,10 @@ export default function ChatWidget({ dealerId, identity, title = "SJO Support" }
   if (!dealerId) return null;
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end gap-3">
+    <div
+      className="fixed z-50 flex flex-col items-end gap-3"
+      style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
+    >
       {state === "open" && (
         <div className="w-80 h-[440px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
           <button onClick={openFull} className="bg-blue-600 text-white px-4 py-3 flex items-center gap-2.5 shrink-0 text-left">
