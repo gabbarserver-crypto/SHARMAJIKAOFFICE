@@ -1,7 +1,7 @@
 // src/pages/Applications.jsx
 import React, { useEffect, useState, useCallback, useMemo, useContext, createContext, useRef } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Input, Select, Modal, Toast, STATUS_DISPLAY_LABELS } from "../components/UI";
+import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Input, Select, Modal, Toast, STATUS_DISPLAY_LABELS, ROW_STATUS_TINT } from "../components/UI";
 import ChatPanel from "../components/ChatPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import SearchableSelect from "../components/SearchableSelect";
@@ -1025,17 +1025,25 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       </div>
 
       <div className="flex gap-2 mb-4 flex-wrap items-center">
-        {STATUS_TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-              tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-            }`}
-          >
-            {STATUS_DISPLAY_LABELS[t] || t}
-          </button>
-        ))}
+        {STATUS_TABS.map((t) => {
+          const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
+          return (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              {STATUS_DISPLAY_LABELS[t] || t}
+              {t === "Draft Submitted" && draftCount > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {draftCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
         <span className="w-px h-5 bg-slate-200 mx-1" />
         <button
           onClick={() => setChatOnly((c) => !c)}
@@ -1186,7 +1194,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           </thead>
           <tbody>
             {pagedRows.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60/60 dark:hover:bg-slate-800/40">
+              <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
                 <td className="px-3 py-2 font-medium whitespace-nowrap">
                   <button
                     onClick={() => setDetailPopup(r)}
@@ -1587,7 +1595,7 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
                 <td className="px-3 py-2">
                   <button onClick={() => onOpenDetail(r)} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
                     {r.draft_code}
@@ -2053,7 +2061,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
         </Field>
         <Field label="Starting Status">
           <Select value={form.status} onChange={set("status")}>
-            <option>Draft Submitted</option>
+            <option value="Draft Submitted">Draft</option>
             <option>Under Review</option>
             <option value="Accepted">Approved</option>
           </Select>
