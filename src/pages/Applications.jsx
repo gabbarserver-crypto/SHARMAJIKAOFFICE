@@ -1530,6 +1530,17 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         />
       )}
 
+      {showImport && (
+        <ImportApplicationsModal
+          dealerList={dealerList}
+          serviceList={serviceList}
+          rtoList={rtoList}
+          agencyList={agencyList}
+          onClose={() => setShowImport(false)}
+          onImported={() => { setShowImport(false); load(); }}
+        />
+      )}
+
       {pccCheckRow && (
         <PCCStatusCheckModal row={pccCheckRow} onClose={() => setPccCheckRow(null)} />
       )}
