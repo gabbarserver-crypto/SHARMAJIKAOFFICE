@@ -5,7 +5,7 @@
 // the payload for the new draft.
 import { supabase } from "./supabase";
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // `convertedSourceIds` is a Set of every application's source_application_id
 // already in use (i.e. "this application has already been converted") —
@@ -16,13 +16,14 @@ export function isEligibleForAppointment(app, convertedSourceIds) {
   if (!app.services?.next_service_id) return false;
   if (!app.completed_at) return false;
   if (convertedSourceIds.has(app.id)) return false;
+  const waitDays = app.services?.next_service_wait_days ?? 30;
   const completedAt = new Date(app.completed_at).getTime();
-  return Date.now() - completedAt >= THIRTY_DAYS_MS;
+  return Date.now() - completedAt >= waitDays * MS_PER_DAY;
 }
 
 export function daysSinceCompleted(app) {
   if (!app.completed_at) return null;
-  return Math.floor((Date.now() - new Date(app.completed_at).getTime()) / (24 * 60 * 60 * 1000));
+  return Math.floor((Date.now() - new Date(app.completed_at).getTime()) / MS_PER_DAY);
 }
 
 // Builds the insert payload for the new draft application, copying the
