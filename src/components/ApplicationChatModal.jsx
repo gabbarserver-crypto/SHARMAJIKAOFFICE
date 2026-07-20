@@ -27,7 +27,8 @@ export default function ApplicationChatModal({ dealerId, applicationId, applicat
     return (
       <button
         onClick={() => setExpanded(true)}
-        className="fixed bottom-24 right-5 z-50 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl dark:bg-slate-900 dark:border-slate-800 shadow-xl px-3.5 py-2.5 flex items-center gap-2.5 hover:bg-slate-50 dark:bg-slate-800/60 transition-colors"
+        className="fixed z-50 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl dark:bg-slate-900 dark:border-slate-800 shadow-xl px-3.5 py-2.5 flex items-center gap-2.5 hover:bg-slate-50 dark:bg-slate-800/60 transition-colors"
+        style={{ bottom: "calc(6rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
       >
         <Avatar name={applicationLabel} size={32} />
         <div className="min-w-0 flex-1 text-left">
@@ -50,7 +51,10 @@ export default function ApplicationChatModal({ dealerId, applicationId, applicat
   }
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 w-80 h-[460px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+    <div
+      className="fixed z-50 w-80 h-[460px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden"
+      style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
+    >
       <button onClick={() => setExpanded(false)} className="bg-blue-600 text-white px-3.5 py-3 flex items-center gap-2.5 shrink-0 text-left">
         <Avatar name={applicationLabel} size={32} />
         <div className="min-w-0 flex-1">
