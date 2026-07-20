@@ -361,7 +361,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
     setLoading(true);
     const { data, error } = await supabase
       .from("applications")
-      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, service_answers, services(parent_service, short_name, chat_in_app, next_service_id)")
+      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days)")
       .eq("dealer_id", dealerId)
       .order("submitted_at", { ascending: false });
     if (error) {
