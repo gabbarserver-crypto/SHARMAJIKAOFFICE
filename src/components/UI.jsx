@@ -14,12 +14,12 @@ export const colors = {
 };
 
 export const STATUS_STYLES = {
-  "Draft Submitted": "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400",
-  "Under Review": "bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400",
-  "On Hold": "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400",
-  Rejected: "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400",
-  Accepted: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400",
-  Completed: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400",
+  "Draft Submitted": "bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30",
+  "Under Review": "bg-blue-100 text-blue-800 border border-blue-200 dark:bg-blue-500/15 dark:text-blue-400 dark:border-blue-500/30",
+  "On Hold": "bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-500/15 dark:text-rose-400 dark:border-rose-500/30",
+  Rejected: "bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-500/15 dark:text-rose-400 dark:border-rose-500/30",
+  Accepted: "bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30",
+  Completed: "bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30",
 };
 
 // Stored status values stay as-is everywhere (filters, DB writes, etc.) —
