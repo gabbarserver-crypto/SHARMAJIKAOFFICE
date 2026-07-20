@@ -812,11 +812,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (!serviceId) return;
     const { data: reqDocs } = await supabase
       .from("service_documents")
-      .select("name, mandatory")
+      .select("name, mandatory, post_approval")
       .eq("service_id", serviceId);
     if (reqDocs?.length) {
       await supabase.from("application_documents").insert(
-        reqDocs.map((d) => ({ application_id: applicationId, name: d.name, mandatory: d.mandatory, status: "Pending" }))
+        reqDocs.map((d) => ({ application_id: applicationId, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" }))
       );
     }
   };
@@ -2274,9 +2274,24 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
 
         <Card title="Documents">
           {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
-          {(app.docs || []).map((d) => (
-            <DocumentRow key={d.id} doc={d} onChanged={onDocsChanged} />
-          ))}
+          {(app.docs || [])
+            .filter((d) => !d.post_approval || app.status === "Accepted" || app.status === "Completed")
+            .map((d) => (
+              <div key={d.id}>
+                {/learn/i.test(d.name) && app.application_no && (
+                  <button
+                    onClick={() => window.open(
+                      `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                      "sarathi_popup", "width=900,height=700,noopener,noreferrer"
+                    )}
+                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                  >
+                    ↗ Download Learning (opens Sarathi)
+                  </button>
+                )}
+                <DocumentRow doc={d} onChanged={onDocsChanged} />
+              </div>
+            ))}
         </Card>
 
         {app.services?.chat_in_app && (

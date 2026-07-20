@@ -287,7 +287,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
     // so the dealer immediately sees what needs to be uploaded.
     const { data: reqDocs, error: reqDocsError } = await supabase
       .from("service_documents")
-      .select("name, mandatory")
+      .select("name, mandatory, post_approval")
       .eq("service_id", f.service_id);
     if (reqDocsError) {
       setSaving(false);
@@ -297,7 +297,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
     }
     if (reqDocs?.length) {
       const { error: docsInsertError } = await supabase.from("application_documents").upsert(
-        reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, status: "Pending" })),
+        reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
         { onConflict: "application_id,name", ignoreDuplicates: true }
       );
       if (docsInsertError) {
@@ -384,10 +384,10 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
     const { data: newApp, error } = await supabase.from("applications").insert(payload).select().single();
     if (error) throw new Error(error.message);
     if (payload.service_id) {
-      const { data: reqDocs } = await supabase.from("service_documents").select("name, mandatory").eq("service_id", payload.service_id);
+      const { data: reqDocs } = await supabase.from("service_documents").select("name, mandatory, post_approval").eq("service_id", payload.service_id);
       if (reqDocs?.length) {
         await supabase.from("application_documents").insert(
-          reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, status: "Pending" }))
+          reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" }))
         );
       }
     }
@@ -532,7 +532,7 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
     if ((!data || data.length === 0) && application.service_id) {
       const { data: reqDocs, error: reqDocsError } = await supabase
         .from("service_documents")
-        .select("name, mandatory")
+        .select("name, mandatory, post_approval")
         .eq("service_id", application.service_id);
       if (reqDocsError) {
         // Don't silently show "no documents required" when the lookup itself
@@ -545,7 +545,7 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
       }
       if (reqDocs?.length) {
         const { error: backfillInsertError } = await supabase.from("application_documents").upsert(
-          reqDocs.map((d) => ({ application_id: application.id, name: d.name, mandatory: d.mandatory, status: "Pending" })),
+          reqDocs.map((d) => ({ application_id: application.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
           { onConflict: "application_id,name", ignoreDuplicates: true }
         );
         if (backfillInsertError) {
@@ -598,16 +598,41 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
     load();
   };
 
+  const isApproved = application.status === "Accepted" || application.status === "Completed";
+  // Post-approval documents (e.g. a PCC Certificate or Learner Licence PDF
+  // that literally doesn't exist until approval) stay hidden until the
+  // application actually reaches that stage — showing them earlier would
+  // just read as "missing document" for something the dealer can't get yet.
+  const visibleDocs = docs.filter((d) => !d.post_approval || isApproved);
+
+  // Opens the official Sarathi "Print Learner's Licence" page in a popup,
+  // pre-filled with this application's Application No. via the query
+  // param Parivahan's own redirect link supports. OTP + captcha + the
+  // final submit on Sarathi's page still have to be done manually — that
+  // page is a government portal with its own captcha specifically to
+  // block this kind of automation, so this only gets the dealer to the
+  // right pre-filled page, not all the way through it. Once they've
+  // downloaded the PDF from Sarathi, they upload it below like any other
+  // document.
+  const openSarathiPopup = () => {
+    if (!application.application_no) {
+      setError("Enter the Application No. on this application first (Applications tab), then try again.");
+      return;
+    }
+    const url = `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(application.application_no)}`;
+    window.open(url, "sarathi_popup", "width=900,height=700,noopener,noreferrer");
+  };
+
   return (
     <Modal title={`Documents — ${application.draft_code}`} onClose={onClose}>
       <p className="text-xs text-slate-500 dark:text-slate-500 mb-4">{application.applicant_name}</p>
       {loading ? (
         <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
-      ) : docs.length === 0 ? (
-        <p className="text-sm text-slate-400 dark:text-slate-500">No documents are required for this application.</p>
+      ) : visibleDocs.length === 0 ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500">No documents are required for this application{!isApproved && docs.length > 0 ? " yet" : ""}.</p>
       ) : (
         <div className="space-y-3">
-          {docs.map((d) => (
+          {visibleDocs.map((d) => (
             <div key={d.id} className="border border-slate-200 dark:border-slate-800 rounded-lg p-3">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
@@ -617,6 +642,14 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
                   {d.status || "Pending"}
                 </span>
               </div>
+              {/learn/i.test(d.name) && (
+                <button
+                  onClick={openSarathiPopup}
+                  className="text-xs font-semibold text-blue-600 hover:underline mb-1.5 block"
+                >
+                  ↗ Download Learning (opens Sarathi)
+                </button>
+              )}
               {d.file_url && (
                 <a href={d.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-2 mb-1">
                   {/\.(png|jpe?g|gif|webp|bmp)$/i.test(d.file_url) ? (

@@ -303,7 +303,7 @@ function ServiceMaster({ notify }) {
     const { error: docsDeleteError } = await supabase.from("service_documents").delete().eq("service_id", serviceId);
     if (docsDeleteError) { notify("Service saved, but couldn't clear old documents: " + docsDeleteError.message); }
     if (documents.length) {
-      const { error: docsInsertError } = await supabase.from("service_documents").insert(documents.map((d) => ({ service_id: serviceId, name: d.name, mandatory: d.mandatory })));
+      const { error: docsInsertError } = await supabase.from("service_documents").insert(documents.map((d) => ({ service_id: serviceId, name: d.name, mandatory: d.mandatory, post_approval: !!d.post_approval })));
       if (docsInsertError) { notify("Service saved, but Required Documents failed to save: " + docsInsertError.message); return; }
     }
 
@@ -373,7 +373,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
           // required documents".
           setLoadError("Couldn't load this service's required documents: " + docsError.message);
         } else {
-          setDocuments((docs || []).map((d) => ({ name: d.name, mandatory: d.mandatory })));
+          setDocuments((docs || []).map((d) => ({ name: d.name, mandatory: d.mandatory, post_approval: d.post_approval })));
         }
         const { data: st, error: stepsError } = await supabase.from("service_workflow_steps").select("*").eq("service_id", initial.id).order("step_order");
         if (stepsError) {
@@ -467,13 +467,26 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
                     />
                     Mandatory
                   </label>
+                  <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-500" title="Only shows up as required once the application is Accepted/Completed — e.g. a PCC Certificate or Learner Licence that only exists after approval">
+                    <input
+                      type="checkbox"
+                      checked={!!d.post_approval}
+                      onChange={(e) => {
+                        const updated = [...documents];
+                        updated[i] = { ...updated[i], post_approval: e.target.checked };
+                        setDocuments(updated);
+                      }}
+                      className="w-3.5 h-3.5 accent-amber-600"
+                    />
+                    Only after approval
+                  </label>
                   <button onClick={() => setDocuments(documents.filter((_, idx) => idx !== i))} className="text-rose-500 text-xs">Remove</button>
                 </div>
               </div>
             ))}
             <div className="flex gap-2 mt-2">
               <Input value={newDoc} onChange={(e) => setNewDoc(e.target.value)} placeholder="Document name" />
-              <GhostButton onClick={() => { if (newDoc.trim()) { setDocuments([...documents, { name: newDoc.trim(), mandatory: true }]); setNewDoc(""); } }}>Add</GhostButton>
+              <GhostButton onClick={() => { if (newDoc.trim()) { setDocuments([...documents, { name: newDoc.trim(), mandatory: true, post_approval: false }]); setNewDoc(""); } }}>Add</GhostButton>
             </div>
           </Card>
 
