@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton } from "../components/UI";
+import FollowUpReport from "../components/FollowUpReport";
 
 function firstOfMonth() {
   const d = new Date();
@@ -71,6 +72,10 @@ export default function Reports() {
 
   return (
     <div>
+      <div className="mb-5">
+        <FollowUpReport showDealerColumn />
+      </div>
+
       <Card title="Service Report" className="mb-5">
         <div className="grid sm:grid-cols-3 gap-4 items-end">
           <Field label="Service">

@@ -5,7 +5,7 @@
 // the payload for the new draft.
 import { supabase } from "./supabase";
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 // `convertedSourceIds` is a Set of every application's source_application_id
 // already in use (i.e. "this application has already been converted") —
@@ -16,14 +16,13 @@ export function isEligibleForAppointment(app, convertedSourceIds) {
   if (!app.services?.next_service_id) return false;
   if (!app.completed_at) return false;
   if (convertedSourceIds.has(app.id)) return false;
-  const waitDays = app.services?.next_service_wait_days ?? 30;
   const completedAt = new Date(app.completed_at).getTime();
-  return Date.now() - completedAt >= waitDays * MS_PER_DAY;
+  return Date.now() - completedAt >= THIRTY_DAYS_MS;
 }
 
 export function daysSinceCompleted(app) {
   if (!app.completed_at) return null;
-  return Math.floor((Date.now() - new Date(app.completed_at).getTime()) / MS_PER_DAY);
+  return Math.floor((Date.now() - new Date(app.completed_at).getTime()) / (24 * 60 * 60 * 1000));
 }
 
 // Builds the insert payload for the new draft application, copying the
@@ -87,4 +86,39 @@ export async function copyForwardDocuments(sourceAppId, newAppId) {
           .eq("id", d.id);
       })
   );
+}
+
+// Powers the "LL Follow-ups" report (Reports page for admin/staff, its own
+// tab in the Dealer Portal): every Completed application whose service has
+// a Next Service configured, with how many days it's been and whether a
+// follow-up draft has already been created (Done) or not (Pending) — the
+// same "created a draft = done" rule used by the inline Book Appointment
+// button. Pass dealerId to scope it to one dealer (Dealer Portal); omit it
+// for the system-wide admin/staff view.
+export async function fetchFollowUpReport(dealerId = null) {
+  let query = supabase
+    .from("applications")
+    .select("id, draft_code, application_no, applicant_name, dealer_id, completed_at, source_application_id, dealers(name, short_name), services!inner(parent_service, short_name, next_service_id)")
+    .eq("status", "Completed")
+    .not("services.next_service_id", "is", null)
+    .not("completed_at", "is", null)
+    .order("completed_at", { ascending: true });
+  if (dealerId) query = query.eq("dealer_id", dealerId);
+
+  const { data, error } = await query;
+  if (error) return { rows: [], error };
+
+  // "Done" means some other application already points back at this one as
+  // its source — i.e. the follow-up draft was already created (same rule
+  // "book appointment" uses for convertedSourceIds), regardless of that
+  // follow-up's own current status.
+  const { data: allSourceIds } = await supabase.from("applications").select("source_application_id").not("source_application_id", "is", null);
+  const converted = new Set((allSourceIds || []).map((r) => r.source_application_id));
+
+  const rows = (data || []).map((app) => ({
+    ...app,
+    daysSince: daysSinceCompleted(app),
+    done: converted.has(app.id),
+  }));
+  return { rows, error: null };
 }

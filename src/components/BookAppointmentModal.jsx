@@ -10,7 +10,6 @@ export default function BookAppointmentModal({ sourceApp, nextService, onClose, 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const days = daysSinceCompleted(sourceApp);
-  const waitDays = sourceApp.services?.next_service_wait_days ?? 30;
 
   const book = async () => {
     setSaving(true);
@@ -35,7 +34,7 @@ export default function BookAppointmentModal({ sourceApp, nextService, onClose, 
     <Modal title="Book Appointment" onClose={onClose}>
       <p className="text-sm text-slate-600 dark:text-slate-300 mb-1">
         <span className="font-semibold">{sourceApp.applicant_name}</span>'s {sourceApp.services?.parent_service} has
-        been Completed for {days ?? `${waitDays}+`} days.
+        been Completed for {days ?? "30+"} days.
       </p>
       <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
         This creates a new draft application for <span className="font-semibold">{nextService.parent_service}</span>,

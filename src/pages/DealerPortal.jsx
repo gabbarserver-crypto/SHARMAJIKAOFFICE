@@ -17,8 +17,9 @@ import { createDealerStaffLogin } from "../lib/serverApi";
 import { useDarkMode } from "../lib/theme";
 import { Sun, Moon, Fingerprint } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
+import FollowUpReport from "../components/FollowUpReport";
 
-const TABS = ["Applications", "Chats", "Ledger"];
+const TABS = ["Applications", "Chats", "Ledger", "Follow-ups"];
 
 // `identity` is { type: 'dealer' | 'dealer_staff', id, name } — resolved in
 // App.jsx from whichever login this is. It's what scopes chat messages to
@@ -187,6 +188,7 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
         )}
         {tab === "Chats" && <DealerChats dealerId={dealer.id} identity={identity} onMessage={refreshUnreadChats} />}
         {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
+        {tab === "Follow-ups" && <FollowUpReport dealerId={dealer.id} />}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
 
@@ -348,6 +350,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const [statusFilter, setStatusFilter] = useState("All");
   const [serviceList, setServiceList] = useState([]);
   const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null
+  const [detailRow, setDetailRow] = useState(null); // row shown in the quick detail popup
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
@@ -361,7 +364,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
     setLoading(true);
     const { data, error } = await supabase
       .from("applications")
-      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days)")
+      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, slot_time, service_answers, services(parent_service, short_name, chat_in_app, next_service_id)")
       .eq("dealer_id", dealerId)
       .order("submitted_at", { ascending: false });
     if (error) {
@@ -425,7 +428,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
-                <th className="text-left font-medium px-3 py-2">Ref No.</th>
+                <th className="text-left font-medium px-3 py-2">Application No.</th>
                 <th className="text-left font-medium px-3 py-2">Applicant</th>
                 <th className="text-left font-medium px-3 py-2">Service</th>
                 <th className="text-left font-medium px-3 py-2">Submitted</th>
@@ -437,12 +440,18 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
             <tbody>
               {visibleRows.map((r) => (
                 <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60">
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                    {r.application_no || r.draft_code}
+                  <td className="px-3 py-2">
+                    <button
+                      onClick={() => setDetailRow(r)}
+                      className="text-slate-700 dark:text-slate-300 hover:underline"
+                      title="View applicant details"
+                    >
+                      {r.application_no || <span className="text-slate-400 dark:text-slate-500 italic">—</span>}
+                    </button>
                   </td>
                   <td className="px-3 py-2">
                     <button
-                      onClick={() => onSelect?.({ id: r.id, applicant_name: r.applicant_name, draft_code: r.application_no || r.draft_code, service_id: r.service_id })}
+                      onClick={() => onSelect?.(r)}
                       className="text-blue-600 font-semibold hover:underline text-left"
                     >
                       {r.applicant_name}
@@ -494,8 +503,53 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
           onBooked={bookAppointment}
         />
       )}
+      {detailRow && <DealerAppDetailPopup row={detailRow} onClose={() => setDetailRow(null)} />}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </Card>
+  );
+}
+
+// Quick-view popup for the dealer side — applicant details, Application No,
+// PCC No, Slot (if the service needed one), and phone with a tap-to-call
+// link. Opened by tapping the Application No. cell in "My Applications".
+function DealerAppDetailPopup({ row, onClose }) {
+  const serviceLabel = row.services?.short_name || row.services?.parent_service || "—";
+  return (
+    <Modal title={`${row.applicant_name} — Details`} onClose={onClose}>
+      <div className="grid grid-cols-2 gap-y-2 text-sm">
+        <span className="text-slate-400 dark:text-slate-500">Applicant</span>
+        <span className="text-slate-800 dark:text-slate-100 font-medium">{row.applicant_name}</span>
+
+        <span className="text-slate-400 dark:text-slate-500">Service</span>
+        <span className="text-slate-700 dark:text-slate-200">{serviceLabel}</span>
+
+        <span className="text-slate-400 dark:text-slate-500">Application No.</span>
+        <span className="text-slate-700 dark:text-slate-200">{row.application_no || "Not yet assigned"}</span>
+
+        <span className="text-slate-400 dark:text-slate-500">PCC No.</span>
+        <span className="text-slate-700 dark:text-slate-200">{row.pcc_no || "—"}</span>
+
+        <span className="text-slate-400 dark:text-slate-500">Slot</span>
+        <span className="text-slate-700 dark:text-slate-200">{row.slot_time || "—"}</span>
+
+        <span className="text-slate-400 dark:text-slate-500">Phone</span>
+        <span className="text-slate-700 dark:text-slate-200 flex items-center gap-2">
+          {row.mobile || "—"}
+          {row.mobile && (
+            <a
+              href={`tel:${row.mobile}`}
+              className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center"
+              title={`Call ${row.mobile}`}
+            >
+              📞
+            </a>
+          )}
+        </span>
+
+        <span className="text-slate-400 dark:text-slate-500">Status</span>
+        <span><StatusBadge status={row.status} /></span>
+      </div>
+    </Modal>
   );
 }
 
@@ -505,11 +559,30 @@ const DOC_STATUS_STYLES = {
   Rejected: "bg-rose-50 text-rose-700",
 };
 
-function ApplicationDocsModal({ application, onUploaded, onClose }) {
+function ApplicationDocsModal({ application: applicationProp, onUploaded, onClose }) {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState("");
+  const [application, setApplication] = useState(applicationProp);
+
+  // Defensive fallback: some callers (e.g. right after creating a brand new
+  // application) only have a stripped-down object on hand (id, name, draft
+  // code) rather than the full row. Without services/application_no, the LL
+  // detection below and the Sarathi link would silently never work. If
+  // either is missing, fetch the full row once instead of trusting the
+  // caller to have passed everything.
+  useEffect(() => {
+    if (applicationProp.services && "application_no" in applicationProp) return;
+    (async () => {
+      const { data } = await supabase
+        .from("applications")
+        .select("id, draft_code, application_no, applicant_name, service_id, services(parent_service, short_name)")
+        .eq("id", applicationProp.id)
+        .maybeSingle();
+      if (data) setApplication({ ...applicationProp, ...data });
+    })();
+  }, [applicationProp]);
 
   const load = async () => {
     setLoading(true);
@@ -605,6 +678,13 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
   // just read as "missing document" for something the dealer can't get yet.
   const visibleDocs = docs.filter((d) => !d.post_approval || isApproved);
 
+  // Shows for any Learning Licence-type service (checked against the
+  // service's own name, not against whether a matching document row
+  // happens to exist — that way it doesn't depend on Masters having a
+  // document literally named "Learning..." configured first).
+  const serviceText = `${application.services?.parent_service || ""} ${application.services?.short_name || ""}`;
+  const isLLService = /learn|\bll\b/i.test(serviceText);
+
   // Opens the official Sarathi "Print Learner's Licence" page in a popup,
   // pre-filled with this application's Application No. via the query
   // param Parivahan's own redirect link supports. OTP + captcha + the
@@ -626,6 +706,16 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
   return (
     <Modal title={`Documents — ${application.draft_code}`} onClose={onClose}>
       <p className="text-xs text-slate-500 dark:text-slate-500 mb-4">{application.applicant_name}</p>
+
+      {isLLService && (
+        <button
+          onClick={openSarathiPopup}
+          className="w-full text-left text-sm font-semibold text-blue-600 hover:underline mb-4 bg-blue-50 dark:bg-blue-500/10 rounded-lg px-3 py-2"
+        >
+          ↗ Download Learning Licence (opens Sarathi)
+        </button>
+      )}
+
       {loading ? (
         <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
       ) : visibleDocs.length === 0 ? (
@@ -642,14 +732,6 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
                   {d.status || "Pending"}
                 </span>
               </div>
-              {/learn/i.test(d.name) && (
-                <button
-                  onClick={openSarathiPopup}
-                  className="text-xs font-semibold text-blue-600 hover:underline mb-1.5 block"
-                >
-                  ↗ Download Learning (opens Sarathi)
-                </button>
-              )}
               {d.file_url && (
                 <a href={d.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-2 mb-1">
                   {/\.(png|jpe?g|gif|webp|bmp)$/i.test(d.file_url) ? (
