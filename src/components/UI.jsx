@@ -25,11 +25,9 @@ export const STATUS_STYLES = {
 // Stored status values stay as-is everywhere (filters, DB writes, etc.) —
 // this only swaps the *displayed* text. "Accepted" is what the Approve
 // action writes to the DB, but staff/dealers should see it read as
-// "Approved" wherever a status badge is shown. Same idea for "Draft
-// Submitted" -> "Draft": shorter label, same underlying value.
+// "Approved" wherever a status badge is shown.
 export const STATUS_DISPLAY_LABELS = {
   Accepted: "Approved",
-  "Draft Submitted": "Draft",
 };
 
 export function StatusBadge({ status }) {
@@ -39,19 +37,6 @@ export function StatusBadge({ status }) {
     </span>
   );
 }
-
-// Subtle full-row tint per status, for use on <tr> so the whole row reads
-// as its status at a glance (not just the small badge in the Status
-// column). Deliberately light — this sits under existing text/inputs in
-// the row, so it can't be so strong it hurts readability.
-export const ROW_STATUS_TINT = {
-  "Draft Submitted": "bg-amber-50/60 hover:bg-amber-50 dark:bg-amber-500/[0.06] dark:hover:bg-amber-500/10",
-  "Under Review": "bg-blue-50/60 hover:bg-blue-50 dark:bg-blue-500/[0.06] dark:hover:bg-blue-500/10",
-  "On Hold": "bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-500/[0.06] dark:hover:bg-rose-500/10",
-  Rejected: "bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-500/[0.06] dark:hover:bg-rose-500/10",
-  Accepted: "bg-emerald-50/60 hover:bg-emerald-50 dark:bg-emerald-500/[0.06] dark:hover:bg-emerald-500/10",
-  Completed: "bg-emerald-50/60 hover:bg-emerald-50 dark:bg-emerald-500/[0.06] dark:hover:bg-emerald-500/10",
-};
 
 export function Card({ title, children, className = "" }) {
   return (

@@ -1,7 +1,7 @@
 // src/pages/Applications.jsx
 import React, { useEffect, useState, useCallback, useMemo, useContext, createContext, useRef } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Input, Select, Modal, Toast, STATUS_DISPLAY_LABELS, ROW_STATUS_TINT } from "../components/UI";
+import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Input, Select, Modal, Toast, STATUS_DISPLAY_LABELS } from "../components/UI";
 import ChatPanel from "../components/ChatPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import SearchableSelect from "../components/SearchableSelect";
@@ -531,7 +531,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setLoading(true);
     let query = supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days), staff:assigned_staff_id(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id), staff:assigned_staff_id(full_name)")
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
     const { data, error } = await query;
@@ -1025,25 +1025,17 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       </div>
 
       <div className="flex gap-2 mb-4 flex-wrap items-center">
-        {STATUS_TABS.map((t) => {
-          const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
-          return (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
-                tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-              }`}
-            >
-              {STATUS_DISPLAY_LABELS[t] || t}
-              {t === "Draft Submitted" && draftCount > 0 && (
-                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                  {draftCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {STATUS_TABS.map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+              tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+            }`}
+          >
+            {STATUS_DISPLAY_LABELS[t] || t}
+          </button>
+        ))}
         <span className="w-px h-5 bg-slate-200 mx-1" />
         <button
           onClick={() => setChatOnly((c) => !c)}
@@ -1194,7 +1186,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           </thead>
           <tbody>
             {pagedRows.map((r) => (
-              <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
+              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60/60 dark:hover:bg-slate-800/40">
                 <td className="px-3 py-2 font-medium whitespace-nowrap">
                   <button
                     onClick={() => setDetailPopup(r)}
@@ -1606,7 +1598,7 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
+              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40">
                 <td className="px-3 py-2">
                   <button onClick={() => onOpenDetail(r)} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
                     {r.draft_code}
@@ -2072,7 +2064,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
         </Field>
         <Field label="Starting Status">
           <Select value={form.status} onChange={set("status")}>
-            <option value="Draft Submitted">Draft</option>
+            <option>Draft Submitted</option>
             <option>Under Review</option>
             <option value="Accepted">Approved</option>
           </Select>
@@ -2281,24 +2273,29 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </Card>
 
         <Card title="Documents">
+          {(() => {
+            const serviceText = `${app.services?.parent_service || ""} ${app.services?.short_name || ""}`;
+            const isLLService = /learn|\bll\b/i.test(serviceText);
+            return isLLService && (
+              <button
+                onClick={() => {
+                  if (!app.application_no) { window.alert("Enter the Application No. first"); return; }
+                  window.open(
+                    `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                    "sarathi_popup", "width=900,height=700,noopener,noreferrer"
+                  );
+                }}
+                className="w-full text-left text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 bg-blue-50 dark:bg-blue-500/10 rounded-lg px-3 py-2"
+              >
+                ↗ Download Learning Licence (opens Sarathi)
+              </button>
+            );
+          })()}
           {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
           {(app.docs || [])
             .filter((d) => !d.post_approval || app.status === "Accepted" || app.status === "Completed")
             .map((d) => (
-              <div key={d.id}>
-                {/learn/i.test(d.name) && app.application_no && (
-                  <button
-                    onClick={() => window.open(
-                      `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
-                      "sarathi_popup", "width=900,height=700,noopener,noreferrer"
-                    )}
-                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
-                  >
-                    ↗ Download Learning (opens Sarathi)
-                  </button>
-                )}
-                <DocumentRow doc={d} onChanged={onDocsChanged} />
-              </div>
+              <DocumentRow key={d.id} doc={d} onChanged={onDocsChanged} />
             ))}
         </Card>
 
