@@ -22,6 +22,17 @@ export const STATUS_STYLES = {
   Completed: "bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30",
 };
 
+// Subtle full-row background tint per status, used for table rows in
+// Applications.jsx (lighter than STATUS_STYLES, which is for the badge chip).
+export const ROW_STATUS_TINT = {
+  "Draft Submitted": "bg-amber-50/60 hover:bg-amber-50 dark:bg-amber-500/5 dark:hover:bg-amber-500/10",
+  "Under Review": "bg-blue-50/60 hover:bg-blue-50 dark:bg-blue-500/5 dark:hover:bg-blue-500/10",
+  "On Hold": "bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-500/5 dark:hover:bg-rose-500/10",
+  Rejected: "bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-500/5 dark:hover:bg-rose-500/10",
+  Accepted: "bg-emerald-50/60 hover:bg-emerald-50 dark:bg-emerald-500/5 dark:hover:bg-emerald-500/10",
+  Completed: "bg-emerald-50/60 hover:bg-emerald-50 dark:bg-emerald-500/5 dark:hover:bg-emerald-500/10",
+};
+
 // Stored status values stay as-is everywhere (filters, DB writes, etc.) —
 // this only swaps the *displayed* text. "Accepted" is what the Approve
 // action writes to the DB, but staff/dealers should see it read as
