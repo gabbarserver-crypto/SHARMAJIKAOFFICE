@@ -15,6 +15,9 @@ import Chats from "./pages/Chats";
 import DealerPortal from "./pages/DealerPortal";
 import StaffChatWidget from "./components/StaffChatWidget";
 import { identityFor, countOpenThreads } from "./lib/chat";
+import PinUnlock from "./pages/PinUnlock";
+import SetupPinPrompt from "./components/SetupPinPrompt";
+import { hasPinSetUp, hasBeenPromptedForPin } from "./lib/pinLock";
 
 const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
@@ -52,6 +55,9 @@ export default function App() {
   const [dealer, setDealer] = useState(null);
   const [dealerStaff, setDealerStaff] = useState(null); // set only for a dealer sub-staff login
   const [authError, setAuthError] = useState("");
+  const [authUserId, setAuthUserId] = useState(null); // Supabase auth user id — stable across staff/dealer/dealer_staff, used to scope the device PIN
+  const [pinUnlocked, setPinUnlocked] = useState(false);
+  const [showPinSetup, setShowPinSetup] = useState(false);
   const [active, setActive] = useState("dashboard");
   const [pendingChatCount, setPendingChatCount] = useState(0);
   const [permMap, setPermMap] = useState({}); // { [module]: permissions row } for the staff member's role
@@ -127,6 +133,7 @@ export default function App() {
   // Checks staff first (full admin access), then falls back to dealers
   // (restricted, own-data-only portal). Same login screen serves both.
   const verifySession = useCallback(async (session) => {
+    setAuthUserId(session?.user?.id || null);
     if (!session) {
       setStaff(null);
       setDealer(null);
@@ -231,6 +238,22 @@ export default function App() {
     return () => listener.subscription.unsubscribe();
   }, [verifySession]);
 
+  // PIN lock gating (keyed on authUserId, not on every verifySession call,
+  // so a background token refresh doesn't re-lock an already-unlocked
+  // session — only an actual sign-in/sign-out changes authUserId).
+  useEffect(() => {
+    if (!authUserId) {
+      setPinUnlocked(false);
+      setShowPinSetup(false);
+      return;
+    }
+    setPinUnlocked(false);
+    setShowPinSetup(!hasPinSetUp(authUserId) && !hasBeenPromptedForPin(authUserId));
+  }, [authUserId]);
+
+  const userLabel = staff?.full_name || dealer?.name || dealerStaff?.full_name || "there";
+
+
   if (passwordRecovery) {
     return <ResetPassword onDone={() => { setPasswordRecovery(false); supabase.auth.signOut(); }} />;
   }
@@ -243,9 +266,29 @@ export default function App() {
     return <Login authError={authError} />;
   }
 
+  if (authUserId && hasPinSetUp(authUserId) && !pinUnlocked) {
+    return (
+      <PinUnlock
+        userId={authUserId}
+        userLabel={userLabel}
+        onUnlocked={() => setPinUnlocked(true)}
+        onSignOut={() => supabase.auth.signOut()}
+      />
+    );
+  }
+
+  const pinSetupOverlay = showPinSetup && (
+    <SetupPinPrompt userId={authUserId} onDone={() => setShowPinSetup(false)} />
+  );
+
   if (dealer) {
     const identity = identityFor({ dealer: dealerStaff ? null : dealer, dealerStaff });
-    return <DealerPortal dealer={dealer} identity={identity} onLogout={() => supabase.auth.signOut()} />;
+    return (
+      <>
+        <DealerPortal dealer={dealer} identity={identity} onLogout={() => supabase.auth.signOut()} />
+        {pinSetupOverlay}
+      </>
+    );
   }
 
   const Active = NAV.find((n) => n.key === active)?.Component || Dashboard;
@@ -269,6 +312,7 @@ export default function App() {
         pendingCount={pendingChatCount}
         onExpand={() => setActive("chats")}
       />
+      {pinSetupOverlay}
     </div>
   );
 }
