@@ -1,0 +1,238 @@
+// src/components/PCCStatusCheckModal.jsx
+// Extracted out of Applications.jsx so the Dealer Portal's Documents modal
+// can offer the same "Download Certificate" flow next to a PCC document
+// (mirroring the "Download Learning" / Sarathi button), not just the
+// admin-side PCC No column.
+import React, { useState } from "react";
+import { Modal, Field, Input, PrimaryButton } from "./UI";
+
+const PCC_STATUS_API_BASE = import.meta.env.VITE_PCC_STATUS_API_BASE || "http://localhost:5000";
+
+/**
+ * Confirmed from the real get-pcc-application-status response: the API's
+ * timeline entries use a "stage" key (Pending, Assigned, Field Verified,
+ * Approved, Verified, Certificate Issued) which we map to the friendlier
+ * labels the portal's own UI displays.
+ */
+const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
+const PCC_STAGE_LABELS = {
+  Pending: "Application Submitted",
+  Assigned: "Assigned for Field Verification",
+  "Field Verified": "Field Verified",
+  Approved: "Approved",
+  Verified: "Verified",
+  "Certificate Issued": "Certificate Issued",
+};
+
+function mapToSteps(status) {
+  const timeline = status?.timeline || [];
+  const byStage = {};
+  timeline.forEach((entry) => { byStage[entry.stage] = entry; });
+
+  return PCC_STAGE_ORDER.map((stage) => ({
+    label: PCC_STAGE_LABELS[stage] || stage,
+    done: Boolean(byStage[stage]),
+    timestamp: byStage[stage]?.date || null,
+    description: byStage[stage]?.description || null,
+  }));
+}
+
+// Delhi Police's portal expects the FULL application number including the
+// "DLSB-PCC/" prefix (e.g. "DLSB-PCC/202605030627"). Our pcc_no field is often
+// stored as just the trailing number, so add the prefix back if it's missing.
+export function normalizePccApplicationNumber(pccNo) {
+  if (!pccNo) return pccNo;
+  const trimmed = pccNo.trim();
+  return /^DLSB-PCC\//i.test(trimmed) ? trimmed : `DLSB-PCC/${trimmed}`;
+}
+
+// Strip any leading "S/O", "W/O", "D/O", "C/O" (with or without punctuation)
+// in case it was typed into the Father/Husband field — the portal expects
+// just the plain name, with no relation prefix.
+function stripKinPrefix(name) {
+  if (!name) return name;
+  return name.replace(/^\s*(s\/o|w\/o|d\/o|c\/o)[\s:.]*?/i, "").trim();
+}
+
+// Mirrors the Delhi Police portal's own "Track Application" form: application
+// number (with the fixed DLSB-PCC/ prefix), applicant name, guardian name —
+// prefilled from our record, but editable, with an explicit "Search
+// Application" button. Nothing fires until the user clicks it.
+export default function PCCStatusCheckModal({ row, onClose }) {
+  const [applicationNumber, setApplicationNumber] = useState(
+    normalizePccApplicationNumber(row.pcc_no)?.replace(/^DLSB-PCC\//i, "") || ""
+  );
+  const [applicantName, setApplicantName] = useState(row.applicant_name || "");
+  const [guardianName, setGuardianName] = useState(stripKinPrefix(row.father_husband_name) || "");
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+
+  const runCheck = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${PCC_STATUS_API_BASE}/api/pcc-status/check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          applicationNumber: normalizePccApplicationNumber(applicationNumber),
+          applicantName,
+          guardianName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || "Application not found on the PCC portal");
+      }
+      setResult(data);
+      return data;
+    } catch (err) {
+      setError(err.message || "Failed to reach the PCC status server");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // The certificate link's token appears to be short-lived, so instead of
+  // reusing whatever certificateUrl came back from the earlier search, we
+  // re-run the check right at click time and open the freshest possible link
+  // immediately — minimizing the gap between "token issued" and "token used".
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const fresh = await runCheck();
+      const url = fresh?.status?.certificateUrl;
+      if (url) {
+        window.open(url, "_blank", "noopener,noreferrer");
+      } else {
+        setError("Couldn't get a fresh certificate link — try Search Application again.");
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const application = result?.application || null;
+  const status = result?.status || null;
+  const steps = mapToSteps(status);
+  const lastStep = steps[steps.length - 1];
+
+  return (
+    <Modal title="Track Application" onClose={onClose} wide>
+      <div className="max-w-lg">
+        <Field label="Application Number">
+          <div className="flex">
+            <span className="shrink-0 inline-flex items-center px-3 rounded-l-lg bg-blue-900 text-white text-sm font-semibold">
+              DLSB-PCC/
+            </span>
+            <input
+              type="text"
+              value={applicationNumber}
+              onChange={(e) => setApplicationNumber(e.target.value)}
+              className="flex-1 rounded-r-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+          </div>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Applicant Name">
+            <Input value={applicantName} onChange={(e) => setApplicantName(e.target.value)} />
+          </Field>
+          <Field label="Guardian Name">
+            <Input value={guardianName} onChange={(e) => setGuardianName(e.target.value)} />
+          </Field>
+        </div>
+
+        <PrimaryButton disabled={loading} onClick={runCheck} className="w-full mt-2">
+          {loading ? "Searching…" : "Search Application"}
+        </PrimaryButton>
+
+        {error && (
+          <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-4">
+            {error}
+          </div>
+        )}
+
+        {result && !application && (
+          <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No matching application found.</p>
+        )}
+
+        {application && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-3 py-2">
+              <div className="text-sm">
+                <div className="text-xs text-slate-400 dark:text-slate-500">Application Number</div>
+                <div className="font-semibold text-slate-700 dark:text-slate-300">{applicationNumber}</div>
+              </div>
+              <div className="text-sm">
+                <div className="text-xs text-slate-400 dark:text-slate-500">Applicant Name</div>
+                <div className="font-semibold text-slate-700 dark:text-slate-300">{application.applicantName}</div>
+              </div>
+              {status?.certificateUrl && (
+                <button
+                  type="button"
+                  disabled={downloading}
+                  onClick={handleDownload}
+                  className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg px-4 py-2 text-sm"
+                >
+                  {downloading ? "Getting link…" : "⬇ Download Certificate"}
+                </button>
+              )}
+            </div>
+            {status?.certificateUrl && (
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1.5">
+                This link requires an active, logged-in session on the Delhi Police portal in this
+                browser. If it shows a 401 error,{" "}
+                <button
+                  type="button"
+                  onClick={() => window.open("https://pcccvr.delhipolice.gov.in/login", "_blank", "noopener,noreferrer")}
+                  className="text-blue-600 font-semibold hover:underline"
+                >
+                  log into the portal
+                </button>{" "}
+                first, then try the download again.
+              </p>
+            )}
+
+            {status && (
+              <>
+                <h4 className="font-semibold text-slate-700 dark:text-slate-300 mt-5 mb-3">Application Progress</h4>
+                <ul>
+                  {steps.map((s) => (
+                    <li key={s.label} className="flex items-start gap-2 py-1.5 text-sm">
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
+                        s.done ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400 dark:text-slate-500"
+                      }`}>
+                        {s.done ? "✓" : ""}
+                      </span>
+                      <div>
+                        <div className={s.done ? "text-slate-800 dark:text-slate-100 font-medium" : "text-slate-400 dark:text-slate-500"}>{s.label}</div>
+                        {s.timestamp && <div className="text-xs text-blue-600">{s.timestamp}</div>}
+                        {s.description && <div className="text-xs text-slate-400 dark:text-slate-500">{s.description}</div>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {!status && result?.statusError && (
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-4">
+                Found the application, but couldn't load its progress right now. Try Search Application again.
+              </p>
+            )}
+
+            {lastStep.done && !status?.certificateUrl && (
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
+                Certificate Issued — but no download link came back this time.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}

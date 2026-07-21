@@ -1,10 +1,12 @@
 // src/pages/Payments.jsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "../components/UI";
+import { Card, Field, Input, Select, PrimaryButton, GhostButton, DangerButton, Modal, Toast } from "../components/UI";
 import { parseCSV, findByLabel } from "../lib/csv";
 
-export default function Payments() {
+export default function Payments({ staff } = {}) {
+  const isAdmin = staff?.roles?.role_name === "Admin";
+  const [editingPayment, setEditingPayment] = useState(null); // payment row being edited, or null
   const [dealers, setDealers] = useState([]);
   const [agencies, setAgencies] = useState([]);
   const [applications, setApplications] = useState([]);
@@ -122,6 +124,68 @@ export default function Payments() {
     loadRecent();
   };
 
+  // Admin-only: deleting a payment also removes the ledger entries it
+  // posted (matched on the same voucher_no used when it was created —
+  // the payment's own reference no., or the PMT-<id> fallback) so the
+  // dealer/agency ledgers stay in sync with the payments list.
+  const deletePayment = async (p) => {
+    if (!window.confirm(`Delete this ₹${Number(p.amount).toLocaleString("en-IN")} payment from ${p.dealers?.name || "this dealer"}? This also removes its ledger entries.`)) return;
+    const voucherNo = p.reference_no?.trim() || `PMT-${p.id}`;
+    await supabase.from("ledger_transactions").delete().eq("dealer_id", p.dealer_id).eq("voucher_no", voucherNo);
+    if (p.paid_at_agency_id) {
+      await supabase.from("agency_ledger_transactions").delete().eq("agency_id", p.paid_at_agency_id).eq("voucher_no", voucherNo);
+    }
+    const { error } = await supabase.from("payments").delete().eq("id", p.id);
+    if (error) {
+      setToast("Failed to delete: " + error.message);
+      return;
+    }
+    setToast("Payment deleted");
+    loadRecent();
+  };
+
+  // Admin-only: saves an edited amount/mode/reference/remarks and updates
+  // the matching ledger entry (matched the same way as delete, above) so
+  // the ledger reflects the corrected figure rather than drifting from it.
+  const savePaymentEdit = async (edited) => {
+    const original = editingPayment;
+    const oldVoucherNo = original.reference_no?.trim() || `PMT-${original.id}`;
+    const newVoucherNo = edited.reference_no?.trim() || `PMT-${original.id}`;
+    const { error } = await supabase
+      .from("payments")
+      .update({
+        amount: parseFloat(edited.amount),
+        payment_mode: edited.payment_mode,
+        reference_no: edited.reference_no || null,
+        remarks: edited.remarks || null,
+      })
+      .eq("id", original.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    const agencyName = agencies.find((a) => a.id === original.paid_at_agency_id)?.name;
+    await supabase
+      .from("ledger_transactions")
+      .update({
+        amount: parseFloat(edited.amount),
+        voucher_no: newVoucherNo,
+        description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
+      })
+      .eq("dealer_id", original.dealer_id)
+      .eq("voucher_no", oldVoucherNo);
+    if (original.paid_at_agency_id) {
+      await supabase
+        .from("agency_ledger_transactions")
+        .update({ amount: parseFloat(edited.amount), voucher_no: newVoucherNo })
+        .eq("agency_id", original.paid_at_agency_id)
+        .eq("voucher_no", oldVoucherNo);
+    }
+    setToast("Payment updated");
+    setEditingPayment(null);
+    loadRecent();
+  };
+
   return (
     <div className="grid lg:grid-cols-2 gap-6">
       <div className="lg:col-span-2 flex justify-end">
@@ -179,12 +243,28 @@ export default function Payments() {
                   {p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
                 </p>
               </div>
-              <p className="text-sm font-bold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</p>
+              <div className="flex items-center gap-3">
+                <p className="text-sm font-bold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</p>
+                {isAdmin && (
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setEditingPayment(p)} className="text-xs font-semibold text-blue-600 hover:underline">Edit</button>
+                    <button onClick={() => deletePayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
+                  </div>
+                )}
+              </div>
             </div>
           ))}
           {recent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No payments yet</p>}
         </div>
       </Card>
+
+      {editingPayment && (
+        <EditPaymentModal
+          payment={editingPayment}
+          onClose={() => setEditingPayment(null)}
+          onSave={savePaymentEdit}
+        />
+      )}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
 
@@ -439,5 +519,36 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         )}
       </div>
     </div>
+  );
+}
+
+// Admin-only quick edit for a payment row — amount/mode/reference/remarks
+// only (dealer, application, and Paid-At-Agency stay fixed to avoid the
+// ledger-reversal complexity of re-pointing a payment to a different
+// dealer or agency after the fact).
+function EditPaymentModal({ payment, onClose, onSave }) {
+  const [f, setF] = useState({
+    amount: payment.amount,
+    payment_mode: payment.payment_mode,
+    reference_no: payment.reference_no || "",
+    remarks: payment.remarks || "",
+  });
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
+
+  return (
+    <Modal title={`Edit Payment — ${payment.dealers?.name || ""}`} onClose={onClose}>
+      <Field label="Amount" required><Input type="number" value={f.amount} onChange={set("amount")} /></Field>
+      <Field label="Payment Mode">
+        <Select value={f.payment_mode} onChange={set("payment_mode")}>
+          {["Cash", "UPI", "Bank Transfer", "Cheque", "Card"].map((m) => <option key={m} value={m}>{m}</option>)}
+        </Select>
+      </Field>
+      <Field label="Reference No."><Input value={f.reference_no} onChange={set("reference_no")} /></Field>
+      <Field label="Remarks"><Input value={f.remarks} onChange={set("remarks")} /></Field>
+      <div className="flex gap-2">
+        <PrimaryButton onClick={() => onSave(f)}>Save Changes</PrimaryButton>
+        <GhostButton onClick={onClose}>Cancel</GhostButton>
+      </div>
+    </Modal>
   );
 }

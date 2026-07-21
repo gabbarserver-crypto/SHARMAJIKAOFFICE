@@ -289,6 +289,7 @@ function ServiceMaster({ notify }) {
       other_charges: parseFloat(form.other_charges) || 0, pcc_fee: parseFloat(form.pcc_fee) || 0,
       post_timing: form.post_timing,
       next_service_id: form.next_service_id || null,
+      next_service_wait_days: parseInt(form.next_service_wait_days, 10) || 30,
     };
     let serviceId = editing?.id;
     if (editing) {
@@ -350,7 +351,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
     parent_service: "", short_name: "", pcc_required: true, slot_booking_required: true,
     rto_required: false, agency_required: false, previous_ll_required: false, otp_required: false, chat_in_app: false,
     gov_fee: "", processing_charges: "", other_charges: "", pcc_fee: "", post_timing: "After Approval",
-    next_service_id: "",
+    next_service_id: "", next_service_wait_days: 30,
   });
   const [documents, setDocuments] = useState(
     initial ? [] : [{ name: "Aadhaar Card", mandatory: true }, { name: "Photo", mandatory: true }, { name: "Signature", mandatory: true }]
@@ -441,11 +442,18 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
                   <option key={s.id} value={s.id}>{s.parent_service}{s.short_name ? ` (${s.short_name})` : ""}</option>
                 ))}
               </Select>
-              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                Once an application for this service is Completed for 30+ days, dealers get a "Book Appointment"
-                option that creates a draft for this service instead — e.g. Learner's Licence → Driving Licence.
-              </p>
             </Field>
+            {f.next_service_id && (
+              <Field label="Wait Before Reminder (days)">
+                <Input type="number" min="0" value={f.next_service_wait_days} onChange={set("next_service_wait_days")} />
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                  Once an application for this service is Completed for {f.next_service_wait_days || 0}+ day
+                  {String(f.next_service_wait_days) === "1" ? "" : "s"}, dealers get a "Book Appointment" option that
+                  creates a draft for the Next Service above instead — e.g. Learner's Licence → Driving Licence (30
+                  days), or Insurance → Fitness (1 day).
+                </p>
+              </Field>
+            )}
           </Card>
 
           <Card title="Required Documents" className="mb-4">
@@ -618,7 +626,7 @@ function DealerMaster({ notify }) {
   );
 }
 
-function DealerForm({ initial, onSave, onClose }) {
+export function DealerForm({ initial, onSave, onClose }) {
   const [f, setF] = useState(initial || { name: "", code: "", short_name: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const [loginEmail, setLoginEmail] = useState("");
@@ -821,7 +829,7 @@ function AgencyMaster({ notify }) {
   );
 }
 
-function AgencyForm({ initial, onSave, onClose }) {
+export function AgencyForm({ initial, onSave, onClose }) {
   const [f, setF] = useState(initial || { name: "", code: "", contact_person: "", mobile: "", status: "Active", opening_balance: "", default_processing_charges: "", payment_terms: "7 Days" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   return (

@@ -1,7 +1,7 @@
 // src/pages/Applications.jsx
 import React, { useEffect, useState, useCallback, useMemo, useContext, createContext, useRef } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Input, Select, Modal, Toast, STATUS_DISPLAY_LABELS } from "../components/UI";
+import { Card, StatusBadge, PrimaryButton, GhostButton, DangerButton, Field, Input, Select, Modal, Toast, STATUS_DISPLAY_LABELS, ROW_STATUS_TINT } from "../components/UI";
 import ChatPanel from "../components/ChatPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import SearchableSelect from "../components/SearchableSelect";
@@ -10,8 +10,8 @@ import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
 import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 
-const PCC_STATUS_API_BASE = import.meta.env.VITE_PCC_STATUS_API_BASE || "http://localhost:5000";
 
 const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted", "Completed"];
 
@@ -218,235 +218,6 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
     </div>
   );
 }
-
-/**
- * Confirmed from the real get-pcc-application-status response: the API's
- * timeline entries use a "stage" key (Pending, Assigned, Field Verified,
- * Approved, Verified, Certificate Issued) which we map to the friendlier
- * labels the portal's own UI displays.
- */
-const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
-const PCC_STAGE_LABELS = {
-  Pending: "Application Submitted",
-  Assigned: "Assigned for Field Verification",
-  "Field Verified": "Field Verified",
-  Approved: "Approved",
-  Verified: "Verified",
-  "Certificate Issued": "Certificate Issued",
-};
-
-function mapToSteps(status) {
-  const timeline = status?.timeline || [];
-  const byStage = {};
-  timeline.forEach((entry) => { byStage[entry.stage] = entry; });
-
-  return PCC_STAGE_ORDER.map((stage) => ({
-    label: PCC_STAGE_LABELS[stage] || stage,
-    done: Boolean(byStage[stage]),
-    timestamp: byStage[stage]?.date || null,
-    description: byStage[stage]?.description || null,
-  }));
-}
-// Delhi Police's portal expects the FULL application number including the
-// "DLSB-PCC/" prefix (e.g. "DLSB-PCC/202605030627"). Our pcc_no field is often
-// stored as just the trailing number, so add the prefix back if it's missing.
-function normalizePccApplicationNumber(pccNo) {
-  if (!pccNo) return pccNo;
-  const trimmed = pccNo.trim();
-  return /^DLSB-PCC\//i.test(trimmed) ? trimmed : `DLSB-PCC/${trimmed}`;
-}
-
-// Strip any leading "S/O", "W/O", "D/O", "C/O" (with or without punctuation)
-// in case it was typed into the Father/Husband field — the portal expects
-// just the plain name, with no relation prefix.
-function stripKinPrefix(name) {
-  if (!name) return name;
-  return name.replace(/^\s*(s\/o|w\/o|d\/o|c\/o)[\s:.]*?/i, "").trim();
-}
-
-// Mirrors the Delhi Police portal's own "Track Application" form: application
-// number (with the fixed DLSB-PCC/ prefix), applicant name, guardian name —
-// prefilled from our record, but editable, with an explicit "Search
-// Application" button. Nothing fires until the user clicks it.
-function PCCStatusCheckModal({ row, onClose }) {
-  const [applicationNumber, setApplicationNumber] = useState(
-    normalizePccApplicationNumber(row.pcc_no)?.replace(/^DLSB-PCC\//i, "") || ""
-  );
-  const [applicantName, setApplicantName] = useState(row.applicant_name || "");
-  const [guardianName, setGuardianName] = useState(stripKinPrefix(row.father_husband_name) || "");
-
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
-  const [downloading, setDownloading] = useState(false);
-
-  const runCheck = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${PCC_STATUS_API_BASE}/api/pcc-status/check`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          applicationNumber: normalizePccApplicationNumber(applicationNumber),
-          applicantName,
-          guardianName,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.success === false) {
-        throw new Error(data.error || "Application not found on the PCC portal");
-      }
-      setResult(data);
-      return data;
-    } catch (err) {
-      setError(err.message || "Failed to reach the PCC status server");
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // The certificate link's token appears to be short-lived, so instead of
-  // reusing whatever certificateUrl came back from the earlier search, we
-  // re-run the check right at click time and open the freshest possible link
-  // immediately — minimizing the gap between "token issued" and "token used".
-  const handleDownload = async () => {
-    setDownloading(true);
-    try {
-      const fresh = await runCheck();
-      const url = fresh?.status?.certificateUrl;
-      if (url) {
-        window.open(url, "_blank", "noopener,noreferrer");
-      } else {
-        setError("Couldn't get a fresh certificate link — try Search Application again.");
-      }
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  const application = result?.application || null;
-  const status = result?.status || null;
-  const steps = mapToSteps(status);
-  const lastStep = steps[steps.length - 1];
-
-  return (
-    <Modal title="Track Application" onClose={onClose} wide>
-      <div className="max-w-lg">
-        <Field label="Application Number">
-          <div className="flex">
-            <span className="shrink-0 inline-flex items-center px-3 rounded-l-lg bg-blue-900 text-white text-sm font-semibold">
-              DLSB-PCC/
-            </span>
-            <input
-              type="text"
-              value={applicationNumber}
-              onChange={(e) => setApplicationNumber(e.target.value)}
-              className="flex-1 rounded-r-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-            />
-          </div>
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Applicant Name">
-            <Input value={applicantName} onChange={(e) => setApplicantName(e.target.value)} />
-          </Field>
-          <Field label="Guardian Name">
-            <Input value={guardianName} onChange={(e) => setGuardianName(e.target.value)} />
-          </Field>
-        </div>
-
-        <PrimaryButton disabled={loading} onClick={runCheck} className="w-full mt-2">
-          {loading ? "Searching…" : "Search Application"}
-        </PrimaryButton>
-
-        {error && (
-          <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-4">
-            {error}
-          </div>
-        )}
-
-        {result && !application && (
-          <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No matching application found.</p>
-        )}
-
-        {application && (
-          <div className="mt-4">
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-3 py-2">
-              <div className="text-sm">
-                <div className="text-xs text-slate-400 dark:text-slate-500">Application Number</div>
-                <div className="font-semibold text-slate-700 dark:text-slate-300">{applicationNumber}</div>
-              </div>
-              <div className="text-sm">
-                <div className="text-xs text-slate-400 dark:text-slate-500">Applicant Name</div>
-                <div className="font-semibold text-slate-700 dark:text-slate-300">{application.applicantName}</div>
-              </div>
-              {status?.certificateUrl && (
-                <button
-                  type="button"
-                  disabled={downloading}
-                  onClick={handleDownload}
-                  className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg px-4 py-2 text-sm"
-                >
-                  {downloading ? "Getting link…" : "⬇ Download Certificate"}
-                </button>
-              )}
-            </div>
-            {status?.certificateUrl && (
-              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1.5">
-                This link requires an active, logged-in session on the Delhi Police portal in this
-                browser. If it shows a 401 error,{" "}
-                <button
-                  type="button"
-                  onClick={() => window.open("https://pcccvr.delhipolice.gov.in/login", "_blank", "noopener,noreferrer")}
-                  className="text-blue-600 font-semibold hover:underline"
-                >
-                  log into the portal
-                </button>{" "}
-                first, then try the download again.
-              </p>
-            )}
-
-            {status && (
-              <>
-                <h4 className="font-semibold text-slate-700 dark:text-slate-300 mt-5 mb-3">Application Progress</h4>
-                <ul>
-                  {steps.map((s) => (
-                    <li key={s.label} className="flex items-start gap-2 py-1.5 text-sm">
-                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
-                        s.done ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400 dark:text-slate-500"
-                      }`}>
-                        {s.done ? "✓" : ""}
-                      </span>
-                      <div>
-                        <div className={s.done ? "text-slate-800 dark:text-slate-100 font-medium" : "text-slate-400 dark:text-slate-500"}>{s.label}</div>
-                        {s.timestamp && <div className="text-xs text-blue-600">{s.timestamp}</div>}
-                        {s.description && <div className="text-xs text-slate-400 dark:text-slate-500">{s.description}</div>}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-
-            {!status && result?.statusError && (
-              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-4">
-                Found the application, but couldn't load its progress right now. Try Search Application again.
-              </p>
-            )}
-
-            {lastStep.done && !status?.certificateUrl && (
-              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
-                Certificate Issued — but no download link came back this time.
-              </p>
-            )}
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
 function serviceLabel(s) {
   if (!s) return "";
   return s.short_name || s.parent_service;
@@ -472,7 +243,8 @@ function SortableTh({ column, label, sortKey, sortDir, onSort }) {
   );
 }
 
-export default function Applications({ restricted = false, canEdit = true, canApprove = true } = {}) {
+export default function Applications({ restricted = false, canEdit = true, canApprove = true, staff } = {}) {
+  const isAdmin = staff?.roles?.role_name === "Admin";
   const [tab, setTab] = useState("All");
   const [chatOnly, setChatOnly] = useState(false);
   const [compactView, setCompactView] = useState(false); // point 9
@@ -531,7 +303,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setLoading(true);
     let query = supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id), staff:assigned_staff_id(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days), staff:assigned_staff_id(full_name)")
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
     const { data, error } = await query;
@@ -671,6 +443,25 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       ok: true,
       message: `Accepted on ${isoToDDMMYYYY(applicationDate)} — ₹${Number(app.amount || 0).toLocaleString("en-IN")} debited to dealer ledger`,
     };
+  };
+
+  // Admin-only: deletes an application record outright. If it had already
+  // been approved (debited to the dealer ledger, voucher_no = draft_code),
+  // that ledger entry is removed too so the ledger doesn't keep a debit
+  // for a record that no longer exists.
+  const deleteApplication = async (app) => {
+    if (!window.confirm(`Delete application ${app.draft_code} (${app.applicant_name})? This cannot be undone.`)) return;
+    if (app.status === "Accepted" || app.status === "Completed") {
+      await supabase.from("ledger_transactions").delete().eq("dealer_id", app.dealer_id).eq("voucher_no", app.draft_code);
+    }
+    await supabase.from("application_documents").delete().eq("application_id", app.id);
+    const { error } = await supabase.from("applications").delete().eq("id", app.id);
+    if (error) {
+      setToast("Failed to delete: " + error.message);
+      return;
+    }
+    setToast("Application deleted");
+    load();
   };
 
   const updateStatus = async (newStatus, remarks) => {
@@ -932,7 +723,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   // Pagination — 10 rows per page (point 8). Export CSV still uses the full
   // sortedRows (unpaginated), only the on-screen table is sliced.
-  const PAGE_SIZE = 10;
+  const [pageSize, setPageSize] = useState(15);
+  const PAGE_SIZE = pageSize;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
   useEffect(() => {
@@ -1013,9 +805,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             {filteredRows.length} record{filteredRows.length !== 1 ? "s" : ""}
             {filteredRows.length !== rows.length && ` (of ${rows.length})`}
           </p>
-          <p className="text-sm font-semibold text-amber-600 dark:text-amber-400 mt-0.5">
-            Draft: {rows.filter((r) => r.status === "Draft Submitted").length}
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
@@ -1025,17 +814,25 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       </div>
 
       <div className="flex gap-2 mb-4 flex-wrap items-center">
-        {STATUS_TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-              tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-            }`}
-          >
-            {STATUS_DISPLAY_LABELS[t] || t}
-          </button>
-        ))}
+        {STATUS_TABS.map((t) => {
+          const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
+          return (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              {STATUS_DISPLAY_LABELS[t] || t}
+              {t === "Draft Submitted" && draftCount > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {draftCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
         <span className="w-px h-5 bg-slate-200 mx-1" />
         <button
           onClick={() => setChatOnly((c) => !c)}
@@ -1182,11 +979,12 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               <SortableTh column="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Chat</th>
               <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Appointment</th>
+              {isAdmin && <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Delete</th>}
             </tr>
           </thead>
           <tbody>
             {pagedRows.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60/60 dark:hover:bg-slate-800/40">
+              <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
                 <td className="px-3 py-2 font-medium whitespace-nowrap">
                   <button
                     onClick={() => setDetailPopup(r)}
@@ -1435,10 +1233,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     <span className="text-slate-300 text-xs">—</span>
                   )}
                 </td>
+                {isAdmin && (
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <button onClick={() => deleteApplication(r)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
+                  </td>
+                )}
               </tr>
             ))}
             {!loading && filteredRows.length === 0 && (
-              <tr><td colSpan={20} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search / filters</td></tr>
+              <tr><td colSpan={21} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search / filters</td></tr>
             )}
           </tbody>
         </table>
@@ -1449,6 +1252,21 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, sortedRows.length)} of {sortedRows.length}
             </span>
             <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs">
+                Rows per page
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={pageSize}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    setPageSize(Number.isFinite(n) && n > 0 ? n : 1);
+                    setPage(1);
+                  }}
+                  className="w-16 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+                />
+              </label>
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
@@ -1598,7 +1416,7 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
                 <td className="px-3 py-2">
                   <button onClick={() => onOpenDetail(r)} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
                     {r.draft_code}
@@ -1845,12 +1663,34 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
         payloads.push({ ...r.payload, draft_code: generated });
       }
 
-      const { error: insertError } = await supabase.from("applications").insert(payloads);
+      const { data: insertedRows, error: insertError } = await supabase.from("applications").insert(payloads).select();
       if (insertError) {
         setError("Import failed: " + insertError.message);
         setImporting(false);
         return;
       }
+
+      // Rows imported directly as Accepted/Completed skip the normal
+      // "Approve" action (and its ledger debit) entirely, so post the
+      // matching ledger entry here — same shape as approveApplication —
+      // for any imported row that's already at that stage.
+      const preApproved = (insertedRows || []).filter((r) => r.status === "Accepted" || r.status === "Completed");
+      if (preApproved.length) {
+        const ledgerRows = preApproved.map((r) => ({
+          dealer_id: r.dealer_id,
+          type: "debit",
+          amount: r.amount || 0,
+          voucher_no: r.draft_code,
+          description: `Imported — ${r.applicant_name || ""}${r.application_no ? ` · App No: ${r.application_no}` : ""}`,
+        }));
+        const { error: ledgerError } = await supabase.from("ledger_transactions").insert(ledgerRows);
+        if (ledgerError) {
+          setError(`Applications imported, but ${preApproved.length} ledger entr${preApproved.length !== 1 ? "ies" : "y"} failed to post: ` + ledgerError.message);
+          setImporting(false);
+          return;
+        }
+      }
+
       setResult({ imported: rowsToImport.length, skipped: preview.length - rowsToImport.length });
       setImporting(false);
       onImported();
@@ -2064,7 +1904,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
         </Field>
         <Field label="Starting Status">
           <Select value={form.status} onChange={set("status")}>
-            <option>Draft Submitted</option>
+            <option value="Draft Submitted">Draft</option>
             <option>Under Review</option>
             <option value="Accepted">Approved</option>
           </Select>
@@ -2098,6 +1938,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
   const [remarks, setRemarks] = useState(app.remarks || "");
   const [staffId, setStaffId] = useState(app.assigned_staff_id || "");
   const [staffIdentity, setStaffIdentity] = useState(null);
+  const [pccCheckApp, setPccCheckApp] = useState(null);
   useEffect(() => {
     (async () => {
       const { data: userData } = await supabase.auth.getUser();
@@ -2226,6 +2067,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
 
   // mode === "customer": edit only customer-related details
   return (
+    <>
     <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="md">
       <div>
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 dark:text-slate-500 mb-4 -mt-1">
@@ -2273,29 +2115,32 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </Card>
 
         <Card title="Documents">
-          {(() => {
-            const serviceText = `${app.services?.parent_service || ""} ${app.services?.short_name || ""}`;
-            const isLLService = /learn|\bll\b/i.test(serviceText);
-            return isLLService && (
-              <button
-                onClick={() => {
-                  if (!app.application_no) { window.alert("Enter the Application No. first"); return; }
-                  window.open(
-                    `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
-                    "sarathi_popup", "width=900,height=700,noopener,noreferrer"
-                  );
-                }}
-                className="w-full text-left text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 bg-blue-50 dark:bg-blue-500/10 rounded-lg px-3 py-2"
-              >
-                ↗ Download Learning Licence (opens Sarathi)
-              </button>
-            );
-          })()}
           {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
           {(app.docs || [])
             .filter((d) => !d.post_approval || app.status === "Accepted" || app.status === "Completed")
             .map((d) => (
-              <DocumentRow key={d.id} doc={d} onChanged={onDocsChanged} />
+              <div key={d.id}>
+                {/learn/i.test(d.name) && app.application_no && (
+                  <button
+                    onClick={() => window.open(
+                      `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                      "sarathi_popup", "width=900,height=700,noopener,noreferrer"
+                    )}
+                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                  >
+                    ↗ Download Learning (opens Sarathi)
+                  </button>
+                )}
+                {/pcc/i.test(d.name) && app.pcc_no && (
+                  <button
+                    onClick={() => setPccCheckApp(app)}
+                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1 block"
+                  >
+                    ↗ Download PCC Certificate
+                  </button>
+                )}
+                <DocumentRow doc={d} onChanged={onDocsChanged} />
+              </div>
             ))}
         </Card>
 
@@ -2313,6 +2158,10 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         )}
       </div>
     </Modal>
+    {pccCheckApp && (
+      <PCCStatusCheckModal row={pccCheckApp} onClose={() => setPccCheckApp(null)} />
+    )}
+    </>
   );
 }
 
@@ -2374,6 +2223,6 @@ function DocumentRow({ doc, onChanged }) {
 // locked to a column set that leaves out Amount, Dealer, Agency Fee, and
 // Profit (see STAFF_VISIBLE_KEYS above). Wired up as its own nav tab in
 // App.jsx so it's a distinct, bookmarkable view rather than a toggle.
-export function StaffApplications({ canEdit = true, canApprove = true } = {}) {
-  return <Applications restricted canEdit={canEdit} canApprove={canApprove} />;
+export function StaffApplications({ canEdit = true, canApprove = true, staff } = {}) {
+  return <Applications restricted canEdit={canEdit} canApprove={canApprove} staff={staff} />;
 }
