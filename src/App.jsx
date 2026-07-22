@@ -7,8 +7,7 @@ import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
 import Applications, { StaffApplications } from "./pages/Applications";
 import Payments from "./pages/Payments";
-import Ledger from "./pages/Ledger";
-import Reports from "./pages/Reports";
+import Ledger from "./pages/Ledger";import Reports from "./pages/Reports";
 import Masters from "./pages/Masters";
 import Settings from "./pages/Settings";
 import Chats from "./pages/Chats";
@@ -19,6 +18,12 @@ import PinUnlock from "./pages/PinUnlock";
 import SetupPinPrompt from "./components/SetupPinPrompt";
 import { hasPinSetUp, hasBeenPromptedForPin } from "./lib/pinLock";
 
+// Thin wrappers so "Dealer" and "Agency" can be their own sidebar entries
+// (each scoped to just that one head + its transaction ledger) while still
+// sharing the same Ledger page code and the same "ledger" permission.
+function DealerLedgerPage({ initialEntityId }) { return <Ledger only="dealer" initialEntityId={initialEntityId} />; }
+function AgencyLedgerPage({ initialEntityId }) { return <Ledger only="agency" initialEntityId={initialEntityId} />; }
+
 const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
   { key: "applications", label: "Applications", Component: Applications },
@@ -27,6 +32,8 @@ const NAV = [
   { key: "masters", label: "Masters", Component: Masters },
   { key: "payments", label: "Payments", Component: Payments },
   { key: "ledger", label: "Ledger", Component: Ledger },
+  { key: "dealerLedger", label: "Dealer", Component: DealerLedgerPage },
+  { key: "agencyLedger", label: "Agency", Component: AgencyLedgerPage },
   { key: "reports", label: "Reports", Component: Reports },
   { key: "settings", label: "Settings", Component: Settings },
 ];
@@ -44,6 +51,8 @@ const MODULE_BY_NAV_KEY = {
   masters: "masters",
   payments: "payments",
   ledger: "ledger",
+  dealerLedger: "ledger",
+  agencyLedger: "ledger",
   reports: "reports",
   settings: "settings",
 };
@@ -58,7 +67,12 @@ export default function App() {
   const [authUserId, setAuthUserId] = useState(null); // Supabase auth user id — stable across staff/dealer/dealer_staff, used to scope the device PIN
   const [pinUnlocked, setPinUnlocked] = useState(false);
   const [showPinSetup, setShowPinSetup] = useState(false);
-  const [active, setActive] = useState("dashboard");
+  // A "Open in New Tab" link (see Ledger.jsx) points here as
+  // ?nav=dealerLedger&entity=<id> — read once on load so the new tab lands
+  // straight on that dealer/agency's ledger instead of the dashboard.
+  const initialUrlParams = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const [active, setActive] = useState(initialUrlParams.get("nav") || "dashboard");
+  const initialEntityId = initialUrlParams.get("entity") || null;
   const [pendingChatCount, setPendingChatCount] = useState(0);
   const [permMap, setPermMap] = useState({}); // { [module]: permissions row } for the staff member's role
   const roleName = staff?.roles?.role_name || null;
@@ -304,7 +318,7 @@ export default function App() {
         onLogout={() => supabase.auth.signOut()}
       />
       <main className="flex-1 p-8 overflow-y-auto">
-        <Active staff={staff} canEdit={canEditActive} canApprove={canApproveActive} />
+        <Active staff={staff} canEdit={canEditActive} canApprove={canApproveActive} initialEntityId={initialEntityId} />
       </main>
       <StaffChatWidget
         staff={staff}

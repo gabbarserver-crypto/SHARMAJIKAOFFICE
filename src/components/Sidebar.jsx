@@ -30,6 +30,8 @@ const ICONS = {
   masters: Database,
   payments: CreditCard,
   ledger: BookOpen,
+  dealerLedger: BookOpen,
+  agencyLedger: BookOpen,
   reports: BarChart2,
   settings: SettingsIcon,
 };
@@ -98,7 +100,7 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
   return (
     <aside
       className={[
-        "shrink-0 h-screen sticky top-0 flex flex-col m-3 rounded-3xl shadow-lg transition-all duration-300",
+        "no-print shrink-0 h-screen sticky top-0 flex flex-col m-3 rounded-3xl shadow-lg transition-all duration-300",
         collapsed ? "w-20" : "w-64",
       ].join(" ")}
       style={{ height: "calc(100vh - 1.5rem)", background: `linear-gradient(to bottom, ${from}, ${to})` }}

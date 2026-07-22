@@ -2,8 +2,12 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton, GhostButton, Modal, Toast } from "../components/UI";
+import ApplicationChatModal from "../components/ApplicationChatModal";
+import { identityFor } from "../lib/chat";
+import { Phone, MessageCircle } from "lucide-react";
+import { createDealerLogin, createDealerStaffLogin } from "../lib/serverApi";
 
-const TABS = ["RTO", "Staff", "Service", "Dealer", "Agency"];
+const TABS = ["RTO", "Staff", "Service"];
 
 export default function Masters() {
   const [tab, setTab] = useState("RTO");
@@ -13,14 +17,14 @@ export default function Masters() {
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-slate-800 mb-4">Masters</h2>
+      <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-4">Masters</h2>
       <div className="flex gap-2 mb-5 flex-wrap">
         {TABS.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-1.5 rounded-lg text-sm font-semibold border ${
-              tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-300"
+              tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
             }`}
           >
             {t}
@@ -31,8 +35,6 @@ export default function Masters() {
       {tab === "RTO" && <RTOMaster notify={notify} />}
       {tab === "Staff" && <StaffMaster notify={notify} />}
       {tab === "Service" && <ServiceMaster notify={notify} />}
-      {tab === "Dealer" && <DealerMaster notify={notify} />}
-      {tab === "Agency" && <AgencyMaster notify={notify} />}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
@@ -41,30 +43,53 @@ export default function Masters() {
 
 /* ---------------- Generic list table ---------------- */
 function ListTable({ rows, columns, onEdit, onDelete, onAdd, addLabel }) {
+  const [q, setQ] = useState("");
+  const filteredRows = q.trim()
+    ? rows.filter((r) =>
+        Object.values(r)
+          .filter((v) => typeof v === "string" || typeof v === "number")
+          .join(" ")
+          .toLowerCase()
+          .includes(q.trim().toLowerCase())
+      )
+    : rows;
+
   return (
     <div>
-      <div className="flex justify-end mb-3">
+      <div className="flex justify-between items-center gap-3 mb-3">
+        <div className="relative flex-1 max-w-xs">
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search…"
+            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+          />
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 text-sm">🔍</span>
+        </div>
         <PrimaryButton onClick={onAdd}>{addLabel}</PrimaryButton>
       </div>
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl dark:bg-slate-900 dark:border-slate-800 overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500">
+          <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
             <tr>
-              {columns.map((c) => <th key={c.key} className="text-left font-medium px-4 py-3">{c.label}</th>)}
-              <th className="px-4 py-3"></th>
+              {columns.map((c) => <th key={c.key} className="text-left font-medium px-3 py-2">{c.label}</th>)}
+              <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100">
-                {columns.map((c) => <td key={c.key} className="px-4 py-3 text-slate-700">{c.render ? c.render(r) : r[c.key]}</td>)}
-                <td className="px-4 py-3 text-right whitespace-nowrap">
+            {filteredRows.map((r) => (
+              <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
+                {columns.map((c) => <td key={c.key} className="px-3 py-2 text-slate-700 dark:text-slate-300">{c.render ? c.render(r) : r[c.key]}</td>)}
+                <td className="px-3 py-2 text-right whitespace-nowrap">
                   <GhostButton onClick={() => onEdit(r)} className="mr-2">Edit</GhostButton>
                   <GhostButton onClick={() => onDelete(r)} className="!text-rose-500">Delete</GhostButton>
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={columns.length + 1} className="text-center text-slate-400 py-8">No records yet</td></tr>}
+            {filteredRows.length === 0 && (
+              <tr><td colSpan={columns.length + 1} className="text-center text-slate-400 dark:text-slate-500 py-8">{q ? "No matches" : "No records yet"}</td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -225,8 +250,8 @@ function StaffForm({ initial, roles, onSave, onClose }) {
       <PrimaryButton onClick={() => onSave(f)}>Save Staff</PrimaryButton>
 
       {initial && (
-        <div className="mt-5 pt-4 border-t border-slate-200">
-          <p className="text-xs text-slate-500 mb-2">
+        <div className="mt-5 pt-4 border-t border-slate-200 dark:border-slate-800">
+          <p className="text-xs text-slate-500 dark:text-slate-500 mb-2">
             Link this profile to a Supabase Auth login (they must have signed up first, e.g. via a Dashboard invite).
           </p>
           <div className="flex gap-2">
@@ -253,12 +278,16 @@ function ServiceMaster({ notify }) {
 
   const save = async (form, documents, steps) => {
     const payload = {
-      parent_service: form.parent_service, sub_service: form.sub_service, short_name: form.short_name,
+      parent_service: form.parent_service, short_name: form.short_name,
       pcc_required: form.pcc_required, slot_booking_required: form.slot_booking_required,
-      test_rto_required: form.test_rto_required, previous_ll_required: form.previous_ll_required,
-      otp_required: form.otp_required, chat_in_app: form.chat_in_app, allow_draft: form.allow_draft,
+      rto_required: form.rto_required, agency_required: form.agency_required,
+      previous_ll_required: form.previous_ll_required,
+      otp_required: form.otp_required, chat_in_app: form.chat_in_app,
       gov_fee: parseFloat(form.gov_fee) || 0, processing_charges: parseFloat(form.processing_charges) || 0,
-      other_charges: parseFloat(form.other_charges) || 0, post_timing: form.post_timing,
+      other_charges: parseFloat(form.other_charges) || 0, pcc_fee: parseFloat(form.pcc_fee) || 0,
+      post_timing: form.post_timing,
+      next_service_id: form.next_service_id || null,
+      next_service_wait_days: parseInt(form.next_service_wait_days, 10) || 30,
     };
     let serviceId = editing?.id;
     if (editing) {
@@ -270,16 +299,20 @@ function ServiceMaster({ notify }) {
       serviceId = data.id;
     }
 
-    await supabase.from("service_documents").delete().eq("service_id", serviceId);
+    const { error: docsDeleteError } = await supabase.from("service_documents").delete().eq("service_id", serviceId);
+    if (docsDeleteError) { notify("Service saved, but couldn't clear old documents: " + docsDeleteError.message); }
     if (documents.length) {
-      await supabase.from("service_documents").insert(documents.map((d) => ({ service_id: serviceId, name: d.name, mandatory: d.mandatory })));
+      const { error: docsInsertError } = await supabase.from("service_documents").insert(documents.map((d) => ({ service_id: serviceId, name: d.name, mandatory: d.mandatory, post_approval: !!d.post_approval })));
+      if (docsInsertError) { notify("Service saved, but Required Documents failed to save: " + docsInsertError.message); return; }
     }
 
-    await supabase.from("service_workflow_steps").delete().eq("service_id", serviceId);
+    const { error: stepsDeleteError } = await supabase.from("service_workflow_steps").delete().eq("service_id", serviceId);
+    if (stepsDeleteError) { notify("Service saved, but couldn't clear old workflow steps: " + stepsDeleteError.message); }
     if (steps.length) {
-      await supabase.from("service_workflow_steps").insert(
+      const { error: stepsInsertError } = await supabase.from("service_workflow_steps").insert(
         steps.map((s, i) => ({ service_id: serviceId, step_order: i + 1, step_name: s, is_terminal: i === steps.length - 1 }))
       );
+      if (stepsInsertError) { notify("Service saved, but workflow steps failed to save: " + stepsInsertError.message); return; }
     }
 
     notify("Service saved");
@@ -287,7 +320,7 @@ function ServiceMaster({ notify }) {
   };
 
   const remove = async (row) => {
-    if (!confirm(`Delete ${row.parent_service} (${row.sub_service})?`)) return;
+    if (!confirm(`Delete ${row.parent_service}?`)) return;
     await supabase.from("services").delete().eq("id", row.id);
     notify("Deleted"); load();
   };
@@ -297,7 +330,7 @@ function ServiceMaster({ notify }) {
       <ListTable
         rows={rows}
         columns={[
-          { key: "parent_service", label: "Parent Service" }, { key: "sub_service", label: "Sub Service" },
+          { key: "parent_service", label: "Name" },
           { key: "short_name", label: "Short Name" },
           { key: "total", label: "Total Fee", render: (r) => `₹${(Number(r.gov_fee||0)+Number(r.processing_charges||0)+Number(r.other_charges||0)).toLocaleString("en-IN")}` },
         ]}
@@ -306,31 +339,50 @@ function ServiceMaster({ notify }) {
         onDelete={remove}
         addLabel="Add Service"
       />
-      {open && <ServiceForm initial={editing} onSave={save} onClose={() => setOpen(false)} />}
+      {open && <ServiceForm initial={editing} allServices={rows} onSave={save} onClose={() => setOpen(false)} />}
     </>
   );
 }
 
-function ServiceForm({ initial, onSave, onClose }) {
+function ServiceForm({ initial, allServices = [], onSave, onClose }) {
   const [f, setF] = useState(initial || {
-    parent_service: "", sub_service: "", short_name: "", pcc_required: true, slot_booking_required: true,
-    test_rto_required: false, previous_ll_required: false, otp_required: false, chat_in_app: false, allow_draft: false,
-    gov_fee: "", processing_charges: "", other_charges: "", post_timing: "After Approval",
+    parent_service: "", short_name: "", pcc_required: true, slot_booking_required: true,
+    rto_required: false, agency_required: false, previous_ll_required: false, otp_required: false, chat_in_app: false,
+    gov_fee: "", processing_charges: "", other_charges: "", pcc_fee: "", post_timing: "After Approval",
+    next_service_id: "", next_service_wait_days: 30,
   });
-  const [documents, setDocuments] = useState([{ name: "Aadhaar Card", mandatory: true }, { name: "Photo", mandatory: true }, { name: "Signature", mandatory: true }]);
+  const [documents, setDocuments] = useState(
+    initial ? [] : [{ name: "Aadhaar Card", mandatory: true }, { name: "Photo", mandatory: true }, { name: "Signature", mandatory: true }]
+  );
   const [steps, setSteps] = useState(["Submitted", "Documents Check", "Fee Paid", "Approved", "Completed"]);
   const [newDoc, setNewDoc] = useState("");
   const [newStep, setNewStep] = useState("");
+  const [loadError, setLoadError] = useState("");
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const toggle = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.checked }));
+  const setBool = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value === "true" }));
 
   useEffect(() => {
     if (initial?.id) {
       (async () => {
-        const { data: docs } = await supabase.from("service_documents").select("*").eq("service_id", initial.id);
-        if (docs?.length) setDocuments(docs.map((d) => ({ name: d.name, mandatory: d.mandatory })));
-        const { data: st } = await supabase.from("service_workflow_steps").select("*").eq("service_id", initial.id).order("step_order");
-        if (st?.length) setSteps(st.map((s) => s.step_name));
+        const { data: docs, error: docsError } = await supabase.from("service_documents").select("*").eq("service_id", initial.id);
+        if (docsError) {
+          // Surface this instead of silently keeping whatever was in state —
+          // a failed fetch is not the same thing as "this service has no
+          // required documents".
+          setLoadError("Couldn't load this service's required documents: " + docsError.message);
+        } else {
+          setDocuments((docs || []).map((d) => ({ name: d.name, mandatory: d.mandatory, post_approval: d.post_approval })));
+        }
+        const { data: st, error: stepsError } = await supabase.from("service_workflow_steps").select("*").eq("service_id", initial.id).order("step_order");
+        if (stepsError) {
+          setLoadError((prev) => (prev ? prev + " Also couldn't load workflow steps: " : "Couldn't load this service's workflow steps: ") + stepsError.message);
+        } else {
+          // Same principle as documents above: reflect what's actually saved,
+          // even if that's zero steps, instead of quietly falling back to the
+          // hardcoded new-service default.
+          setSteps((st || []).map((s) => s.step_name));
+        }
       })();
     }
   }, [initial]);
@@ -340,9 +392,8 @@ function ServiceForm({ initial, onSave, onClose }) {
       <div className="grid md:grid-cols-2 gap-6">
         <div>
           <Card title="Basic Information" className="mb-4">
-            <Field label="Parent Service" required><Input value={f.parent_service} onChange={set("parent_service")} /></Field>
-            <Field label="Sub Service" required><Input value={f.sub_service} onChange={set("sub_service")} /></Field>
-            <Field label="Short Name"><Input value={f.short_name} onChange={set("short_name")} /></Field>
+            <Field label="Name" required><Input value={f.parent_service} onChange={set("parent_service")} /></Field>
+            <Field label="Short Name" required><Input value={f.short_name} onChange={set("short_name")} /></Field>
           </Card>
           <Card title="Fees">
             <div className="grid grid-cols-3 gap-3">
@@ -350,28 +401,98 @@ function ServiceForm({ initial, onSave, onClose }) {
               <Field label="Processing (₹)"><Input type="number" value={f.processing_charges} onChange={set("processing_charges")} /></Field>
               <Field label="Other (₹)"><Input type="number" value={f.other_charges} onChange={set("other_charges")} /></Field>
             </div>
+            {f.pcc_required && (
+              <Field label="PCC Fee (₹)">
+                <Input type="number" value={f.pcc_fee} onChange={set("pcc_fee")} placeholder="Fee charged for Police Clearance Certificate" />
+              </Field>
+            )}
+            <Field label="Posting Timing">
+              <Select value={f.post_timing} onChange={set("post_timing")}>
+                <option value="Before Approval">Before Approval</option>
+                <option value="After Approval">After Approval</option>
+              </Select>
+            </Field>
           </Card>
         </div>
 
         <div>
-          <Card title="Workflow Rules" className="mb-4">
-            {[["pcc_required","PCC Required"],["slot_booking_required","Slot Booking Required"],["test_rto_required","Test RTO Required"],["previous_ll_required","Previous LL Required"],["otp_required","OTP Verification"],["chat_in_app","Chat in Application"],["allow_draft","Allow Draft"]].map(([k,label]) => (
-              <label key={k} className="flex items-center justify-between text-sm text-slate-600 py-1">
-                {label}<input type="checkbox" checked={f[k]} onChange={toggle(k)} className="w-4 h-4 accent-blue-600" />
-              </label>
+          <Card title="Service Requirements" className="mb-4">
+            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"]].map(([k, label]) => (
+              <Field key={k} label={label}>
+                <Select value={String(!!f[k])} onChange={setBool(k)}>
+                  <option value="false">Not Required</option>
+                  <option value="true">Required</option>
+                </Select>
+              </Field>
             ))}
           </Card>
 
+          <Card title="Workflow Rules" className="mb-4">
+            {[["previous_ll_required","Previous LL Required"],["otp_required","OTP Verification"],["chat_in_app","Chat in Application"]].map(([k,label]) => (
+              <label key={k} className="flex items-center justify-between text-sm text-slate-600 dark:text-slate-300 py-1">
+                {label}<input type="checkbox" checked={f[k]} onChange={toggle(k)} className="w-4 h-4 accent-blue-600" />
+              </label>
+            ))}
+            <Field label="Next Service">
+              <Select value={f.next_service_id || ""} onChange={set("next_service_id")}>
+                <option value="">None</option>
+                {allServices.filter((s) => s.id !== initial?.id).map((s) => (
+                  <option key={s.id} value={s.id}>{s.parent_service}{s.short_name ? ` (${s.short_name})` : ""}</option>
+                ))}
+              </Select>
+            </Field>
+            {f.next_service_id && (
+              <Field label="Wait Before Reminder (days)">
+                <Input type="number" min="0" value={f.next_service_wait_days} onChange={set("next_service_wait_days")} />
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                  Once an application for this service is Completed for {f.next_service_wait_days || 0}+ day
+                  {String(f.next_service_wait_days) === "1" ? "" : "s"}, dealers get a "Book Appointment" option that
+                  creates a draft for the Next Service above instead — e.g. Learner's Licence → Driving Licence (30
+                  days), or Insurance → Fitness (1 day).
+                </p>
+              </Field>
+            )}
+          </Card>
+
           <Card title="Required Documents" className="mb-4">
+            {loadError && <p className="text-rose-500 text-xs mb-2">{loadError}</p>}
             {documents.map((d, i) => (
-              <div key={i} className="flex justify-between text-sm py-1">
-                <span>{d.name}</span>
-                <button onClick={() => setDocuments(documents.filter((_, idx) => idx !== i))} className="text-rose-500 text-xs">Remove</button>
+              <div key={i} className="flex items-center justify-between text-sm py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                <span className="text-slate-700 dark:text-slate-300">{d.name}</span>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-500">
+                    <input
+                      type="checkbox"
+                      checked={!!d.mandatory}
+                      onChange={(e) => {
+                        const updated = [...documents];
+                        updated[i] = { ...updated[i], mandatory: e.target.checked };
+                        setDocuments(updated);
+                      }}
+                      className="w-3.5 h-3.5 accent-blue-600"
+                    />
+                    Mandatory
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-500" title="Only shows up as required once the application is Accepted/Completed — e.g. a PCC Certificate or Learner Licence that only exists after approval">
+                    <input
+                      type="checkbox"
+                      checked={!!d.post_approval}
+                      onChange={(e) => {
+                        const updated = [...documents];
+                        updated[i] = { ...updated[i], post_approval: e.target.checked };
+                        setDocuments(updated);
+                      }}
+                      className="w-3.5 h-3.5 accent-amber-600"
+                    />
+                    Only after approval
+                  </label>
+                  <button onClick={() => setDocuments(documents.filter((_, idx) => idx !== i))} className="text-rose-500 text-xs">Remove</button>
+                </div>
               </div>
             ))}
             <div className="flex gap-2 mt-2">
               <Input value={newDoc} onChange={(e) => setNewDoc(e.target.value)} placeholder="Document name" />
-              <GhostButton onClick={() => { if (newDoc.trim()) { setDocuments([...documents, { name: newDoc.trim(), mandatory: true }]); setNewDoc(""); } }}>Add</GhostButton>
+              <GhostButton onClick={() => { if (newDoc.trim()) { setDocuments([...documents, { name: newDoc.trim(), mandatory: true, post_approval: false }]); setNewDoc(""); } }}>Add</GhostButton>
             </div>
           </Card>
 
@@ -399,18 +520,33 @@ function ServiceForm({ initial, onSave, onClose }) {
 /* ---------------- Dealer Master ---------------- */
 function DealerMaster({ notify }) {
   const [rows, setRows] = useState([]);
+  const [summaryByDealer, setSummaryByDealer] = useState({}); // dealer_id -> available_limit
   const [editing, setEditing] = useState(null);
   const [open, setOpen] = useState(false);
+  const [staffIdentity, setStaffIdentity] = useState(null);
+  const [chatDealer, setChatDealer] = useState(null); // { id, name } | null
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("dealers").select("*").order("name");
     setRows(data || []);
+    // Best-effort — if the summary view isn't reachable for some reason, the
+    // Status column just falls back to blank rather than breaking the list.
+    const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, available_limit");
+    setSummaryByDealer(Object.fromEntries((summaries || []).map((s) => [s.dealer_id, s.available_limit])));
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    (async () => {
+      const { data: userData } = await supabase.auth.getUser();
+      const { data: staffRow } = await supabase.from("staff").select("id, full_name").eq("auth_user_id", userData?.user?.id).maybeSingle();
+      if (staffRow) setStaffIdentity(identityFor({ staff: staffRow }));
+    })();
+  }, []);
+
   const save = async (form) => {
     const payload = {
-      name: form.name, code: form.code, contact_name: form.contact_name, mobile: form.mobile, email: form.email,
+      name: form.name, code: form.code, short_name: form.short_name || null, contact_name: form.contact_name, mobile: form.mobile, email: form.email,
       address: form.address, city: form.city, state: form.state, pincode: form.pincode,
       credit_limit: parseFloat(form.credit_limit) || 0,
     };
@@ -433,9 +569,41 @@ function DealerMaster({ notify }) {
       <ListTable
         rows={rows}
         columns={[
-          { key: "name", label: "Dealer Name" }, { key: "code", label: "Code" }, { key: "contact_name", label: "Contact" },
+          { key: "name", label: "Dealer Name" }, { key: "short_name", label: "Short Name", render: (r) => r.short_name || "—" }, { key: "code", label: "Code" }, { key: "contact_name", label: "Contact" },
+          { key: "mobile", label: "Mobile", render: (r) => r.mobile ? (
+            <div className="flex items-center gap-2 whitespace-nowrap">
+              <span>{r.mobile}</span>
+              <a href={`tel:${r.mobile}`} title="Call" className="text-slate-400 hover:text-blue-600">
+                <Phone size={14} />
+              </a>
+              <a
+                href={`https://wa.me/${r.mobile.replace(/\D/g, "")}`}
+                target="_blank"
+                rel="noreferrer"
+                title="WhatsApp"
+                className="text-slate-400 hover:text-emerald-600"
+              >
+                <MessageCircle size={14} />
+              </a>
+            </div>
+          ) : <span className="text-slate-300 text-xs">—</span> },
           { key: "wallet_balance", label: "Wallet", render: (r) => `₹${Number(r.wallet_balance||0).toLocaleString("en-IN")}` },
           { key: "credit_limit", label: "Credit Limit", render: (r) => `₹${Number(r.credit_limit||0).toLocaleString("en-IN")}` },
+          { key: "status", label: "Status", render: (r) => {
+            const avail = summaryByDealer[r.id];
+            if (avail === undefined) return <span className="text-slate-300 text-xs">—</span>;
+            const onHold = avail <= 0;
+            return (
+              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
+                onHold ? "bg-rose-50 text-rose-600 border-rose-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"
+              }`}>
+                {onHold ? "On Hold" : "Active"}
+              </span>
+            );
+          } },
+          { key: "chat", label: "Chat", render: (r) => (
+            <GhostButton onClick={() => setChatDealer({ id: r.id, name: r.short_name || r.name })}>Chat</GhostButton>
+          ) },
         ]}
         onAdd={() => { setEditing(null); setOpen(true); }}
         onEdit={(r) => { setEditing(r); setOpen(true); }}
@@ -443,18 +611,48 @@ function DealerMaster({ notify }) {
         addLabel="Add Dealer"
       />
       {open && <DealerForm initial={editing} onSave={save} onClose={() => setOpen(false)} />}
+      {chatDealer && (
+        <ApplicationChatModal
+          dealerId={chatDealer.id}
+          applicationId={null}
+          applicationLabel={`General chat — ${chatDealer.name}`}
+          identity={staffIdentity}
+          onClose={() => setChatDealer(null)}
+        />
+      )}
     </>
   );
 }
 
-function DealerForm({ initial, onSave, onClose }) {
-  const [f, setF] = useState(initial || { name: "", code: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "" });
+export function DealerForm({ initial, onSave, onClose }) {
+  const [f, setF] = useState(initial || { name: "", code: "", short_name: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [creatingLogin, setCreatingLogin] = useState(false);
+  const [loginMsg, setLoginMsg] = useState("");
+
+  const createLogin = async () => {
+    if (!initial?.id || !loginEmail || !loginPassword) return;
+    setCreatingLogin(true);
+    setLoginMsg("");
+    try {
+      await createDealerLogin({ dealerId: initial.id, email: loginEmail, password: loginPassword });
+      setLoginMsg("Login created — the dealer can sign in with this email and password now.");
+      setLoginEmail(""); setLoginPassword("");
+    } catch (e) {
+      setLoginMsg("Failed: " + e.message);
+    } finally {
+      setCreatingLogin(false);
+    }
+  };
+
   return (
     <Modal title={initial ? "Edit Dealer" : "Create New Dealer"} onClose={onClose}>
       <div className="grid sm:grid-cols-2 gap-x-4">
         <Field label="Dealer Name" required><Input value={f.name} onChange={set("name")} /></Field>
         <Field label="Dealer Code" required><Input value={f.code} onChange={set("code")} /></Field>
+        <Field label="Short Name"><Input value={f.short_name} onChange={set("short_name")} placeholder="Shown in Applications list" /></Field>
         <Field label="Contact Name"><Input value={f.contact_name} onChange={set("contact_name")} /></Field>
         <Field label="Mobile"><Input value={f.mobile} onChange={set("mobile")} /></Field>
       </div>
@@ -467,7 +665,115 @@ function DealerForm({ initial, onSave, onClose }) {
       </div>
       <Field label="Credit Limit (₹)"><Input type="number" value={f.credit_limit} onChange={set("credit_limit")} /></Field>
       <PrimaryButton onClick={() => onSave(f)}>Save Dealer</PrimaryButton>
+
+      {initial && (
+        <div className="mt-5 pt-4 border-t border-slate-200 dark:border-slate-800">
+          <p className="text-xs text-slate-500 dark:text-slate-500 mb-2">
+            Create this dealer's portal login — set an email and password directly,
+            no self-signup needed. Re-running this replaces their password.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-2 mb-2">
+            <Input type="email" placeholder="dealer-login@email.com" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+            <Input type="password" placeholder="Set a password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
+          </div>
+          <GhostButton onClick={createLogin} disabled={creatingLogin || !loginEmail || !loginPassword}>
+            {creatingLogin ? "Creating…" : "Create Login"}
+          </GhostButton>
+          {loginMsg && <p className={`text-xs mt-2 ${loginMsg.startsWith("Failed") ? "text-rose-500" : "text-emerald-600"}`}>{loginMsg}</p>}
+        </div>
+      )}
+
+      {initial && <DealerStaffManager dealerId={initial.id} />}
     </Modal>
+  );
+}
+
+// Sub-staff logins under this dealer (see dealer_staff table) — addable from
+// both here (admin) and the dealer's own portal (Masters isn't reachable by
+// dealers, so DealerPortal has its own copy of this manager).
+function DealerStaffManager({ dealerId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [f, setF] = useState({ fullName: "", email: "", password: "" });
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from("dealer_staff").select("*").eq("dealer_id", dealerId).order("full_name");
+    setRows(data || []);
+    setLoading(false);
+  }, [dealerId]);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    if (!f.fullName || !f.email || !f.password) return;
+    setSaving(true);
+    setMsg("");
+    try {
+      await createDealerStaffLogin({ dealerId, fullName: f.fullName, email: f.email, password: f.password });
+      setF({ fullName: "", email: "", password: "" });
+      setShowAdd(false);
+      load();
+    } catch (e) {
+      setMsg("Failed: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleActive = async (row) => {
+    await supabase.from("dealer_staff").update({ active: !row.active }).eq("id", row.id);
+    load();
+  };
+
+  return (
+    <div className="mt-5 pt-4 border-t border-slate-200 dark:border-slate-800">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-slate-500 dark:text-slate-500 uppercase">Dealer Staff</p>
+        <button onClick={() => setShowAdd((s) => !s)} className="text-xs font-semibold text-blue-600 hover:underline">
+          {showAdd ? "Cancel" : "+ Add Staff"}
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-slate-400 dark:text-slate-500">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-slate-400 dark:text-slate-500">No sub-staff added yet.</p>
+      ) : (
+        <div className="space-y-1.5 mb-2">
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-center justify-between text-sm bg-slate-50 dark:bg-slate-800/60 rounded-lg px-3 py-1.5">
+              <div>
+                <span className="font-medium text-slate-700 dark:text-slate-300">{r.full_name}</span>
+                <span className="text-slate-400 dark:text-slate-500 text-xs ml-2">{r.email}</span>
+              </div>
+              <button
+                onClick={() => toggleActive(r)}
+                className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                  r.active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
+                }`}
+              >
+                {r.active ? "Active" : "Disabled"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showAdd && (
+        <div className="bg-slate-50 dark:bg-slate-800/60 rounded-lg p-3 mt-2">
+          <div className="grid sm:grid-cols-3 gap-2 mb-2">
+            <Input placeholder="Full name" value={f.fullName} onChange={(e) => setF((s) => ({ ...s, fullName: e.target.value }))} />
+            <Input type="email" placeholder="Email" value={f.email} onChange={(e) => setF((s) => ({ ...s, email: e.target.value }))} />
+            <Input type="password" placeholder="Password" value={f.password} onChange={(e) => setF((s) => ({ ...s, password: e.target.value }))} />
+          </div>
+          <GhostButton onClick={add} disabled={saving}>{saving ? "Creating…" : "Create Staff Login"}</GhostButton>
+          {msg && <p className="text-xs text-rose-500 mt-2">{msg}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -521,7 +827,7 @@ function AgencyMaster({ notify }) {
   );
 }
 
-function AgencyForm({ initial, onSave, onClose }) {
+export function AgencyForm({ initial, onSave, onClose }) {
   const [f, setF] = useState(initial || { name: "", code: "", contact_person: "", mobile: "", status: "Active", opening_balance: "", default_processing_charges: "", payment_terms: "7 Days" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   return (
