@@ -11,6 +11,8 @@ import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
 import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2 } from "lucide-react";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
+import PCCLetterModal from "../components/PCCLetterModal";
+import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 
 
 const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted", "Completed"];
@@ -635,6 +637,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       date_of_birth: form.date_of_birth || null,
       mobile: form.mobile || null,
       address: form.address || null,
+      police_station: form.police_station || null,
+      stay_since: form.stay_since || null,
       service_answers: form.service_answers && Object.keys(form.service_answers).length ? form.service_answers : null,
       status: form.status,
     }).select().single();
@@ -1861,8 +1865,9 @@ function DraftDetailPopup({ row, profitOf, onClose }) {
 function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   const [form, setForm] = useState({
     dealer_id: "", service_id: "", applicant_name: "", father_husband_name: "",
-    date_of_birth: "", mobile: "", address: "", status: "Draft Submitted",
+    date_of_birth: "", mobile: "", address: "", police_station: "", stay_since: "", status: "Draft Submitted",
   });
+  const selectedService = serviceList.find((s) => s.id === form.service_id);
   const [answers, setAnswers] = useState([
     { key: "Application No", value: "" },
     { key: "Learner No", value: "" },
@@ -1881,7 +1886,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
     answers.forEach(({ key, value }) => {
       if (key.trim() && value.trim()) service_answers[key.trim()] = value.trim();
     });
-    onCreate({ ...form, date_of_birth: ddmmyyyyToISO(form.date_of_birth), service_answers });
+    onCreate({ ...form, date_of_birth: ddmmyyyyToISO(form.date_of_birth), stay_since: ddmmyyyyToISO(form.stay_since), service_answers });
   };
 
   return (
@@ -1933,6 +1938,23 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
         <Input value={form.address} onChange={set("address")} />
       </Field>
 
+      {selectedService?.pcc_required && (
+        <div className="grid sm:grid-cols-2 gap-x-4 -mt-1 mb-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30">
+          <p className="sm:col-span-2 text-xs text-blue-700 dark:text-blue-300 mb-1">
+            This service requires a PCC — fill these in now and they'll auto-fill the PCC request letter later.
+          </p>
+          <Field label="Police Station">
+            <SearchableSelect
+              value={form.police_station}
+              options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+              onChange={(name) => setForm((s) => ({ ...s, police_station: name }))}
+              placeholder="Search police station…"
+            />
+          </Field>
+          <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={form.stay_since} onChange={set("stay_since")} /></Field>
+        </div>
+      )}
+
       <div className="mb-4">
         <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
           Additional Details <span className="text-slate-400 dark:text-slate-500 font-normal">(Learner No, PCC No, Application No, etc.)</span>
@@ -1957,6 +1979,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
   const [staffId, setStaffId] = useState(app.assigned_staff_id || "");
   const [staffIdentity, setStaffIdentity] = useState(null);
   const [pccCheckApp, setPccCheckApp] = useState(null);
+  const [showPccLetter, setShowPccLetter] = useState(false);
   useEffect(() => {
     (async () => {
       const { data: userData } = await supabase.auth.getUser();
@@ -1970,6 +1993,8 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     date_of_birth: isoToDDMMYYYY(app.date_of_birth),
     mobile: app.mobile || "",
     address: app.address || "",
+    police_station: app.police_station || "",
+    stay_since: isoToDDMMYYYY(app.stay_since),
   });
   const [savingApplicant, setSavingApplicant] = useState(false);
   const setApplicantField = (k) => (e) => setApplicant((s) => ({ ...s, [k]: e.target.value }));
@@ -1982,6 +2007,8 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
       date_of_birth: ddmmyyyyToISO(applicant.date_of_birth),
       mobile: applicant.mobile || null,
       address: applicant.address || null,
+      police_station: applicant.police_station || null,
+      stay_since: ddmmyyyyToISO(applicant.stay_since),
     });
     setSavingApplicant(false);
   };
@@ -2111,6 +2138,19 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
             </div>
           </Field>
           <Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field>
+          {app.services?.pcc_required && (
+            <>
+              <Field label="Police Station">
+                <SearchableSelect
+                  value={applicant.police_station}
+                  options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+                  onChange={(name) => setApplicant((s) => ({ ...s, police_station: name }))}
+                  placeholder="Search police station…"
+                />
+              </Field>
+              <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.stay_since} onChange={setApplicantField("stay_since")} /></Field>
+            </>
+          )}
           <PrimaryButton disabled={savingApplicant} onClick={saveApplicant}>
             {savingApplicant ? "Saving…" : "Save Applicant Details"}
           </PrimaryButton>
@@ -2133,6 +2173,14 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </Card>
 
         <Card title="Documents">
+          {app.services?.pcc_required && (
+            <button
+              onClick={() => setShowPccLetter(true)}
+              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 block"
+            >
+              📄 Generate PCC Request Letter
+            </button>
+          )}
           {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
           {(app.docs || [])
             .filter((d) => !d.post_approval || app.status === "Accepted" || app.status === "Completed")
@@ -2147,6 +2195,14 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                     className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
                   >
                     ↗ Download Learning (opens Sarathi)
+                  </button>
+                )}
+                {/aadhaar/i.test(d.name) && (
+                  <button
+                    onClick={() => window.open("https://myaadhaar.uidai.gov.in", "uidai_popup", "width=900,height=700,noopener,noreferrer")}
+                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                  >
+                    ↗ Download Aadhaar (opens UIDAI)
                   </button>
                 )}
                 {/pcc/i.test(d.name) && app.pcc_no && (
@@ -2178,6 +2234,9 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     </Modal>
     {pccCheckApp && (
       <PCCStatusCheckModal row={pccCheckApp} onClose={() => setPccCheckApp(null)} />
+    )}
+    {showPccLetter && (
+      <PCCLetterModal app={app} onClose={() => setShowPccLetter(false)} />
     )}
     </>
   );
