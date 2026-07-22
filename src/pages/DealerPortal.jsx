@@ -14,6 +14,7 @@ import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
 import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
 import { createDealerStaffLogin } from "../lib/serverApi";
+import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { useDarkMode } from "../lib/theme";
 import { Sun, Moon, Fingerprint } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
@@ -239,13 +240,14 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
   const [error, setError] = useState("");
   const [f, setF] = useState({
     service_id: "", applicant_name: "", father_husband_name: "",
-    date_of_birth: "", mobile: "", address: "",
+    date_of_birth: "", mobile: "", address: "", police_station: "", stay_since: "",
   });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
+  const selectedService = services.find((s) => s.id === f.service_id);
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("services").select("id, parent_service, short_name").order("parent_service");
+      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required").order("parent_service");
       setServices(data || []);
     })();
   }, []);
@@ -274,6 +276,8 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
         date_of_birth: f.date_of_birth || null,
         mobile: f.mobile || null,
         address: f.address || null,
+        police_station: f.police_station || null,
+        stay_since: f.stay_since || null,
         status: "Draft Submitted",
       })
       .select()
@@ -328,6 +332,22 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
       <Field label="Date of Birth"><Input type="date" value={f.date_of_birth} onChange={set("date_of_birth")} /></Field>
       <Field label="Mobile"><Input value={f.mobile} onChange={set("mobile")} /></Field>
       <Field label="Address"><Input value={f.address} onChange={set("address")} /></Field>
+      {selectedService?.pcc_required && (
+        <div className="grid sm:grid-cols-2 gap-x-4 -mt-1 mb-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30">
+          <p className="sm:col-span-2 text-xs text-blue-700 dark:text-blue-300 mb-1">
+            This service requires a PCC — fill these in now and they'll auto-fill the PCC request letter later.
+          </p>
+          <Field label="Police Station">
+            <SearchableSelect
+              value={f.police_station}
+              options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+              onChange={(name) => setF((s) => ({ ...s, police_station: name }))}
+              placeholder="Search police station…"
+            />
+          </Field>
+          <Field label="Staying at Address Since"><Input type="date" value={f.stay_since} onChange={set("stay_since")} /></Field>
+        </div>
+      )}
       {error && <p className="text-rose-500 text-xs mb-3">{error}</p>}
       <div className="flex gap-2">
         <PrimaryButton onClick={submit} disabled={saving}>{saving ? "Submitting…" : "Submit Application"}</PrimaryButton>
@@ -639,6 +659,17 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
     window.open(url, "sarathi_popup", "width=900,height=700,noopener,noreferrer");
   };
 
+  // Same idea as the Sarathi shortcut above, for UIDAI's "Download Aadhaar"
+  // page. UIDAI's OTP + captcha still have to be done manually there, and
+  // no website — including this one — is allowed to reach into the
+  // browser's download and grab a file that came from a different site, so
+  // this can only get the dealer to the right page, not the finished PDF.
+  // Once the e-Aadhaar is downloaded from UIDAI, upload it below like any
+  // other document.
+  const openUidaiPortal = () => {
+    window.open("https://myaadhaar.uidai.gov.in", "uidai_popup", "width=900,height=700,noopener,noreferrer");
+  };
+
   return (
     <>
     <Modal title={`Documents — ${application.draft_code}`} onClose={onClose}>
@@ -665,6 +696,14 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
                   className="text-xs font-semibold text-blue-600 hover:underline mb-1.5 block"
                 >
                   ↗ Download Learning (opens Sarathi)
+                </button>
+              )}
+              {/aadhaar/i.test(d.name) && (
+                <button
+                  onClick={openUidaiPortal}
+                  className="text-xs font-semibold text-blue-600 hover:underline mb-1.5 block"
+                >
+                  ↗ Download Aadhaar (opens UIDAI)
                 </button>
               )}
               {/pcc/i.test(d.name) && application.pcc_no && (

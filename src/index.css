@@ -12,3 +12,23 @@
     background: #fff !important;
   }
 }
+
+/* Print-isolated content for single-document prints (e.g. the PCC request
+   letter) — hides everything else on the page, including modal chrome and
+   the sidebar, and pins just the marked block to fill the page regardless
+   of it sitting inside a scrolling/fixed-position modal. Toggle by adding
+   the `print-isolate` class to <body> right before window.print(). */
+body.print-isolate * {
+  visibility: hidden !important;
+}
+body.print-isolate .print-target,
+body.print-isolate .print-target * {
+  visibility: visible !important;
+}
+body.print-isolate .print-target {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  background: #fff !important;
+  padding: 32px !important;
+}
