@@ -9,17 +9,20 @@ import { parseCSV, findByLabel } from "../lib/csv";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2 } from "lucide-react";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 
 
 const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted", "Completed"];
 
-// Columns a staff member can hide/show via the "Columns" button. Draft ID,
-// Status, and Chat stay pinned (always shown) since they're the primary way
-// to identify/act on a row; everything else is optional detail.
+// Columns a staff member can hide/show via the "Columns" button. Draft ID
+// and Status stay pinned (always shown) since they're the primary way to
+// identify/act on a row; everything else is optional detail. Mobile and
+// Remark are deliberately left out of this list — they're always hidden by
+// default and only revealed together via the dedicated toggle button next
+// to "+ New Application".
 const TOGGLEABLE_COLUMNS = [
-  { key: "applicationDate", label: "Application Date" },
+  { key: "applicationDate", label: "Date" },
   { key: "amount", label: "Amount" },
   { key: "dealer", label: "Dealer" },
   { key: "service", label: "Service" },
@@ -35,8 +38,6 @@ const TOGGLEABLE_COLUMNS = [
   { key: "rto", label: "RTO" },
   { key: "agency", label: "Agency" },
   { key: "slot", label: "Slot" },
-  { key: "mobile", label: "Mobile" },
-  { key: "remark", label: "Remark" },
 ];
 
 // Columns a restricted "Staff View" is locked to — everything except the
@@ -272,7 +273,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [showImport, setShowImport] = useState(false);
   const [toast, setToast] = useState(null);
   const [pccCheckRow, setPccCheckRow] = useState(null);
-  const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: true } when awaiting our reply
+  const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: unreadCount } — omitted/0 when nothing's awaiting our reply
 
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -281,6 +282,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     Object.fromEntries(TOGGLEABLE_COLUMNS.map((c) => [c.key, restricted ? STAFF_VISIBLE_KEYS.includes(c.key) : true]))
   );
   const toggleCol = (key) => setVisibleCols((v) => ({ ...v, [key]: !v[key] }));
+  // Mobile and Remark are hidden by default and only shown together, via
+  // the button under "+ New Application" — kept separate from the general
+  // column picker per how this table is meant to be used day-to-day.
+  const [showRemarkMobile, setShowRemarkMobile] = useState(false);
   const [filterDealer, setFilterDealer] = useState("");
   const [filterRto, setFilterRto] = useState("");
   const [filterAgency, setFilterAgency] = useState("");
@@ -334,17 +339,23 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         .in("thread_id", threadIds)
         .order("created_at", { ascending: false });
       if (messagesError) { setChatStatus({}); return; }
-      // Latest message per thread (messages are already newest-first).
-      const latestByThread = {};
+      // Messages are newest-first, so walking from the top and counting the
+      // unbroken run of non-staff messages approximates "unread since our
+      // last reply" without needing separate read-receipt tracking. This
+      // count is what shows in the badge next to the Draft ID.
+      const messagesByThread = {};
       for (const m of messages || []) {
-        if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
+        (messagesByThread[m.thread_id] ||= []).push(m);
       }
       const statusByApp = {};
       for (const t of threads) {
-        const latest = latestByThread[t.id];
-        if (latest) {
-          statusByApp[t.application_id] = latest.sender_type !== "staff"; // true = awaiting our reply
+        const threadMsgs = messagesByThread[t.id] || [];
+        let count = 0;
+        for (const m of threadMsgs) {
+          if (m.sender_type === "staff") break;
+          count++;
         }
+        if (count > 0) statusByApp[t.application_id] = count;
       }
       setChatStatus(statusByApp);
     } catch {
@@ -418,14 +429,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return { ok: false, message: "Failed: " + error.message };
     }
 
+    const serviceAndName = [serviceLabel(app.services), app.applicant_name].filter(Boolean).join(" ");
     const descriptionParts = [
-      app.applicant_name ? `Customer: ${app.applicant_name}` : null,
-      `Service: ${serviceLabel(app.services) || "—"}`,
-      `Date: ${isoToDDMMYYYY(applicationDate)}`,
+      serviceAndName || null,
       app.application_no ? `App No: ${app.application_no}` : null,
-      app.ll_dl_no ? `LL/DL No: ${app.ll_dl_no}` : null,
       app.date_of_birth ? `DOB: ${isoToDDMMYYYY(app.date_of_birth)}` : null,
-      app.services?.pcc_required && app.pcc_no ? `PCC No: ${app.pcc_no}` : null,
     ].filter(Boolean);
 
     const { error: ledgerError } = await supabase.from("ledger_transactions").insert({
@@ -806,10 +814,18 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             {filteredRows.length !== rows.length && ` (of ${rows.length})`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
-          {canEdit && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
-          {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
+            {canEdit && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
+            {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
+          </div>
+          <button
+            onClick={() => setShowRemarkMobile((s) => !s)}
+            className="text-xs font-semibold text-slate-500 dark:text-slate-400 hover:text-blue-600"
+          >
+            {showRemarkMobile ? "Hide" : "Show"} Remark &amp; Mobile
+          </button>
         </div>
       </div>
 
@@ -958,7 +974,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
             <tr>
               <SortableTh column="draftId" label="Draft ID" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              {visibleCols.applicationDate && <SortableTh column="applicationDate" label="Application Date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {visibleCols.applicationDate && <SortableTh column="applicationDate" label="Date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.amount && <SortableTh column="amount" label="Amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.dealer && <SortableTh column="dealer" label="Dealer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.service && <SortableTh column="service" label="Service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
@@ -974,12 +990,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {visibleCols.rto && <SortableTh column="rto" label="RTO" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.agency && <SortableTh column="agency" label="Agency" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.slot && <SortableTh column="slot" label="Slot" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.mobile && <SortableTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.remark && <SortableTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {showRemarkMobile && <SortableTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {showRemarkMobile && <SortableTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               <SortableTh column="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Chat</th>
               <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Appointment</th>
-              {isAdmin && <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Delete</th>}
             </tr>
           </thead>
           <tbody>
@@ -987,11 +1001,26 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
                 <td className="px-3 py-2 font-medium whitespace-nowrap">
                   <button
-                    onClick={() => setDetailPopup(r)}
-                    className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
-                    title="View full customer details and service charges"
+                    onClick={() =>
+                      r.services?.chat_in_app
+                        ? setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })
+                        : setDetailPopup(r)
+                    }
+                    className={`inline-flex items-center gap-1.5 hover:underline font-medium ${
+                      chatStatus[r.id] ? "text-rose-600 dark:text-rose-400" : "text-blue-600 dark:text-blue-400"
+                    }`}
+                    title={
+                      r.services?.chat_in_app
+                        ? chatStatus[r.id] ? "Dealer sent a message — click to reply" : "Open chat"
+                        : "View full customer details and service charges"
+                    }
                   >
                     {r.draft_code}
+                    {chatStatus[r.id] > 0 && (
+                      <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                        {chatStatus[r.id]}
+                      </span>
+                    )}
                   </button>
                 </td>
                 {visibleCols.applicationDate && (
@@ -1174,7 +1203,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     />
                   </td>
                 )}
-                {visibleCols.mobile && (
+                {showRemarkMobile && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
                       <EditableCell width="w-28" value={r.mobile} onSave={(v) => updateRowField(r.id, "mobile", v || null)} />
@@ -1190,36 +1219,30 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     </div>
                   </td>
                 )}
-                {visibleCols.remark && (
+                {showRemarkMobile && (
                   <td className="px-3 py-2">
                     <EditableCell width="w-36" value={r.remarks} onSave={(v) => updateRowField(r.id, "remarks", v || null)} />
                   </td>
                 )}
                 <td className="px-3 py-2">
-                  <button
-                    onClick={() => openDetail(r, "status")}
-                    title="Assign staff, update status, view history"
-                    className="hover:opacity-80"
-                  >
-                    <StatusBadge status={r.status} />
-                  </button>
-                </td>
-                <td className="px-3 py-2 whitespace-nowrap">
-                  {r.services?.chat_in_app ? (
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })}
-                      className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
-                        chatStatus[r.id]
-                          ? "bg-rose-50 text-rose-600 border-rose-200 animate-pulse"
-                          : "bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
-                      }`}
-                      title={chatStatus[r.id] ? "Dealer sent a message — awaiting your reply" : "Open chat"}
+                      onClick={() => openDetail(r, "status")}
+                      title="Assign staff, update status, view history"
+                      className="hover:opacity-80"
                     >
-                      {chatStatus[r.id] ? "New message" : "Chat"}
+                      <StatusBadge status={r.status} />
                     </button>
-                  ) : (
-                    <span className="text-slate-300 text-xs">—</span>
-                  )}
+                    {isAdmin && (
+                      <button
+                        onClick={() => deleteApplication(r)}
+                        title={`Delete application ${r.draft_code}`}
+                        className="text-slate-300 hover:text-rose-500 dark:text-slate-600"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap">
                   {isEligibleForAppointment(r, convertedSourceIds) ? (
@@ -1233,15 +1256,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     <span className="text-slate-300 text-xs">—</span>
                   )}
                 </td>
-                {isAdmin && (
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <button onClick={() => deleteApplication(r)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
-                  </td>
-                )}
               </tr>
             ))}
             {!loading && filteredRows.length === 0 && (
-              <tr><td colSpan={21} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search / filters</td></tr>
+              <tr><td colSpan={19} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search / filters</td></tr>
             )}
           </tbody>
         </table>

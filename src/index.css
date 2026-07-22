@@ -1,2 +1,14 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
+
+/* Print support: hide chrome (sidebar, floating chat widget, anything else
+   marked .no-print) and let a printed/exported ledger page show just its
+   content — see Ledger.jsx's Print button. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+  }
+}

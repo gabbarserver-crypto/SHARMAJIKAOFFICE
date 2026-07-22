@@ -64,7 +64,7 @@ export default function StaffChatWidget({ staff, identity, pendingCount, onExpan
   if (!staff) return null;
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end gap-3">
+    <div className="no-print fixed bottom-5 right-5 z-50 flex flex-col items-end gap-3">
       {open && (
         <div className="w-80 h-[420px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
           <div className="bg-slate-900 text-white px-4 py-3 flex items-center gap-2.5 shrink-0">
