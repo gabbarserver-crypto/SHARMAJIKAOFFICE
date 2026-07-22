@@ -7,9 +7,18 @@
     "dev": "vite",
     "build": "node node_modules/vite/bin/vite.js build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "android:add": "cap add android",
+    "android:build": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android"
   },
   "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/camera": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0",
+    "@capacitor/push-notifications": "^7.0.0",
+    "@aparajita/capacitor-biometric-auth": "^8.0.0",
     "@supabase/supabase-js": "^2.110.2",
     "@tailwindcss/vite": "^4.3.2",
     "lucide-react": "^0.383.0",
@@ -17,6 +26,7 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
