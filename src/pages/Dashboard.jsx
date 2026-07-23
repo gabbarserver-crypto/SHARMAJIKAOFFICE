@@ -1,7 +1,12 @@
 // src/pages/Dashboard.jsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck } from "lucide-react";
+import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone } from "lucide-react";
+
+// Bump this when you replace public/downloads/sjo-app.apk with a new build
+// so the version number on the dashboard stays in sync.
+const APP_VERSION = "1.0.0";
+const APK_PATH = "/downloads/sjo-app.apk";
 
 // Each tile gets its own solid color fill (point 16) instead of a plain
 // white card with just the number colored — makes the dashboard scannable
@@ -57,6 +62,28 @@ export default function Dashboard() {
             </div>
           );
         })}
+      </div>
+
+      <div className="mt-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-900 dark:bg-slate-700 text-white rounded-xl p-3">
+            <Smartphone size={22} />
+          </div>
+          <div>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">Android App</p>
+            <p className="text-sm text-slate-400 dark:text-slate-500">
+              Version {APP_VERSION} · Direct APK install (not on Play Store)
+            </p>
+          </div>
+        </div>
+        <a
+          href={APK_PATH}
+          download
+          className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors"
+        >
+          <Download size={16} />
+          Download App
+        </a>
       </div>
     </div>
   );
