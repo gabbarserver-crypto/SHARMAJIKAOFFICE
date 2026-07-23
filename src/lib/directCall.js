@@ -1,20 +1,23 @@
-// src/lib/call.js
+// src/lib/directCall.js
 //
-// Voice/video calling for one chat thread. Two moving parts:
+// Person-to-person calling — "call this specific dealer / dealer's staff /
+// admin staff member by name" — as opposed to lib/call.js, which rings on
+// a *chat thread* and only works while both sides already have that exact
+// thread's ChatPanel open.
 //
-//  1. Signaling — a lightweight Supabase Realtime *broadcast* channel per
-//     thread (`call:<threadId>`), just for "ring / accept / decline / end"
-//     events. Nothing here is persisted to a table on purpose — a missed
-//     call just needs a live callback to the other person, not history.
+// The problem this solves: a dealer's staff member wants to call a named
+// admin staff member (or vice versa) straight from a list, without both
+// people having to already be looking at the same chat. For that to work,
+// the person being called has to be reachable no matter what screen they're
+// on — so each signed-in identity (staff / dealer / dealer_staff) keeps a
+// permanent "personal channel" open for as long as they're logged in
+// (`personal-call:<type>:<id>`), not just while some particular page is
+// open. useDirectCall() is mounted once, at the top of App.jsx, for exactly
+// that reason — see GlobalCallOverlay.jsx for how it's rendered.
 //
-//  2. Media — Agora RTC (agora-rtc-sdk-ng) carries the actual audio/video
-//     once both sides join the same Agora channel (channel name = the chat
-//     thread id, so it's already unique and scoped the same way the chat
-//     itself is). The join token is minted server-side by /api/agora-token
-//     so the Agora App Certificate never reaches the browser.
-//
-// Usage: const call = useCall({ threadId, identity }); then render based on
-// call.status and wire its buttons up — see ChatPanel.jsx.
+// Once a call is answered, both sides move onto a call-specific Agora
+// channel (a session id minted by the caller) for the actual audio/video —
+// same Agora mechanics as lib/call.js.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from "agora-rtc-sdk-ng/esm";
 import { supabase } from "./supabase";
@@ -23,30 +26,32 @@ import { notify } from "./notify";
 
 const RING_TIMEOUT_MS = 30000;
 
-export function useCall({ threadId, identity }) {
+function personalChannelName(identity) {
+  return identity ? `personal-call:${identity.type}:${identity.id}` : null;
+}
+
+export function useDirectCall({ identity }) {
   // 'idle' | 'ringing-outgoing' | 'ringing-incoming' | 'connecting' | 'in-call'
   const [status, setStatus] = useState("idle");
-  const [callType, setCallType] = useState("audio"); // 'audio' | 'video'
+  const [callType, setCallType] = useState("audio");
   const [remoteName, setRemoteName] = useState("");
+  const [remoteIdentity, setRemoteIdentity] = useState(null); // { type, id }
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [callError, setCallError] = useState("");
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
 
-  // Identity changes reference on every parent render (App.jsx builds it
-  // inline), so it's read through a ref inside callbacks/effects instead of
-  // being a dependency — otherwise the signaling channel would resubscribe
-  // constantly.
   const identityRef = useRef(identity);
   useEffect(() => { identityRef.current = identity; }, [identity]);
 
+  const sessionIdRef = useRef(null);
+  const remoteIdentityRef = useRef(null);
   const clientRef = useRef(null);
   const localAudioRef = useRef(null);
   const localVideoRef = useRef(null);
   const ringTimerRef = useRef(null);
-  const signalRef = useRef(null);
-  const localVideoElRef = useRef(null);  // DOM node the local camera preview plays into
-  const remoteVideoElRef = useRef(null); // DOM node the remote video plays into
+  const localVideoElRef = useRef(null);
+  const remoteVideoElRef = useRef(null);
 
   const clearRingTimer = () => {
     if (ringTimerRef.current) { clearTimeout(ringTimerRef.current); ringTimerRef.current = null; }
@@ -68,77 +73,86 @@ export function useCall({ threadId, identity }) {
 
   const reset = useCallback(async () => {
     await cleanupMedia();
+    sessionIdRef.current = null;
+    remoteIdentityRef.current = null;
     setStatus("idle");
     setCallType("audio");
     setRemoteName("");
+    setRemoteIdentity(null);
     setMuted(false);
     setCameraOff(false);
   }, [cleanupMedia]);
 
-  const send = useCallback((event, payload = {}) => {
+  // One-shot send to the OTHER party's personal channel. `to` is their
+  // { type, id } — known upfront (from the directory list the call was
+  // started from, or from the incoming ring's payload).
+  const sendTo = useCallback((to, event, payload = {}) => {
+    if (!to?.type || !to?.id) return;
     const id = identityRef.current;
-    signalRef.current?.send({
-      type: "broadcast",
-      event,
-      payload: { from: id?.id, fromType: id?.type, name: id?.name, ...payload },
+    const channel = supabase.channel(personalChannelName(to), { config: { broadcast: { self: false } } });
+    channel.subscribe((s) => {
+      if (s !== "SUBSCRIBED") return;
+      channel.send({
+        type: "broadcast",
+        event,
+        payload: { from: id?.id, fromType: id?.type, fromName: id?.name, sessionId: sessionIdRef.current, ...payload },
+      });
+      setTimeout(() => supabase.removeChannel(channel), 800);
     });
   }, []);
 
-  const isFromMe = (payload) => {
-    const id = identityRef.current;
-    return id && payload?.from === id.id && payload?.fromType === id.type;
-  };
-
-  // Listen for signaling on this thread — needs to be active even at rest
-  // ('idle') so an incoming call can be noticed at all.
+  // Always-on listener on MY OWN personal channel — active for as long as
+  // this identity is signed in, regardless of which screen is open. This is
+  // what makes an incoming call possible from anywhere in the app.
   useEffect(() => {
-    if (!threadId) return;
-    const channel = supabase.channel(`call:${threadId}`, { config: { broadcast: { self: false } } });
-    signalRef.current = channel;
+    if (!identity) return;
+    const channel = supabase.channel(personalChannelName(identity), { config: { broadcast: { self: false } } });
 
     channel
       .on("broadcast", { event: "ring" }, ({ payload }) => {
-        if (isFromMe(payload)) return;
         setStatus((s) => {
-          if (s !== "idle") return s;
+          if (s !== "idle") return s; // already on a call — no call-waiting for now
+          sessionIdRef.current = payload.sessionId;
+          remoteIdentityRef.current = { type: payload.fromType, id: payload.from };
+          setCallType(payload.callType || "audio");
+          setRemoteName(payload.fromName || "Caller");
+          setRemoteIdentity(remoteIdentityRef.current);
           notify({
             kind: "call",
-            title: payload.name || "Incoming call",
+            title: payload.fromName || "Incoming call",
             body: `${payload.callType === "video" ? "Video" : "Voice"} call incoming`,
             silent: true, // the ring banner + accept/decline UI is the notification here
           });
           return "ringing-incoming";
         });
-        setCallType(payload.callType || "audio");
-        setRemoteName(payload.name || "Caller");
       })
       .on("broadcast", { event: "accept" }, ({ payload }) => {
-        if (isFromMe(payload)) return;
+        if (payload.sessionId !== sessionIdRef.current) return;
         setStatus((s) => (s === "ringing-outgoing" ? "connecting" : s));
       })
       .on("broadcast", { event: "decline" }, ({ payload }) => {
-        if (isFromMe(payload)) return;
+        if (payload.sessionId !== sessionIdRef.current) return;
         setCallError("Call declined");
         reset();
       })
       .on("broadcast", { event: "end" }, ({ payload }) => {
-        if (isFromMe(payload)) return;
+        if (payload.sessionId !== sessionIdRef.current) return;
         reset();
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); signalRef.current = null; };
-  }, [threadId, reset]);
+    return () => { supabase.removeChannel(channel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity?.type, identity?.id, reset]);
 
-  // Actually join Agora + publish tracks once we move into 'connecting' —
-  // covers both "I just accepted an incoming call" and "the other side just
-  // accepted my outgoing call".
+  // Join Agora once we move into 'connecting'.
   useEffect(() => {
     if (status !== "connecting") return;
     let cancelled = false;
     (async () => {
       try {
-        const { token, appId, uid } = await fetchAgoraToken({ channel: threadId });
+        const channelName = sessionIdRef.current;
+        const { token, appId, uid } = await fetchAgoraToken({ channel: channelName });
         const client = createClient({ mode: "rtc", codec: "vp8" });
         clientRef.current = client;
 
@@ -155,7 +169,7 @@ export function useCall({ threadId, identity }) {
         });
         client.on("user-left", () => reset());
 
-        await client.join(appId, String(threadId), token, uid || null);
+        await client.join(appId, String(channelName), token, uid || null);
         if (cancelled) { await client.leave(); return; }
 
         const audioTrack = await createMicrophoneAudioTrack();
@@ -179,44 +193,50 @@ export function useCall({ threadId, identity }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [status, threadId, callType, reset]);
+  }, [status, callType, reset]);
 
   // Give up on an outgoing call nobody answers.
   useEffect(() => {
     if (status !== "ringing-outgoing") { clearRingTimer(); return undefined; }
     ringTimerRef.current = setTimeout(() => {
-      send("end");
+      sendTo(remoteIdentityRef.current, "end");
       setCallError("No answer");
       reset();
     }, RING_TIMEOUT_MS);
     return clearRingTimer;
-  }, [status, send, reset]);
+  }, [status, sendTo, reset]);
 
-  const startCall = useCallback((type = "audio") => {
-    if (!threadId || !identityRef.current || status !== "idle") return;
+  // target = { type, id, name } — a row from the Dealers list, a
+  // dealer_staff row, or an admin staff row.
+  const startCall = useCallback((target, type = "audio") => {
+    if (!identityRef.current || status !== "idle" || !target?.id || !target?.type) return;
     setCallError("");
+    sessionIdRef.current = `${identityRef.current.type}-${identityRef.current.id}-${target.type}-${target.id}-${Date.now()}`;
+    remoteIdentityRef.current = { type: target.type, id: target.id };
     setCallType(type);
+    setRemoteName(target.name || "");
+    setRemoteIdentity(remoteIdentityRef.current);
     setStatus("ringing-outgoing");
-    send("ring", { callType: type });
-  }, [threadId, status, send]);
+    sendTo(target, "ring", { callType: type });
+  }, [status, sendTo]);
 
   const acceptCall = useCallback(() => {
     if (status !== "ringing-incoming") return;
-    send("accept");
+    sendTo(remoteIdentityRef.current, "accept");
     setStatus("connecting");
-  }, [status, send]);
+  }, [status, sendTo]);
 
   const declineCall = useCallback(() => {
     if (status !== "ringing-incoming") return;
-    send("decline");
+    sendTo(remoteIdentityRef.current, "decline");
     reset();
-  }, [status, send, reset]);
+  }, [status, sendTo, reset]);
 
   const endCall = useCallback(() => {
     if (status === "idle") return;
-    send("end");
+    sendTo(remoteIdentityRef.current, "end");
     reset();
-  }, [status, send, reset]);
+  }, [status, sendTo, reset]);
 
   const toggleMute = useCallback(() => {
     if (!localAudioRef.current) return;
@@ -232,12 +252,12 @@ export function useCall({ threadId, identity }) {
     setCameraOff(next);
   }, [cameraOff]);
 
-  // Hang up if the thread changes or the component using this hook unmounts
-  // (e.g. the chat panel/modal closes) — never leave a call running silently.
-  useEffect(() => () => { cleanupMedia(); }, [threadId, cleanupMedia]);
+  // Hang up if this hook ever unmounts (e.g. sign-out) — never leave a call
+  // running silently.
+  useEffect(() => () => { cleanupMedia(); }, [cleanupMedia]);
 
   return {
-    status, callType, remoteName, muted, cameraOff, callError, hasRemoteVideo,
+    status, callType, remoteName, remoteIdentity, muted, cameraOff, callError, hasRemoteVideo,
     localVideoElRef, remoteVideoElRef,
     startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
     dismissError: () => setCallError(""),

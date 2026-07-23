@@ -9,7 +9,7 @@ import { createDealerLogin, createDealerStaffLogin } from "../lib/serverApi";
 
 const TABS = ["RTO", "Staff", "Service", "Dealer", "Agency"];
 
-export default function Masters() {
+export default function Masters({ call }) {
   const [tab, setTab] = useState("RTO");
   const [toast, setToast] = useState(null);
 
@@ -35,7 +35,7 @@ export default function Masters() {
       {tab === "RTO" && <RTOMaster notify={notify} />}
       {tab === "Staff" && <StaffMaster notify={notify} />}
       {tab === "Service" && <ServiceMaster notify={notify} />}
-      {tab === "Dealer" && <DealerMaster notify={notify} />}
+      {tab === "Dealer" && <DealerMaster notify={notify} call={call} />}
       {tab === "Agency" && <AgencyMaster notify={notify} />}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
@@ -520,7 +520,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
 }
 
 /* ---------------- Dealer Master ---------------- */
-function DealerMaster({ notify }) {
+function DealerMaster({ notify, call }) {
   const [rows, setRows] = useState([]);
   const [summaryByDealer, setSummaryByDealer] = useState({}); // dealer_id -> available_limit
   const [editing, setEditing] = useState(null);
@@ -606,13 +606,23 @@ function DealerMaster({ notify }) {
           { key: "chat", label: "Chat", render: (r) => (
             <GhostButton onClick={() => setChatDealer({ id: r.id, name: r.short_name || r.name })}>Chat</GhostButton>
           ) },
+          { key: "call", label: "Call", render: (r) => (
+            <button
+              onClick={() => call?.startCall({ type: "dealer", id: r.id, name: r.short_name || r.name }, "audio")}
+              disabled={!call || call.status !== "idle"}
+              title={`Call ${r.short_name || r.name}`}
+              className="w-8 h-8 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+            >
+              <Phone size={16} />
+            </button>
+          ) },
         ]}
         onAdd={() => { setEditing(null); setOpen(true); }}
         onEdit={(r) => { setEditing(r); setOpen(true); }}
         onDelete={remove}
         addLabel="Add Dealer"
       />
-      {open && <DealerForm initial={editing} onSave={save} onClose={() => setOpen(false)} />}
+      {open && <DealerForm initial={editing} onSave={save} onClose={() => setOpen(false)} call={call} />}
       {chatDealer && (
         <ApplicationChatModal
           dealerId={chatDealer.id}
@@ -626,7 +636,7 @@ function DealerMaster({ notify }) {
   );
 }
 
-export function DealerForm({ initial, onSave, onClose }) {
+export function DealerForm({ initial, onSave, onClose, call }) {
   const [f, setF] = useState(initial || { name: "", code: "", short_name: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const [loginEmail, setLoginEmail] = useState("");
@@ -685,7 +695,7 @@ export function DealerForm({ initial, onSave, onClose }) {
         </div>
       )}
 
-      {initial && <DealerStaffManager dealerId={initial.id} />}
+      {initial && <DealerStaffManager dealerId={initial.id} call={call} />}
     </Modal>
   );
 }
@@ -693,7 +703,7 @@ export function DealerForm({ initial, onSave, onClose }) {
 // Sub-staff logins under this dealer (see dealer_staff table) — addable from
 // both here (admin) and the dealer's own portal (Masters isn't reachable by
 // dealers, so DealerPortal has its own copy of this manager).
-function DealerStaffManager({ dealerId }) {
+function DealerStaffManager({ dealerId, call }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -751,14 +761,24 @@ function DealerStaffManager({ dealerId }) {
                 <span className="font-medium text-slate-700 dark:text-slate-300">{r.full_name}</span>
                 <span className="text-slate-400 dark:text-slate-500 text-xs ml-2">{r.email}</span>
               </div>
-              <button
-                onClick={() => toggleActive(r)}
-                className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
-                  r.active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
-                }`}
-              >
-                {r.active ? "Active" : "Disabled"}
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => call?.startCall({ type: "dealer_staff", id: r.id, name: r.full_name }, "audio")}
+                  disabled={!call || call.status !== "idle" || !r.active}
+                  title={r.active ? `Call ${r.full_name}` : "Disabled — can't be called"}
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+                >
+                  <Phone size={14} />
+                </button>
+                <button
+                  onClick={() => toggleActive(r)}
+                  className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                    r.active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
+                  }`}
+                >
+                  {r.active ? "Active" : "Disabled"}
+                </button>
+              </div>
             </div>
           ))}
         </div>
