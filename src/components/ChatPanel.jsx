@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Image as ImageIcon, Smile, ThumbsUp } from "lucide-react";
+import { Send, Image as ImageIcon, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
+import { useCall } from "../lib/call";
 
 const SENDER_BUBBLE = {
   staff: "bg-slate-800 text-white",
@@ -24,6 +25,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   const [error, setError] = useState("");
   const bodyRef = useRef(null);
   const fileInputRef = useRef(null);
+  const call = useCall({ threadId, identity });
 
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +92,100 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
+      {identity && (
+        <div className="flex items-center justify-end gap-1 px-2 py-1.5 border-b border-slate-200 shrink-0 bg-white">
+          <button
+            onClick={() => call.startCall("audio")}
+            disabled={call.status !== "idle" || !threadId}
+            title="Voice call"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+          >
+            <Phone size={17} />
+          </button>
+          <button
+            onClick={() => call.startCall("video")}
+            disabled={call.status !== "idle" || !threadId}
+            title="Video call"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+          >
+            <Video size={17} />
+          </button>
+        </div>
+      )}
+
+      {call.status === "ringing-incoming" && (
+        <div className="absolute inset-x-0 top-0 z-20 bg-slate-900 text-white px-4 py-3 flex items-center justify-between shadow-lg">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold truncate">{call.remoteName}</p>
+            <p className="text-xs text-slate-300">Incoming {call.callType} call…</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={call.declineCall} className="w-9 h-9 rounded-full bg-rose-600 hover:bg-rose-700 flex items-center justify-center">
+              <PhoneOff size={16} />
+            </button>
+            <button onClick={call.acceptCall} className="w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center">
+              <Phone size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(call.status === "ringing-outgoing" || call.status === "connecting" || call.status === "in-call") && (
+        <div className="absolute inset-0 z-20 bg-slate-900 text-white flex flex-col">
+          <div className="flex-1 relative flex items-center justify-center">
+            {call.callType === "video" ? (
+              <>
+                <div ref={call.remoteVideoElRef} className="absolute inset-0 bg-slate-800" />
+                {!call.hasRemoteVideo && (
+                  <p className="text-sm text-slate-300 z-10">
+                    {call.status === "in-call" ? "Waiting for their video…" : "Calling…"}
+                  </p>
+                )}
+                <div ref={call.localVideoElRef} className="absolute bottom-3 right-3 w-24 h-32 rounded-lg overflow-hidden bg-slate-700 border border-slate-600" />
+              </>
+            ) : (
+              <div className="text-center">
+                <div className="w-16 h-16 mx-auto rounded-full bg-white/10 flex items-center justify-center mb-3">
+                  <Phone size={26} />
+                </div>
+                <p className="text-sm font-semibold">
+                  {call.status === "ringing-outgoing" ? "Calling…" : call.status === "connecting" ? "Connecting…" : "On call"}
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-center gap-3 pb-5 pt-2 shrink-0">
+            {call.status === "in-call" && (
+              <button
+                onClick={call.toggleMute}
+                className={`w-11 h-11 rounded-full flex items-center justify-center ${call.muted ? "bg-white text-slate-900" : "bg-white/10 hover:bg-white/20"}`}
+              >
+                {call.muted ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+            )}
+            {call.status === "in-call" && call.callType === "video" && (
+              <button
+                onClick={call.toggleCamera}
+                className={`w-11 h-11 rounded-full flex items-center justify-center ${call.cameraOff ? "bg-white text-slate-900" : "bg-white/10 hover:bg-white/20"}`}
+              >
+                {call.cameraOff ? <VideoOff size={18} /> : <Video size={18} />}
+              </button>
+            )}
+            <button onClick={call.endCall} className="w-11 h-11 rounded-full bg-rose-600 hover:bg-rose-700 flex items-center justify-center">
+              <PhoneOff size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {call.callError && (
+        <div className="absolute inset-x-0 top-0 z-20 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs px-3 py-1.5 flex items-center justify-between">
+          <span>{call.callError}</span>
+          <button onClick={call.dismissError} className="font-semibold">✕</button>
+        </div>
+      )}
+
       <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2 bg-slate-50">
         {loading ? (
           <p className="text-sm text-slate-400 text-center py-6">Loading…</p>
