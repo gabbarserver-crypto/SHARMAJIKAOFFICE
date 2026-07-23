@@ -13,10 +13,11 @@ import ApplicationChatModal from "../components/ApplicationChatModal";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
 import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
+import { notify } from "../lib/notify";
 import { createDealerStaffLogin } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { useDarkMode } from "../lib/theme";
-import { Sun, Moon, Fingerprint, Download } from "lucide-react";
+import { Sun, Moon, Fingerprint, Download, Phone } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 
@@ -24,14 +25,16 @@ import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 // src/pages/Dashboard.jsx) — one APK, linked from every portal.
 const APK_PATH = "/downloads/sjo-app.apk";
 
-const TABS = ["Applications", "Chats", "Ledger"];
+const TABS = ["Applications", "Call/Chat", "Ledger"];
 
 // `identity` is { type: 'dealer' | 'dealer_staff', id, name } — resolved in
 // App.jsx from whichever login this is. It's what scopes chat messages to
 // "who sent this", while `dealer.id` (the parent dealer, same for both a
 // dealer's own login and any of their sub-staff) scopes *which* dealer's
-// data/threads this portal shows.
-export default function DealerPortal({ dealer, identity, onLogout }) {
+// data/threads this portal shows. `call` is the useDirectCall() controller,
+// mounted once in App.jsx, for ringing a specific named admin staff member
+// straight from the "Our Team" directory on the Call/Chat tab.
+export default function DealerPortal({ dealer, identity, call, onLogout }) {
   const [tab, setTab] = useState("Applications");
   const [showNew, setShowNew] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -66,7 +69,23 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
     const interval = setInterval(refreshUnreadChats, 30000);
     const channel = supabase
       .channel(`chat_messages:dealer-badge:${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, refreshUnreadChats)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, async (payload) => {
+        refreshUnreadChats();
+        const m = payload.new;
+        if (!m || m.sender_type !== "staff") return;
+        // chat_messages doesn't carry dealer_id directly — this fires for
+        // every dealer's messages, so confirm the thread is actually ours
+        // before notifying (refreshUnreadChats above is already dealer-
+        // scoped internally, this check is just for the toast).
+        const { data: thread } = await supabase.from("chat_threads").select("dealer_id").eq("id", m.thread_id).maybeSingle();
+        if (thread?.dealer_id !== dealer.id) return;
+        notify({
+          kind: "chat",
+          title: m.sender_name || "New message",
+          body: m.body || (m.attachment_url ? "Sent an image" : ""),
+          onClick: () => setTab("Call/Chat"),
+        });
+      })
       .subscribe();
     return () => {
       clearInterval(interval);
@@ -239,13 +258,13 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
             {visibleTabs.map((t) => (
               <button
                 key={t}
-                onClick={() => { setTab(t); if (t === "Chats") refreshUnreadChats(); }}
+                onClick={() => { setTab(t); if (t === "Call/Chat") refreshUnreadChats(); }}
                 className={`px-4 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5 ${
                   tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
                 }`}
               >
                 {t}
-                {t === "Chats" && unreadChats > 0 && (
+                {t === "Call/Chat" && unreadChats > 0 && (
                   <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
                     {unreadChats}
                   </span>
@@ -264,7 +283,12 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
             onChat={(app) => setChatApp({ id: app.id, label: `${app.draft_code} — ${app.applicant_name}` })}
           />
         )}
-        {tab === "Chats" && <DealerChats dealerId={dealer.id} identity={identity} onMessage={refreshUnreadChats} />}
+        {tab === "Call/Chat" && (
+          <div className="space-y-5">
+            <StaffDirectory call={call} />
+            <DealerChats dealerId={dealer.id} identity={identity} onMessage={refreshUnreadChats} />
+          </div>
+        )}
         {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
@@ -919,6 +943,53 @@ function DealerStaffTab({ dealerId }) {
       ) : (
         <GhostButton onClick={() => setShowAdd(true)}>+ Add Staff</GhostButton>
       )}
+    </Card>
+  );
+}
+
+// Shows every admin staff member by name so a dealer (or their sub-staff)
+// can pick exactly who to call, instead of ringing an anonymous "General"
+// line and hoping someone happens to be watching it. Calling here rings
+// that person's personal channel directly (see lib/directCall.js) — it
+// works even if that staff member isn't currently looking at this dealer's
+// chat thread, since useDirectCall() listens globally for as long as
+// they're signed in.
+function StaffDirectory({ call }) {
+  const [staffList, setStaffList] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const { data } = await supabase.from("staff").select("id, full_name, role").order("full_name");
+      setStaffList(data || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading || staffList.length === 0) return null;
+
+  return (
+    <Card title="Our Team">
+      <p className="text-xs text-slate-400 dark:text-slate-500 -mt-2 mb-3">Tap Call to ring someone on our team directly.</p>
+      <div className="grid sm:grid-cols-2 gap-2">
+        {staffList.map((s) => (
+          <div key={s.id} className="flex items-center justify-between text-sm bg-slate-50 dark:bg-slate-800/60 rounded-lg px-3 py-2">
+            <div className="min-w-0">
+              <p className="font-medium text-slate-700 dark:text-slate-300 truncate">{s.full_name}</p>
+              {s.role && <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{s.role}</p>}
+            </div>
+            <button
+              onClick={() => call?.startCall({ type: "staff", id: s.id, name: s.full_name }, "audio")}
+              disabled={!call || call.status !== "idle"}
+              title={`Call ${s.full_name}`}
+              className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-30"
+            >
+              <Phone size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
     </Card>
   );
 }
