@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
+import { supabase } from "../lib/supabase";
 import { useDarkMode } from "../lib/theme";
 import { useSidebarColor, SIDEBAR_COLORS } from "../lib/sidebarColor";
 import logoMark from "../assets/sjo-icon-mark.png";
@@ -83,9 +84,36 @@ function SectionLabel({ children, collapsed }) {
 // nav: [{ key, label }] — Menu section. staff: { full_name } | null.
 export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, onLogout }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, toggleDark] = useDarkMode();
   const [colorKey, colorDef, setSidebarColor] = useSidebarColor();
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [photoUrl, setPhotoUrl] = useState(staff?.photo_url || null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
+
+  const uploadProfilePhoto = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !staff?.id) return;
+    setUploadingPhoto(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const uid = userData?.user?.id;
+      if (!uid) return;
+      const ext = file.name.split(".").pop();
+      const path = `${uid}/staff-${staff.id}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("profile-photos").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("profile-photos").getPublicUrl(path);
+      await supabase.from("staff").update({ photo_url: pub.publicUrl }).eq("id", staff.id);
+      setPhotoUrl(pub.publicUrl);
+    } catch (err) {
+      alert("Couldn't upload photo: " + err.message);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const [from, to] = dark ? colorDef.dark : colorDef.light;
 
@@ -97,10 +125,38 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
     .join("")
     .toUpperCase();
 
+  // On phones (and the Android wrapper) the sidebar is hidden by default and
+  // slides in as a drawer over a dim backdrop; on tablets/desktop (md+) it
+  // behaves exactly as before — always visible, no backdrop.
+  const handleNavigate = (key) => {
+    onNavigate(key);
+    setMobileOpen(false);
+  };
+
   return (
+    <>
+      {/* Hamburger trigger — mobile only */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        aria-label="Open menu"
+        className="no-print md:hidden fixed top-3 left-3 z-40 w-10 h-10 rounded-xl bg-white dark:bg-slate-900 shadow-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-200"
+      >
+        ☰
+      </button>
+
+      {/* Backdrop — mobile only, shown while drawer is open */}
+      {mobileOpen && (
+        <div
+          className="no-print md:hidden fixed inset-0 bg-black/40 z-40"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
     <aside
       className={[
-        "no-print shrink-0 h-screen sticky top-0 flex flex-col m-3 rounded-3xl shadow-lg transition-all duration-300",
+        "no-print shrink-0 h-screen flex flex-col m-3 rounded-3xl shadow-lg transition-all duration-300",
+        "fixed top-0 left-0 z-50 md:sticky md:top-0",
+        mobileOpen ? "translate-x-0" : "-translate-x-[120%] md:translate-x-0",
         collapsed ? "w-20" : "w-64",
       ].join(" ")}
       style={{ height: "calc(100vh - 1.5rem)", background: `linear-gradient(to bottom, ${from}, ${to})` }}
@@ -149,7 +205,7 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
               active={active === item.key}
               collapsed={collapsed}
               badge={badges[item.key] || 0}
-              onClick={() => onNavigate(item.key)}
+              onClick={() => handleNavigate(item.key)}
             />
           ))}
         </nav>
@@ -206,9 +262,29 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
 
       {/* Profile */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-t border-white/15">
-        <div className="w-9 h-9 shrink-0 rounded-full bg-white flex items-center justify-center text-xs font-semibold" style={{ color: from }}>
-          {initials}
-        </div>
+        <input
+          type="file"
+          accept="image/*"
+          ref={photoInputRef}
+          className="hidden"
+          onChange={uploadProfilePhoto}
+        />
+        <button
+          type="button"
+          onClick={() => photoInputRef.current?.click()}
+          title="Change profile photo"
+          className="w-9 h-9 shrink-0 rounded-full bg-white flex items-center justify-center text-xs font-semibold overflow-hidden relative group"
+          style={{ color: from }}
+        >
+          {photoUrl ? (
+            <img src={photoUrl} alt="" className="w-full h-full object-cover" />
+          ) : (
+            initials
+          )}
+          <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[9px]">
+            {uploadingPhoto ? "…" : "Edit"}
+          </span>
+        </button>
         {!collapsed && (
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold truncate text-white">{staff?.full_name || "Signed in"}</p>
@@ -224,5 +300,6 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
         )}
       </div>
     </aside>
+    </>
   );
 }

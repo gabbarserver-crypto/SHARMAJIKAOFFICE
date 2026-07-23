@@ -384,13 +384,21 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   }, []);
 
   const openDetail = async (row, mode = "customer") => {
+    // Re-fetch this one application fresh (rather than trusting the row object
+    // from local list state, which can be stale — e.g. right after a staff
+    // assignment — and was causing "assigned staff not showing" on reopen).
+    const { data: freshRow } = await supabase
+      .from("applications")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days), staff:assigned_staff_id(full_name)")
+      .eq("id", row.id)
+      .maybeSingle();
     const { data: docs } = await supabase.from("application_documents").select("*").eq("application_id", row.id);
     const { data: history } = await supabase
       .from("application_status_history")
       .select("*")
       .eq("application_id", row.id)
       .order("changed_at", { ascending: false });
-    setSelected({ ...row, docs, history });
+    setSelected({ ...row, ...(freshRow || {}), docs, history });
     setModalMode(mode);
   };
 
@@ -471,6 +479,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return;
     }
     setToast("Application deleted");
+    closeDetail();
     load();
   };
 
@@ -679,7 +688,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (filterDealer && r.dealer_id !== filterDealer) return false;
     if (filterRto && r.rto_id !== filterRto) return false;
     if (filterAgency && r.agency_id !== filterAgency) return false;
-    if (filterService && r.service_id !== filterService) return false;
+    if (filterService === "__PCC_REQUIRED__") {
+      if (!r.services?.pcc_required) return false;
+    } else if (filterService && r.service_id !== filterService) {
+      return false;
+    }
     if (filterDateFrom && (!r.submitted_at || r.submitted_at.slice(0, 10) < filterDateFrom)) return false;
     if (filterDateTo && (!r.submitted_at || r.submitted_at.slice(0, 10) > filterDateTo)) return false;
     if (search.trim()) {
@@ -821,7 +834,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
             <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
-            {canEdit && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
+            {canEdit && !restricted && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
             {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
           </div>
           <button
@@ -868,15 +881,17 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             </span>
           )}
         </button>
-        <button
-          onClick={() => setCompactView((c) => !c)}
-          title="Toggle a denser, grouped-column table layout"
-          className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-            compactView ? "bg-violet-600 text-white border-violet-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-          }`}
-        >
-          ▦ Compact View
-        </button>
+        {!restricted && (
+          <button
+            onClick={() => setCompactView((c) => !c)}
+            title="Toggle a denser, grouped-column table layout"
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+              compactView ? "bg-violet-600 text-white border-violet-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+            }`}
+          >
+            ▦ Compact View
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -940,6 +955,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           )}
           <Select value={filterService} onChange={(e) => setFilterService(e.target.value)}>
             <option value="">All Services</option>
+            <option value="__PCC_REQUIRED__">🔎 PCC Required (any service)</option>
             {serviceList.map((s) => <option key={s.id} value={s.id}>{serviceLabel(s)}</option>)}
           </Select>
           <Select value={filterRto} onChange={(e) => setFilterRto(e.target.value)}>
@@ -1237,15 +1253,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     >
                       <StatusBadge status={r.status} />
                     </button>
-                    {isAdmin && (
-                      <button
-                        onClick={() => deleteApplication(r)}
-                        title={`Delete application ${r.draft_code}`}
-                        className="text-slate-300 hover:text-rose-500 dark:text-slate-600"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
                   </div>
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap">
@@ -1333,8 +1340,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           staffList={staffList}
           restricted={restricted}
           canApprove={canApprove}
+          isAdmin={isAdmin}
           onClose={closeDetail}
           onStatusChange={updateStatus}
+          onDelete={deleteApplication}
           onAssign={assignStaff}
           onSaveAnswers={updateAnswers}
           onSaveApplicant={updateApplicantDetails}
@@ -1974,7 +1983,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   );
 }
 
-function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, onClose, onStatusChange, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
+function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, isAdmin = false, onClose, onStatusChange, onDelete, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
   const [remarks, setRemarks] = useState(app.remarks || "");
   const [staffId, setStaffId] = useState(app.assigned_staff_id || "");
   const [staffIdentity, setStaffIdentity] = useState(null);
@@ -2090,6 +2099,15 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                   </GhostButton>
                 )}
                 <DangerButton onClick={() => onStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                {isAdmin && (
+                  <DangerButton
+                    onClick={() => onDelete(app)}
+                    className="!bg-transparent !text-rose-600 border border-rose-300 hover:!bg-rose-50 dark:hover:!bg-rose-950"
+                    title={`Delete application ${app.draft_code}`}
+                  >
+                    🗑 Delete Application
+                  </DangerButton>
+                )}
               </div>
             </Card>
           </div>
@@ -2116,7 +2134,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="md">
       <div>
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 dark:text-slate-500 mb-4 -mt-1">
-          {!restricted && <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>}
+          <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
         </div>
         <Card title="Applicant Details" className="mb-4">

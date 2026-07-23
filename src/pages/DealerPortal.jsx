@@ -4,7 +4,7 @@
 // their own applications and their own ledger — enforced both here
 // (queries always filter by dealer.id) and at the database level via
 // the RLS policies added in enable_dealer_login.sql.
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, StatusBadge, Modal, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "../components/UI";
 import ChatWidget from "../components/ChatWidget";
@@ -82,6 +82,46 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
   const visibleTabs = identity?.type === "dealer" ? [...TABS, "Staff"] : TABS;
   const [dark, toggleDark] = useDarkMode();
   const [passkeyMsg, setPasskeyMsg] = useState("");
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
+
+  // Load the current photo for whichever identity is logged in — the
+  // dealer owner, or one of their sub-staff logins.
+  useEffect(() => {
+    (async () => {
+      const table = identity?.type === "dealer_staff" ? "dealer_staff" : "dealers";
+      const id = identity?.type === "dealer_staff" ? identity.id : dealer.id;
+      if (!id) return;
+      const { data } = await supabase.from(table).select("photo_url").eq("id", id).maybeSingle();
+      setPhotoUrl(data?.photo_url || null);
+    })();
+  }, [identity, dealer.id]);
+
+  const uploadProfilePhoto = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const uid = userData?.user?.id;
+      if (!uid) return;
+      const table = identity?.type === "dealer_staff" ? "dealer_staff" : "dealers";
+      const id = identity?.type === "dealer_staff" ? identity.id : dealer.id;
+      const ext = file.name.split(".").pop();
+      const path = `${uid}/dealer-${id}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("profile-photos").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("profile-photos").getPublicUrl(path);
+      await supabase.from(table).update({ photo_url: pub.publicUrl }).eq("id", id);
+      setPhotoUrl(pub.publicUrl);
+    } catch (err) {
+      setToast("Couldn't upload photo: " + err.message);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   // Registers a passkey (fingerprint/Face ID/device PIN) for the currently
   // signed-in account so they can use "Sign in with Fingerprint / Face ID"
@@ -97,11 +137,35 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950">
       <header className="bg-[#0f1b3d] text-white px-6 py-4 flex items-center justify-between">
-        <div>
-          <p className="font-bold text-lg">{dealer.name}</p>
-          <p className="text-slate-300 text-xs">
-            Dealer Portal · Code {dealer.code}{identity?.type === "dealer_staff" ? ` · ${identity.name}` : ""}
-          </p>
+        <div className="flex items-center gap-3">
+          <input
+            type="file"
+            accept="image/*"
+            ref={photoInputRef}
+            className="hidden"
+            onChange={uploadProfilePhoto}
+          />
+          <button
+            type="button"
+            onClick={() => photoInputRef.current?.click()}
+            title="Change profile photo"
+            className="w-11 h-11 shrink-0 rounded-full bg-white/10 flex items-center justify-center text-sm font-semibold overflow-hidden relative group"
+          >
+            {photoUrl ? (
+              <img src={photoUrl} alt="" className="w-full h-full object-cover" />
+            ) : (
+              (identity?.name || dealer.name || "?").split(" ").map((s) => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()
+            )}
+            <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[9px]">
+              {uploadingPhoto ? "…" : "Edit"}
+            </span>
+          </button>
+          <div>
+            <p className="font-bold text-lg">{dealer.name}</p>
+            <p className="text-slate-300 text-xs">
+              Dealer Portal · Code {dealer.code}{identity?.type === "dealer_staff" ? ` · ${identity.name}` : ""}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <button

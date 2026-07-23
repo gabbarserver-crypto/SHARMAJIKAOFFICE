@@ -53,6 +53,43 @@ export default function Reports() {
     setServiceLoading(false);
   };
 
+  // PCC Report (point: dealer/staff asked for blank/pending/issued/rejected
+  // breakdown, across EVERY service that requires PCC — not just the
+  // standalone "PCC" service — so LL RIC etc. show up too).
+  const [pccRows, setPccRows] = useState([]);
+  const [pccLoading, setPccLoading] = useState(false);
+  const [pccRan, setPccRan] = useState(false);
+
+  const runPccReport = async () => {
+    setPccLoading(true);
+    const { data } = await supabase
+      .from("applications")
+      .select("id, applicant_name, pcc_no, pcc_status, submitted_at, dealers(name, short_name), services!inner(parent_service, short_name, pcc_required)")
+      .eq("services.pcc_required", true)
+      .order("submitted_at", { ascending: false });
+    setPccRows(data || []);
+    setPccRan(true);
+    setPccLoading(false);
+  };
+
+  const pccBucket = (r) => {
+    if (!r.pcc_no && !r.pcc_status) return "Blank";
+    if (r.pcc_status === "Certificate Issued") return "Issued";
+    if (r.pcc_status === "Rejected") return "Rejected";
+    return "Pending"; // Under Verification, Police Case, or has pcc_no but no status yet
+  };
+  const pccCounts = pccRows.reduce(
+    (acc, r) => { acc[pccBucket(r)] = (acc[pccBucket(r)] || 0) + 1; return acc; },
+    { Blank: 0, Pending: 0, Issued: 0, Rejected: 0 }
+  );
+  const PCC_TILE_STYLES = {
+    Blank: "bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700",
+    Pending: "bg-yellow-50 dark:bg-yellow-950/40 text-yellow-800 dark:text-yellow-300 border-yellow-300 dark:border-yellow-800",
+    Issued: "bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-300 border-green-300 dark:border-green-800",
+    Rejected: "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800",
+  };
+
+
   const run = async () => {
     setLoading(true);
     const { data, error } = await supabase.rpc("get_profit_summary", { p_start: start, p_end: end });
@@ -115,6 +152,57 @@ export default function Reports() {
         )}
         {serviceId && !serviceLoading && serviceRows.length === 0 && (
           <p className="text-sm text-slate-400 mt-3">No applications yet for this service.</p>
+        )}
+      </Card>
+
+      <Card title="PCC Report" className="mb-5">
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+          Covers every service that requires a PCC step (e.g. LL RIC and the standalone PCC service together) — not just one service.
+        </p>
+        <PrimaryButton onClick={runPccReport} disabled={pccLoading}>
+          {pccLoading ? "Loading..." : "Run PCC Report"}
+        </PrimaryButton>
+
+        {pccRan && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+              {["Blank", "Pending", "Issued", "Rejected"].map((label) => (
+                <div key={label} className={`rounded-xl border px-4 py-3 text-center ${PCC_TILE_STYLES[label]}`}>
+                  <p className="text-2xl font-bold">{pccCounts[label]}</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide">{label}</p>
+                </div>
+              ))}
+            </div>
+
+            {pccRows.length > 0 ? (
+              <div className="mt-4 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="text-left font-medium px-3 py-2">Applicant</th>
+                      <th className="text-left font-medium px-3 py-2">Dealer</th>
+                      <th className="text-left font-medium px-3 py-2">Service</th>
+                      <th className="text-left font-medium px-3 py-2">PCC No</th>
+                      <th className="text-left font-medium px-3 py-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pccRows.map((r) => (
+                      <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
+                        <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{r.applicant_name}</td>
+                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{dealerLabel(r.dealers)}</td>
+                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{serviceLabel(r.services)}</td>
+                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{r.pcc_no || "—"}</td>
+                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{r.pcc_status || (r.pcc_no ? "—" : "Blank")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400 mt-3">No PCC-required applications found.</p>
+            )}
+          </>
         )}
       </Card>
 

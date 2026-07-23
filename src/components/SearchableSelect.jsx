@@ -34,13 +34,13 @@ export default function SearchableSelect({ value, options, onChange, placeholder
       />
       {open && (
         <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg">
-          {filtered.length === 0 && <p className="px-3 py-2 text-sm text-slate-400">No matches</p>}
+          {filtered.length === 0 && <p className="px-3 py-2 text-sm text-slate-400 dark:text-slate-500">No matches</p>}
           {filtered.map((o) => (
             <button
               key={o.id}
               type="button"
               onClick={() => { onChange(o.id); setOpen(false); setQuery(""); }}
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 dark:hover:bg-slate-800 ${
+              className={`w-full text-left px-3 py-2 text-sm text-slate-700 dark:text-slate-100 hover:bg-blue-50 dark:hover:bg-slate-800 ${
                 o.id === value ? "bg-blue-50 dark:bg-slate-800 font-medium" : ""
               }`}
             >
