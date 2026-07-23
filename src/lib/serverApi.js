@@ -37,3 +37,9 @@ export async function createDealerLogin({ dealerId, email, password }) {
 export async function createDealerStaffLogin({ dealerId, fullName, email, password }) {
   return post("/api/create-dealer-staff-login", { accessToken: await accessToken(), dealerId, fullName, email, password });
 }
+
+// Anyone signed in (staff, dealer, or dealer sub-staff) can request a token
+// to join an Agora call on the given channel (= the chat_thread id).
+export async function fetchAgoraToken({ channel }) {
+  return post("/api/agora-token", { accessToken: await accessToken(), channel });
+}

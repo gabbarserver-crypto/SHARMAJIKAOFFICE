@@ -32,5 +32,8 @@ export async function resolveCaller(accessToken) {
   const { data: dealerRow } = await supabaseAdmin.from("dealers").select("id").eq("auth_user_id", authUserId).maybeSingle();
   if (dealerRow) return { kind: "dealer", dealerId: dealerRow.id };
 
+  const { data: dealerStaffRow } = await supabaseAdmin.from("dealer_staff").select("id, dealer_id").eq("auth_user_id", authUserId).maybeSingle();
+  if (dealerStaffRow) return { kind: "dealer_staff", dealerId: dealerStaffRow.dealer_id };
+
   return null;
 }

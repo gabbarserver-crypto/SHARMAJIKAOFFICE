@@ -1,0 +1,235 @@
+// src/lib/call.js
+//
+// Voice/video calling for one chat thread. Two moving parts:
+//
+//  1. Signaling — a lightweight Supabase Realtime *broadcast* channel per
+//     thread (`call:<threadId>`), just for "ring / accept / decline / end"
+//     events. Nothing here is persisted to a table on purpose — a missed
+//     call just needs a live callback to the other person, not history.
+//
+//  2. Media — Agora RTC (agora-rtc-sdk-ng) carries the actual audio/video
+//     once both sides join the same Agora channel (channel name = the chat
+//     thread id, so it's already unique and scoped the same way the chat
+//     itself is). The join token is minted server-side by /api/agora-token
+//     so the Agora App Certificate never reaches the browser.
+//
+// Usage: const call = useCall({ threadId, identity }); then render based on
+// call.status and wire its buttons up — see ChatPanel.jsx.
+import { useCallback, useEffect, useRef, useState } from "react";
+import AgoraRTC from "agora-rtc-sdk-ng";
+import { supabase } from "./supabase";
+import { fetchAgoraToken } from "./serverApi";
+
+const RING_TIMEOUT_MS = 30000;
+
+export function useCall({ threadId, identity }) {
+  // 'idle' | 'ringing-outgoing' | 'ringing-incoming' | 'connecting' | 'in-call'
+  const [status, setStatus] = useState("idle");
+  const [callType, setCallType] = useState("audio"); // 'audio' | 'video'
+  const [remoteName, setRemoteName] = useState("");
+  const [muted, setMuted] = useState(false);
+  const [cameraOff, setCameraOff] = useState(false);
+  const [callError, setCallError] = useState("");
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
+
+  // Identity changes reference on every parent render (App.jsx builds it
+  // inline), so it's read through a ref inside callbacks/effects instead of
+  // being a dependency — otherwise the signaling channel would resubscribe
+  // constantly.
+  const identityRef = useRef(identity);
+  useEffect(() => { identityRef.current = identity; }, [identity]);
+
+  const clientRef = useRef(null);
+  const localAudioRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const ringTimerRef = useRef(null);
+  const signalRef = useRef(null);
+  const localVideoElRef = useRef(null);  // DOM node the local camera preview plays into
+  const remoteVideoElRef = useRef(null); // DOM node the remote video plays into
+
+  const clearRingTimer = () => {
+    if (ringTimerRef.current) { clearTimeout(ringTimerRef.current); ringTimerRef.current = null; }
+  };
+
+  const cleanupMedia = useCallback(async () => {
+    clearRingTimer();
+    try { localAudioRef.current?.close(); } catch { /* already gone */ }
+    try { localVideoRef.current?.close(); } catch { /* already gone */ }
+    localAudioRef.current = null;
+    localVideoRef.current = null;
+    if (clientRef.current) {
+      try { await clientRef.current.leave(); } catch { /* already left */ }
+      clientRef.current.removeAllListeners();
+      clientRef.current = null;
+    }
+    setHasRemoteVideo(false);
+  }, []);
+
+  const reset = useCallback(async () => {
+    await cleanupMedia();
+    setStatus("idle");
+    setCallType("audio");
+    setRemoteName("");
+    setMuted(false);
+    setCameraOff(false);
+  }, [cleanupMedia]);
+
+  const send = useCallback((event, payload = {}) => {
+    const id = identityRef.current;
+    signalRef.current?.send({
+      type: "broadcast",
+      event,
+      payload: { from: id?.id, fromType: id?.type, name: id?.name, ...payload },
+    });
+  }, []);
+
+  const isFromMe = (payload) => {
+    const id = identityRef.current;
+    return id && payload?.from === id.id && payload?.fromType === id.type;
+  };
+
+  // Listen for signaling on this thread — needs to be active even at rest
+  // ('idle') so an incoming call can be noticed at all.
+  useEffect(() => {
+    if (!threadId) return;
+    const channel = supabase.channel(`call:${threadId}`, { config: { broadcast: { self: false } } });
+    signalRef.current = channel;
+
+    channel
+      .on("broadcast", { event: "ring" }, ({ payload }) => {
+        if (isFromMe(payload)) return;
+        setStatus((s) => (s === "idle" ? "ringing-incoming" : s));
+        setCallType(payload.callType || "audio");
+        setRemoteName(payload.name || "Caller");
+      })
+      .on("broadcast", { event: "accept" }, ({ payload }) => {
+        if (isFromMe(payload)) return;
+        setStatus((s) => (s === "ringing-outgoing" ? "connecting" : s));
+      })
+      .on("broadcast", { event: "decline" }, ({ payload }) => {
+        if (isFromMe(payload)) return;
+        setCallError("Call declined");
+        reset();
+      })
+      .on("broadcast", { event: "end" }, ({ payload }) => {
+        if (isFromMe(payload)) return;
+        reset();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); signalRef.current = null; };
+  }, [threadId, reset]);
+
+  // Actually join Agora + publish tracks once we move into 'connecting' —
+  // covers both "I just accepted an incoming call" and "the other side just
+  // accepted my outgoing call".
+  useEffect(() => {
+    if (status !== "connecting") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { token, appId, uid } = await fetchAgoraToken({ channel: threadId });
+        const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+        clientRef.current = client;
+
+        client.on("user-published", async (user, mediaType) => {
+          await client.subscribe(user, mediaType);
+          if (mediaType === "video") {
+            setHasRemoteVideo(true);
+            if (remoteVideoElRef.current) user.videoTrack?.play(remoteVideoElRef.current);
+          }
+          if (mediaType === "audio") user.audioTrack?.play();
+        });
+        client.on("user-unpublished", (user, mediaType) => {
+          if (mediaType === "video") setHasRemoteVideo(false);
+        });
+        client.on("user-left", () => reset());
+
+        await client.join(appId, String(threadId), token, uid || null);
+        if (cancelled) { await client.leave(); return; }
+
+        const audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+        localAudioRef.current = audioTrack;
+        const tracks = [audioTrack];
+
+        if (callType === "video") {
+          const videoTrack = await AgoraRTC.createCameraVideoTrack();
+          localVideoRef.current = videoTrack;
+          if (localVideoElRef.current) videoTrack.play(localVideoElRef.current);
+          tracks.push(videoTrack);
+        }
+
+        await client.publish(tracks);
+        if (!cancelled) setStatus("in-call");
+      } catch (e) {
+        if (!cancelled) {
+          setCallError(e.message || "Couldn't connect the call");
+          reset();
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [status, threadId, callType, reset]);
+
+  // Give up on an outgoing call nobody answers.
+  useEffect(() => {
+    if (status !== "ringing-outgoing") { clearRingTimer(); return undefined; }
+    ringTimerRef.current = setTimeout(() => {
+      send("end");
+      setCallError("No answer");
+      reset();
+    }, RING_TIMEOUT_MS);
+    return clearRingTimer;
+  }, [status, send, reset]);
+
+  const startCall = useCallback((type = "audio") => {
+    if (!threadId || !identityRef.current || status !== "idle") return;
+    setCallError("");
+    setCallType(type);
+    setStatus("ringing-outgoing");
+    send("ring", { callType: type });
+  }, [threadId, status, send]);
+
+  const acceptCall = useCallback(() => {
+    if (status !== "ringing-incoming") return;
+    send("accept");
+    setStatus("connecting");
+  }, [status, send]);
+
+  const declineCall = useCallback(() => {
+    if (status !== "ringing-incoming") return;
+    send("decline");
+    reset();
+  }, [status, send, reset]);
+
+  const endCall = useCallback(() => {
+    if (status === "idle") return;
+    send("end");
+    reset();
+  }, [status, send, reset]);
+
+  const toggleMute = useCallback(() => {
+    if (!localAudioRef.current) return;
+    const next = !muted;
+    localAudioRef.current.setEnabled(!next);
+    setMuted(next);
+  }, [muted]);
+
+  const toggleCamera = useCallback(() => {
+    if (!localVideoRef.current) return;
+    const next = !cameraOff;
+    localVideoRef.current.setEnabled(!next);
+    setCameraOff(next);
+  }, [cameraOff]);
+
+  // Hang up if the thread changes or the component using this hook unmounts
+  // (e.g. the chat panel/modal closes) — never leave a call running silently.
+  useEffect(() => () => { cleanupMedia(); }, [threadId, cleanupMedia]);
+
+  return {
+    status, callType, remoteName, muted, cameraOff, callError, hasRemoteVideo,
+    localVideoElRef, remoteVideoElRef,
+    startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
+    dismissError: () => setCallError(""),
+  };
+}
