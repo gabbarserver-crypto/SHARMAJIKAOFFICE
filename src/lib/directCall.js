@@ -23,6 +23,7 @@ import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from
 import { supabase } from "./supabase";
 import { fetchAgoraToken } from "./serverApi";
 import { notify } from "./notify";
+import { logCallStart, logCallOutcome } from "./callLog";
 
 const RING_TIMEOUT_MS = 30000;
 
@@ -53,6 +54,12 @@ export function useDirectCall({ identity }) {
   const localVideoElRef = useRef(null);
   const remoteVideoElRef = useRef(null);
 
+  // Call-log bookkeeping — same scheme as lib/call.js: only the caller's
+  // side writes a row, isCallerRef says whether this instance is it.
+  const isCallerRef = useRef(false);
+  const logIdRef = useRef(null);
+  const answeredAtRef = useRef(null);
+
   const clearRingTimer = () => {
     if (ringTimerRef.current) { clearTimeout(ringTimerRef.current); ringTimerRef.current = null; }
   };
@@ -71,7 +78,14 @@ export function useDirectCall({ identity }) {
     setHasRemoteVideo(false);
   }, []);
 
-  const reset = useCallback(async () => {
+  const reset = useCallback(async (endReason) => {
+    if (isCallerRef.current && logIdRef.current) {
+      const outcome = answeredAtRef.current ? "answered" : endReason === "declined" ? "declined" : "missed";
+      logCallOutcome(logIdRef.current, { outcome, answeredAt: answeredAtRef.current });
+    }
+    isCallerRef.current = false;
+    logIdRef.current = null;
+    answeredAtRef.current = null;
     await cleanupMedia();
     sessionIdRef.current = null;
     remoteIdentityRef.current = null;
@@ -112,6 +126,7 @@ export function useDirectCall({ identity }) {
       .on("broadcast", { event: "ring" }, ({ payload }) => {
         setStatus((s) => {
           if (s !== "idle") return s; // already on a call — no call-waiting for now
+          isCallerRef.current = false;
           sessionIdRef.current = payload.sessionId;
           remoteIdentityRef.current = { type: payload.fromType, id: payload.from };
           setCallType(payload.callType || "audio");
@@ -133,11 +148,11 @@ export function useDirectCall({ identity }) {
       .on("broadcast", { event: "decline" }, ({ payload }) => {
         if (payload.sessionId !== sessionIdRef.current) return;
         setCallError("Call declined");
-        reset();
+        reset("declined");
       })
       .on("broadcast", { event: "end" }, ({ payload }) => {
         if (payload.sessionId !== sessionIdRef.current) return;
-        reset();
+        reset("ended");
       })
       .subscribe();
 
@@ -167,7 +182,7 @@ export function useDirectCall({ identity }) {
         client.on("user-unpublished", (user, mediaType) => {
           if (mediaType === "video") setHasRemoteVideo(false);
         });
-        client.on("user-left", () => reset());
+        client.on("user-left", () => reset("ended"));
 
         await client.join(appId, String(channelName), token, uid || null);
         if (cancelled) { await client.leave(); return; }
@@ -184,11 +199,14 @@ export function useDirectCall({ identity }) {
         }
 
         await client.publish(tracks);
-        if (!cancelled) setStatus("in-call");
+        if (!cancelled) {
+          answeredAtRef.current = new Date();
+          setStatus("in-call");
+        }
       } catch (e) {
         if (!cancelled) {
           setCallError(e.message || "Couldn't connect the call");
-          reset();
+          reset("ended");
         }
       }
     })();
@@ -201,7 +219,7 @@ export function useDirectCall({ identity }) {
     ringTimerRef.current = setTimeout(() => {
       sendTo(remoteIdentityRef.current, "end");
       setCallError("No answer");
-      reset();
+      reset("timeout");
     }, RING_TIMEOUT_MS);
     return clearRingTimer;
   }, [status, sendTo, reset]);
@@ -217,6 +235,11 @@ export function useDirectCall({ identity }) {
     setRemoteName(target.name || "");
     setRemoteIdentity(remoteIdentityRef.current);
     setStatus("ringing-outgoing");
+    isCallerRef.current = true;
+    answeredAtRef.current = null;
+    logCallStart({ source: "direct", caller: identityRef.current, callee: target, callType: type }).then((id) => {
+      logIdRef.current = id;
+    });
     sendTo(target, "ring", { callType: type });
   }, [status, sendTo]);
 
@@ -229,13 +252,13 @@ export function useDirectCall({ identity }) {
   const declineCall = useCallback(() => {
     if (status !== "ringing-incoming") return;
     sendTo(remoteIdentityRef.current, "decline");
-    reset();
+    reset("declined");
   }, [status, sendTo, reset]);
 
   const endCall = useCallback(() => {
     if (status === "idle") return;
     sendTo(remoteIdentityRef.current, "end");
-    reset();
+    reset("ended");
   }, [status, sendTo, reset]);
 
   const toggleMute = useCallback(() => {

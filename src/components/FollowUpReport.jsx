@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Card, StatusBadge } from "./UI";
 import { fetchFollowUpReport } from "../lib/nextService";
 
-// Every Completed application whose service has a configured "Next Service"
-// (Masters > Service > Next Service), 30+ days on from completion — the
+// Every Accepted application whose service has a configured "Next Service"
+// (Masters > Service > Next Service), 30+ days on from acceptance — the
 // point at which the follow-up (e.g. Learner's → Driving Licence) becomes
 // eligible. "Done" means a follow-up draft already exists for it; "Pending"
 // means it's eligible but nobody's created that draft yet.

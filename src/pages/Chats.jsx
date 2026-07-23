@@ -9,6 +9,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import ChatPanel from "../components/ChatPanel";
+import CallLogPanel from "../components/CallLogPanel";
 import { identityFor } from "../lib/chat";
 
 export default function Chats({ staff }) {
@@ -204,13 +205,16 @@ export default function Chats({ staff }) {
             </h3>
           </div>
           {selected ? (
-            <ChatPanel
-              dealerId={selected.dealerId}
-              applicationId={selected.applicationId}
-              identity={identity}
-              emptyLabel="No messages on this application yet."
-              onMessage={load}
-            />
+            <>
+              <CallLogPanel threadId={selected.threadId} dealerId={selected.dealerId} />
+              <ChatPanel
+                dealerId={selected.dealerId}
+                applicationId={selected.applicationId}
+                identity={identity}
+                emptyLabel="No messages on this application yet."
+                onMessage={load}
+              />
+            </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm text-slate-400 dark:text-slate-500">
               Pick a conversation on the left to view and reply.
@@ -258,12 +262,15 @@ export default function Chats({ staff }) {
               </h3>
             </div>
             {selectedDealerThread ? (
-              <ChatPanel
-                dealerId={selectedDealerThread.dealerId}
-                identity={identity}
-                emptyLabel="No general messages with this dealer yet."
-                onMessage={loadDealerThreads}
-              />
+              <>
+                <CallLogPanel threadId={selectedDealerThread.threadId} dealerId={selectedDealerThread.dealerId} />
+                <ChatPanel
+                  dealerId={selectedDealerThread.dealerId}
+                  identity={identity}
+                  emptyLabel="No general messages with this dealer yet."
+                  onMessage={loadDealerThreads}
+                />
+              </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-sm text-slate-400 dark:text-slate-500">
                 Pick a conversation on the left to view and reply.

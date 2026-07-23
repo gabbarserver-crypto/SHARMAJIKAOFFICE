@@ -4,8 +4,10 @@
 //
 //  1. Signaling — a lightweight Supabase Realtime *broadcast* channel per
 //     thread (`call:<threadId>`), just for "ring / accept / decline / end"
-//     events. Nothing here is persisted to a table on purpose — a missed
-//     call just needs a live callback to the other person, not history.
+//     events, and nothing else here is persisted to that channel.
+//     A separate, minimal history of each call attempt (answered/missed/
+//     declined + duration) is written to the call_logs table via
+//     lib/callLog.js — see reset() below and Chats.jsx for where it's read.
 //
 //  2. Media — Agora RTC (agora-rtc-sdk-ng) carries the actual audio/video
 //     once both sides join the same Agora channel (channel name = the chat
@@ -20,6 +22,7 @@ import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from
 import { supabase } from "./supabase";
 import { fetchAgoraToken } from "./serverApi";
 import { notify } from "./notify";
+import { logCallStart, logCallOutcome } from "./callLog";
 
 const RING_TIMEOUT_MS = 30000;
 
@@ -48,6 +51,14 @@ export function useCall({ threadId, identity }) {
   const localVideoElRef = useRef(null);  // DOM node the local camera preview plays into
   const remoteVideoElRef = useRef(null); // DOM node the remote video plays into
 
+  // Call-log bookkeeping — only the caller's side writes a row (see
+  // logCallStart in callLog.js), so isCallerRef is what tells this instance
+  // whether it's the one that should. answeredAtRef marks when the call
+  // actually connected, for the duration written on outcome.
+  const isCallerRef = useRef(false);
+  const logIdRef = useRef(null);
+  const answeredAtRef = useRef(null);
+
   const clearRingTimer = () => {
     if (ringTimerRef.current) { clearTimeout(ringTimerRef.current); ringTimerRef.current = null; }
   };
@@ -66,7 +77,17 @@ export function useCall({ threadId, identity }) {
     setHasRemoteVideo(false);
   }, []);
 
-  const reset = useCallback(async () => {
+  // endReason: 'declined' | 'timeout' | 'ended' — only meaningful for the
+  // caller's own log row; ignored otherwise. Anything that never reached
+  // 'in-call' is logged as 'missed' unless it was an explicit decline.
+  const reset = useCallback(async (endReason) => {
+    if (isCallerRef.current && logIdRef.current) {
+      const outcome = answeredAtRef.current ? "answered" : endReason === "declined" ? "declined" : "missed";
+      logCallOutcome(logIdRef.current, { outcome, answeredAt: answeredAtRef.current });
+    }
+    isCallerRef.current = false;
+    logIdRef.current = null;
+    answeredAtRef.current = null;
     await cleanupMedia();
     setStatus("idle");
     setCallType("audio");
@@ -99,6 +120,7 @@ export function useCall({ threadId, identity }) {
     channel
       .on("broadcast", { event: "ring" }, ({ payload }) => {
         if (isFromMe(payload)) return;
+        isCallerRef.current = false;
         setStatus((s) => {
           if (s !== "idle") return s;
           notify({
@@ -119,11 +141,11 @@ export function useCall({ threadId, identity }) {
       .on("broadcast", { event: "decline" }, ({ payload }) => {
         if (isFromMe(payload)) return;
         setCallError("Call declined");
-        reset();
+        reset("declined");
       })
       .on("broadcast", { event: "end" }, ({ payload }) => {
         if (isFromMe(payload)) return;
-        reset();
+        reset("ended");
       })
       .subscribe();
 
@@ -153,7 +175,7 @@ export function useCall({ threadId, identity }) {
         client.on("user-unpublished", (user, mediaType) => {
           if (mediaType === "video") setHasRemoteVideo(false);
         });
-        client.on("user-left", () => reset());
+        client.on("user-left", () => reset("ended"));
 
         await client.join(appId, String(threadId), token, uid || null);
         if (cancelled) { await client.leave(); return; }
@@ -170,11 +192,14 @@ export function useCall({ threadId, identity }) {
         }
 
         await client.publish(tracks);
-        if (!cancelled) setStatus("in-call");
+        if (!cancelled) {
+          answeredAtRef.current = new Date();
+          setStatus("in-call");
+        }
       } catch (e) {
         if (!cancelled) {
           setCallError(e.message || "Couldn't connect the call");
-          reset();
+          reset("ended");
         }
       }
     })();
@@ -187,7 +212,7 @@ export function useCall({ threadId, identity }) {
     ringTimerRef.current = setTimeout(() => {
       send("end");
       setCallError("No answer");
-      reset();
+      reset("timeout");
     }, RING_TIMEOUT_MS);
     return clearRingTimer;
   }, [status, send, reset]);
@@ -197,6 +222,11 @@ export function useCall({ threadId, identity }) {
     setCallError("");
     setCallType(type);
     setStatus("ringing-outgoing");
+    isCallerRef.current = true;
+    answeredAtRef.current = null;
+    logCallStart({ source: "thread", threadId, caller: identityRef.current, callType: type }).then((id) => {
+      logIdRef.current = id;
+    });
     send("ring", { callType: type });
   }, [threadId, status, send]);
 
@@ -209,13 +239,13 @@ export function useCall({ threadId, identity }) {
   const declineCall = useCallback(() => {
     if (status !== "ringing-incoming") return;
     send("decline");
-    reset();
+    reset("declined");
   }, [status, send, reset]);
 
   const endCall = useCallback(() => {
     if (status === "idle") return;
     send("end");
-    reset();
+    reset("ended");
   }, [status, send, reset]);
 
   const toggleMute = useCallback(() => {

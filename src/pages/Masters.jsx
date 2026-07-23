@@ -447,7 +447,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
               <Field label="Wait Before Reminder (days)">
                 <Input type="number" min="0" value={f.next_service_wait_days} onChange={set("next_service_wait_days")} />
                 <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                  Once an application for this service is Completed for {f.next_service_wait_days || 0}+ day
+                  Once an application for this service is Accepted for {f.next_service_wait_days || 0}+ day
                   {String(f.next_service_wait_days) === "1" ? "" : "s"}, dealers get a "Book Appointment" option that
                   creates a draft for the Next Service above instead — e.g. Learner's Licence → Driving Licence (30
                   days), or Insurance → Fitness (1 day).
@@ -475,7 +475,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
                     />
                     Mandatory
                   </label>
-                  <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-500" title="Only shows up as required once the application is Accepted/Completed — e.g. a PCC Certificate or Learner Licence that only exists after approval">
+                  <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-500" title="Only shows up as required once the application is Accepted — e.g. a PCC Certificate or Learner Licence that only exists after approval">
                     <input
                       type="checkbox"
                       checked={!!d.post_approval}

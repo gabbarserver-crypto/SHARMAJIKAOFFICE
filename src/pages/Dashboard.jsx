@@ -39,7 +39,7 @@ export default function Dashboard() {
         { key: "yesterday_applications", label: "Yesterday's Applications", value: counts.yesterday_applications },
         { key: "draft_applications", label: "Draft Applications", value: counts.draft_applications },
         { key: "pending_applications", label: "Pending (Review/Hold)", value: counts.pending_applications },
-        { key: "completed_applications", label: "Completed / Accepted", value: counts.completed_applications },
+        { key: "completed_applications", label: "Accepted", value: counts.completed_applications },
         { key: "total_dealers", label: "Total Dealers", value: counts.total_dealers },
         { key: "active_dealers", label: "Active Dealers", value: counts.active_dealers },
       ]

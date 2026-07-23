@@ -12,7 +12,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 // build it once from whatever list of applications the page already has
 // loaded, rather than an extra query per row.
 export function isEligibleForAppointment(app, convertedSourceIds) {
-  if (app.status !== "Completed") return false;
+  if (app.status !== "Accepted") return false;
   if (!app.services?.next_service_id) return false;
   if (!app.completed_at) return false;
   if (convertedSourceIds.has(app.id)) return false;
@@ -89,7 +89,7 @@ export async function copyForwardDocuments(sourceAppId, newAppId) {
 }
 
 // Powers the "LL Follow-ups" report (Reports page for admin/staff, its own
-// tab in the Dealer Portal): every Completed application whose service has
+// tab in the Dealer Portal): every Accepted application whose service has
 // a Next Service configured, with how many days it's been and whether a
 // follow-up draft has already been created (Done) or not (Pending) — the
 // same "created a draft = done" rule used by the inline Book Appointment
@@ -99,7 +99,7 @@ export async function fetchFollowUpReport(dealerId = null) {
   let query = supabase
     .from("applications")
     .select("id, draft_code, application_no, applicant_name, dealer_id, completed_at, source_application_id, dealers(name, short_name), services!inner(parent_service, short_name, next_service_id)")
-    .eq("status", "Completed")
+    .eq("status", "Accepted")
     .not("services.next_service_id", "is", null)
     .not("completed_at", "is", null)
     .order("completed_at", { ascending: true });
