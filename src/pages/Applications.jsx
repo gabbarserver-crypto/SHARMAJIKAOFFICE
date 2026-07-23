@@ -15,7 +15,7 @@ import PCCLetterModal from "../components/PCCLetterModal";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 
 
-const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted", "Completed"];
+const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted"];
 
 // Columns a staff member can hide/show via the "Columns" button. Draft ID
 // and Status stay pinned (always shown) since they're the primary way to
@@ -432,10 +432,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // Keep an application_date that was already set (e.g. auto-filled when it
     // moved to Under Review, or hand-edited) rather than clobbering it here.
     const applicationDate = app.application_date || new Date().toISOString().slice(0, 10);
+    // Accepted is now the final status — approval already implies the physical
+    // process is fulfilled, so this is also what starts the 30-day "eligible
+    // for next service" clock (write once, don't clobber an existing value).
+    const updatePayload = { status: "Accepted", remarks, application_date: applicationDate };
+    if (!app.completed_at) updatePayload.completed_at = new Date().toISOString();
 
     const { error } = await supabase
       .from("applications")
-      .update({ status: "Accepted", remarks, application_date: applicationDate })
+      .update(updatePayload)
       .eq("id", app.id);
     if (error) {
       return { ok: false, message: "Failed: " + error.message };
@@ -471,7 +476,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // for a record that no longer exists.
   const deleteApplication = async (app) => {
     if (!window.confirm(`Delete application ${app.draft_code} (${app.applicant_name})? This cannot be undone.`)) return;
-    if (app.status === "Accepted" || app.status === "Completed") {
+    if (app.status === "Accepted") {
       await supabase.from("ledger_transactions").delete().eq("dealer_id", app.dealer_id).eq("voucher_no", app.draft_code);
     }
     await supabase.from("application_documents").delete().eq("application_id", app.id);
@@ -500,11 +505,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // that's already set (auto-filled earlier, or hand-edited in the table).
     if (newStatus === "Under Review" && !selected.application_date) {
       updatePayload.application_date = new Date().toISOString().slice(0, 10);
-    }
-    // Completed is when the 30-day "eligible for next service" clock starts
-    // — write it once, don't clobber it if somehow re-marked.
-    if (newStatus === "Completed" && !selected.completed_at) {
-      updatePayload.completed_at = new Date().toISOString();
     }
 
     const { error } = await supabase
@@ -1533,7 +1533,7 @@ const IMPORT_STATUS_MAP = {
   rejected: "Rejected",
   accepted: "Accepted",
   approved: "Accepted", // display label round-trips back to the stored value
-  completed: "Completed",
+  completed: "Accepted", // legacy value — Completed was folded into Accepted
 };
 
 function normalizeHeader(h) {
@@ -1703,11 +1703,11 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
         return;
       }
 
-      // Rows imported directly as Accepted/Completed skip the normal
-      // "Approve" action (and its ledger debit) entirely, so post the
-      // matching ledger entry here — same shape as approveApplication —
-      // for any imported row that's already at that stage.
-      const preApproved = (insertedRows || []).filter((r) => r.status === "Accepted" || r.status === "Completed");
+      // Rows imported directly as Accepted skip the normal "Approve" action
+      // (and its ledger debit) entirely, so post the matching ledger entry
+      // here — same shape as approveApplication — for any imported row
+      // that's already at that stage.
+      const preApproved = (insertedRows || []).filter((r) => r.status === "Accepted");
       if (preApproved.length) {
         const ledgerRows = preApproved.map((r) => ({
           dealer_id: r.dealer_id,
@@ -2092,14 +2092,6 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                 >
                   Approve
                 </PrimaryButton>
-                {app.status === "Accepted" && (
-                  <GhostButton
-                    onClick={() => onStatusChange("Completed", remarks)}
-                    title="Marks the physical process as finished — starts the 30-day clock for booking a follow-up appointment, if this service has a Next Service configured"
-                  >
-                    Mark Completed
-                  </GhostButton>
-                )}
                 <DangerButton onClick={() => onStatusChange("Rejected", remarks)}>Reject</DangerButton>
                 {isAdmin && (
                   <DangerButton
@@ -2203,7 +2195,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           )}
           {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
           {(app.docs || [])
-            .filter((d) => !d.post_approval || app.status === "Accepted" || app.status === "Completed")
+            .filter((d) => !d.post_approval || app.status === "Accepted")
             .map((d) => (
               <div key={d.id}>
                 {/learn/i.test(d.name) && app.application_no && (

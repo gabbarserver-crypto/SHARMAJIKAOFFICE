@@ -461,7 +461,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
 const DEALER_STATUS_GROUPS = {
   Draft: (s) => s === "Draft Submitted",
   Process: (s) => s === "Under Review" || s === "On Hold",
-  Approved: (s) => s === "Accepted" || s === "Completed",
+  Approved: (s) => s === "Accepted",
 };
 
 function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
@@ -735,7 +735,7 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
     load();
   };
 
-  const isApproved = application.status === "Accepted" || application.status === "Completed";
+  const isApproved = application.status === "Accepted";
   // Post-approval documents (e.g. a PCC Certificate or Learner Licence PDF
   // that literally doesn't exist until approval) stay hidden until the
   // application actually reaches that stage — showing them earlier would

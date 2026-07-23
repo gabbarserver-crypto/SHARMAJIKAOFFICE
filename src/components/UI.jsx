@@ -19,7 +19,6 @@ export const STATUS_STYLES = {
   "On Hold": "bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-500/15 dark:text-rose-400 dark:border-rose-500/30",
   Rejected: "bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-500/15 dark:text-rose-400 dark:border-rose-500/30",
   Accepted: "bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30",
-  Completed: "bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30",
 };
 
 // Subtle full-row background tint per status, used for table rows in
@@ -30,7 +29,6 @@ export const ROW_STATUS_TINT = {
   "On Hold": "bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-500/5 dark:hover:bg-rose-500/10",
   Rejected: "bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-500/5 dark:hover:bg-rose-500/10",
   Accepted: "bg-emerald-50/60 hover:bg-emerald-50 dark:bg-emerald-500/5 dark:hover:bg-emerald-500/10",
-  Completed: "bg-emerald-50/60 hover:bg-emerald-50 dark:bg-emerald-500/5 dark:hover:bg-emerald-500/10",
 };
 
 // Stored status values stay as-is everywhere (filters, DB writes, etc.) —
