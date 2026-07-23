@@ -16,7 +16,7 @@
 // Usage: const call = useCall({ threadId, identity }); then render based on
 // call.status and wire its buttons up — see ChatPanel.jsx.
 import { useCallback, useEffect, useRef, useState } from "react";
-import AgoraRTC from "agora-rtc-sdk-ng";
+import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from "agora-rtc-sdk-ng/esm";
 import { supabase } from "./supabase";
 import { fetchAgoraToken } from "./serverApi";
 
@@ -129,7 +129,7 @@ export function useCall({ threadId, identity }) {
     (async () => {
       try {
         const { token, appId, uid } = await fetchAgoraToken({ channel: threadId });
-        const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+        const client = createClient({ mode: "rtc", codec: "vp8" });
         clientRef.current = client;
 
         client.on("user-published", async (user, mediaType) => {
@@ -148,12 +148,12 @@ export function useCall({ threadId, identity }) {
         await client.join(appId, String(threadId), token, uid || null);
         if (cancelled) { await client.leave(); return; }
 
-        const audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+        const audioTrack = await createMicrophoneAudioTrack();
         localAudioRef.current = audioTrack;
         const tracks = [audioTrack];
 
         if (callType === "video") {
-          const videoTrack = await AgoraRTC.createCameraVideoTrack();
+          const videoTrack = await createCameraVideoTrack();
           localVideoRef.current = videoTrack;
           if (localVideoElRef.current) videoTrack.play(localVideoElRef.current);
           tracks.push(videoTrack);
