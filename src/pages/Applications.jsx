@@ -43,11 +43,13 @@ const TOGGLEABLE_COLUMNS = [
 ];
 
 // Columns a restricted "Staff View" is locked to — everything except the
-// financial / dealer-identifying columns (Amount, Dealer, Agency Fee,
-// Profit). Staff in this view can't toggle those back on (see `restricted`
-// prop on the Applications component below).
+// financial columns (Amount, Agency Fee, Profit). Dealer name is shown so
+// staff can tell whose application they're looking at; whether it's
+// editable there follows the same can_edit permission as every other cell
+// (via CanEditContext), same as before. Staff in this view can't toggle any
+// of these columns back on/off (see `restricted` prop on Applications).
 const STAFF_VISIBLE_KEYS = [
-  "applicationDate", "service", "applicant", "dob", "rtoFee", "pccFee",
+  "applicationDate", "dealer", "service", "applicant", "dob", "rtoFee", "pccFee",
   "application", "lldl", "pccno", "rto", "agency", "slot", "mobile", "remark",
 ];
 
