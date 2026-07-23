@@ -16,9 +16,13 @@ import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
 import { createDealerStaffLogin } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { useDarkMode } from "../lib/theme";
-import { Sun, Moon, Fingerprint } from "lucide-react";
+import { Sun, Moon, Fingerprint, Download } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
+
+// Same file the Dashboard's "Download App" card points to (see
+// src/pages/Dashboard.jsx) — one APK, linked from every portal.
+const APK_PATH = "/downloads/sjo-app.apk";
 
 const TABS = ["Applications", "Chats", "Ledger"];
 
@@ -168,6 +172,15 @@ export default function DealerPortal({ dealer, identity, onLogout }) {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <a
+            href={APK_PATH}
+            download
+            title="Download Android App"
+            aria-label="Download Android App"
+            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+          >
+            <Download size={16} />
+          </a>
           <button
             onClick={setUpPasskey}
             title="Set up Fingerprint / Face ID login on this device"
