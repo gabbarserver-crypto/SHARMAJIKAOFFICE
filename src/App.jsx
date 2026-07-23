@@ -13,6 +13,10 @@ import Settings from "./pages/Settings";
 import Chats from "./pages/Chats";
 import DealerPortal from "./pages/DealerPortal";
 import StaffChatWidget from "./components/StaffChatWidget";
+import GlobalCallOverlay from "./components/GlobalCallOverlay";
+import NotificationToaster from "./components/NotificationToaster";
+import { useDirectCall } from "./lib/directCall";
+import { notify, requestNotificationPermission } from "./lib/notify";
 import { identityFor, countOpenThreads } from "./lib/chat";
 import PinUnlock from "./pages/PinUnlock";
 import SetupPinPrompt from "./components/SetupPinPrompt";
@@ -28,7 +32,7 @@ const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
   { key: "applications", label: "Applications", Component: Applications },
   { key: "staffApplications", label: "Staff View", Component: StaffApplications },
-  { key: "chats", label: "Chats", Component: Chats },
+  { key: "chats", label: "Call/Chat", Component: Chats },
   { key: "masters", label: "Masters", Component: Masters },
   { key: "payments", label: "Payments", Component: Payments },
   { key: "ledger", label: "Ledger", Component: Ledger },
@@ -130,16 +134,54 @@ export default function App() {
     // Recheck periodically...
     const interval = setInterval(refreshPendingChatCount, 30000);
     // ...and immediately whenever any new message comes in anywhere, so the
-    // badge doesn't wait up to 30s to reflect a message that just arrived.
+    // badge doesn't wait up to 30s to reflect a message that just arrived —
+    // and pop a toast (+ sound) for it too, as long as it isn't our own
+    // message coming back through the realtime feed.
     const channel = supabase
       .channel(`chat_messages:sidebar-badge:${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, refreshPendingChatCount)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, (payload) => {
+        refreshPendingChatCount();
+        const m = payload.new;
+        if (m && m.sender_type !== "staff") {
+          notify({
+            kind: "chat",
+            title: m.sender_name || "New message",
+            body: m.body || (m.attachment_url ? "Sent an image" : ""),
+            onClick: () => setActive("chats"),
+          });
+        }
+      })
+      .subscribe();
+    // New draft applications — a dealer submitting a new application is
+    // work staff needs to pick up, so it gets the same toast+sound
+    // treatment as an incoming chat message.
+    const draftsChannel = supabase
+      .channel(`applications:new-draft:${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "applications" }, (payload) => {
+        const a = payload.new;
+        if (a?.status === "Draft Submitted") {
+          notify({
+            kind: "draft",
+            title: "New draft application",
+            body: `${a.draft_code || a.application_no || ""} — ${a.applicant_name || ""}`.trim(),
+            onClick: () => setActive("applications"),
+          });
+        }
+      })
       .subscribe();
     return () => {
       clearInterval(interval);
       supabase.removeChannel(channel);
+      supabase.removeChannel(draftsChannel);
     };
   }, [staff, refreshPendingChatCount]);
+
+  // Ask for browser/OS notification permission once, right after sign-in —
+  // covers the "tab isn't focused" case in lib/notify.js. Harmless no-op on
+  // platforms that don't support the Notification API.
+  useEffect(() => {
+    if (staff || dealer || dealerStaff) requestNotificationPermission();
+  }, [staff, dealer, dealerStaff]);
 
   // The single source of truth for "are we actually allowed in" —
   // this only ever runs to completion BEFORE we show the Dashboard,
@@ -267,6 +309,18 @@ export default function App() {
 
   const userLabel = staff?.full_name || dealer?.name || dealerStaff?.full_name || "there";
 
+  // One identity for whoever is signed in — staff, a dealer's own login, or
+  // one of a dealer's sub-staff logins. Used both for chat (as before) and
+  // now for direct person-to-person calling (see lib/directCall.js). The
+  // useDirectCall() listener has to be mounted unconditionally, every
+  // render, so it's up here — above the early returns below — otherwise a
+  // staff member on, say, the Applications tab would never hear an
+  // incoming call ring at all.
+  const myIdentity = staff
+    ? identityFor({ staff })
+    : identityFor({ dealer: dealerStaff ? null : dealer, dealerStaff });
+  const directCall = useDirectCall({ identity: myIdentity });
+
 
   if (passwordRecovery) {
     return <ResetPassword onDone={() => { setPasswordRecovery(false); supabase.auth.signOut(); }} />;
@@ -296,10 +350,11 @@ export default function App() {
   );
 
   if (dealer) {
-    const identity = identityFor({ dealer: dealerStaff ? null : dealer, dealerStaff });
     return (
       <>
-        <DealerPortal dealer={dealer} identity={identity} onLogout={() => supabase.auth.signOut()} />
+        <DealerPortal dealer={dealer} identity={myIdentity} call={directCall} onLogout={() => supabase.auth.signOut()} />
+        <GlobalCallOverlay call={directCall} />
+        <NotificationToaster />
         {pinSetupOverlay}
       </>
     );
@@ -318,14 +373,16 @@ export default function App() {
         onLogout={() => supabase.auth.signOut()}
       />
       <main className="flex-1 p-8 overflow-y-auto">
-        <Active staff={staff} canEdit={canEditActive} canApprove={canApproveActive} initialEntityId={initialEntityId} />
+        <Active staff={staff} canEdit={canEditActive} canApprove={canApproveActive} initialEntityId={initialEntityId} call={directCall} />
       </main>
       <StaffChatWidget
         staff={staff}
-        identity={identityFor({ staff })}
+        identity={myIdentity}
         pendingCount={pendingChatCount}
         onExpand={() => setActive("chats")}
       />
+      <GlobalCallOverlay call={directCall} />
+      <NotificationToaster />
       {pinSetupOverlay}
     </div>
   );
