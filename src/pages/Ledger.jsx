@@ -47,6 +47,8 @@ export default function Ledger({ only, initialEntityId } = {}) {
   const [entityName, setEntityName] = useState("");
   const [sortKey, setSortKey] = useState("created_at");
   const [sortDir, setSortDir] = useState("desc"); // newest first by default
+  const [periodFrom, setPeriodFrom] = useState(""); // yyyy-mm-dd, empty = no lower bound
+  const [periodTo, setPeriodTo] = useState(""); // yyyy-mm-dd, empty = no upper bound
 
   // Running balance is a property of *when* a transaction happened, not of
   // whatever order it's currently displayed in — so it's always computed by
@@ -126,6 +128,44 @@ export default function Ledger({ only, initialEntityId } = {}) {
   );
   const runningBalance = summary?.running_balance ?? computedBalance;
 
+  // Available Limit = Credit Limit + Running Balance. Running balance is
+  // negative when the dealer owes money and positive when they're in
+  // credit, so adding it (not subtracting it) correctly shrinks the
+  // available limit as debt grows and grows it when they're prepaid.
+  // Computed here instead of trusted from the summary view, since that
+  // view was doing Credit Limit - Running Balance and produced a bogus
+  // (inflated) number whenever running_balance was negative.
+  const availableLimit = Number(summary?.credit_limit || 0) + Number(runningBalance || 0);
+
+  // Rows within the selected date range (inclusive). Each row keeps the
+  // running_balance computed from *all* history in sortedTxns above — a
+  // date filter narrows which rows are shown, it doesn't reset the
+  // opening balance to zero.
+  const periodTxns = useMemo(() => {
+    if (!periodFrom && !periodTo) return sortedTxns;
+    const from = periodFrom ? new Date(periodFrom + "T00:00:00") : null;
+    const to = periodTo ? new Date(periodTo + "T23:59:59") : null;
+    return sortedTxns.filter((t) => {
+      const d = new Date(t.created_at);
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    });
+  }, [sortedTxns, periodFrom, periodTo]);
+
+  const periodTotals = useMemo(
+    () =>
+      periodTxns.reduce(
+        (acc, t) => {
+          if (t.type === "debit") acc.debit += Number(t.amount || 0);
+          else acc.credit += Number(t.amount || 0);
+          return acc;
+        },
+        { debit: 0, credit: 0 }
+      ),
+    [periodTxns]
+  );
+
   return (
     <div>
       {only !== "agency" && (
@@ -172,7 +212,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
               <button onClick={() => window.print()} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
                 🖶 Print
               </button>
-              <button onClick={() => exportLedgerCSV(entityName, sortedTxns)} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
+              <button onClick={() => exportLedgerCSV(entityName, periodTxns)} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
                 ⬇ Export CSV
               </button>
             </div>
@@ -180,7 +220,37 @@ export default function Ledger({ only, initialEntityId } = {}) {
           {/* Print-only heading — the buttons/nav above are hidden via .no-print, so
               a printed page needs its own plain-text title instead. */}
           <h3 className="hidden print:block text-lg font-bold mb-4">{entityName || "Ledger"} — Ledger Statement</h3>
-          <div className="grid sm:grid-cols-3 gap-4 mb-5">
+          <div className="no-print flex items-end justify-between flex-wrap gap-3 mb-4">
+            <div className="flex items-end gap-3">
+              <div>
+                <label className="block text-xs text-slate-400 dark:text-slate-500 mb-1">From</label>
+                <input
+                  type="date"
+                  value={periodFrom}
+                  onChange={(e) => setPeriodFrom(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 dark:text-slate-500 mb-1">To</label>
+                <input
+                  type="date"
+                  value={periodTo}
+                  onChange={(e) => setPeriodTo(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+                />
+              </div>
+              {(periodFrom || periodTo) && (
+                <button
+                  onClick={() => { setPeriodFrom(""); setPeriodTo(""); }}
+                  className="text-sm font-semibold text-slate-500 hover:text-blue-600 pb-1.5"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="grid sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-5">
             <Card>
               <p className="text-xs text-slate-400 dark:text-slate-500">Running Balance</p>
               <p className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-1">₹{Number(runningBalance || 0).toLocaleString("en-IN")}</p>
@@ -194,10 +264,18 @@ export default function Ledger({ only, initialEntityId } = {}) {
                 </Card>
                 <Card>
                   <p className="text-xs text-slate-400 dark:text-slate-500">Available Limit</p>
-                  <p className="text-xl font-bold text-emerald-600 mt-1">₹{Number(summary.available_limit || 0).toLocaleString("en-IN")}</p>
+                  <p className="text-xl font-bold text-emerald-600 mt-1">₹{availableLimit.toLocaleString("en-IN")}</p>
                 </Card>
               </>
             )}
+            <Card>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Total Debit{(periodFrom || periodTo) ? " (period)" : ""}</p>
+              <p className="text-xl font-bold text-rose-600 mt-1">₹{periodTotals.debit.toLocaleString("en-IN")}</p>
+            </Card>
+            <Card>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Total Credit{(periodFrom || periodTo) ? " (period)" : ""}</p>
+              <p className="text-xl font-bold text-emerald-600 mt-1">₹{periodTotals.credit.toLocaleString("en-IN")}</p>
+            </Card>
           </div>
 
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
@@ -213,7 +291,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
                 </tr>
               </thead>
               <tbody>
-                {sortedTxns.map((t) => (
+                {periodTxns.map((t) => (
                   <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(t.created_at).toLocaleDateString()}</td>
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.voucher_no}</td>
@@ -229,7 +307,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
                     </td>
                   </tr>
                 ))}
-                {sortedTxns.length === 0 && (
+                {periodTxns.length === 0 && (
                   <tr><td colSpan={6} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
                 )}
               </tbody>
@@ -304,9 +382,13 @@ function SundryHead({ title, subtitle, entityMode, table, summaryTable, summaryK
   // Agencies do have their own status field, so that's used as-is.
   const activeLabel = (row) => {
     if (entityMode === "agency") return row.status || "Active";
-    const avail = balances[row.id];
-    return avail !== undefined && Number(avail) <= 0 ? "On Hold" : "Active";
+    const bal = balances[row.id];
+    if (bal === undefined) return "Active";
+    const avail = Number(row.credit_limit || 0) + Number(bal || 0);
+    return avail <= 0 ? "On Hold" : "Active";
   };
+
+  const totalBalance = Object.values(balances).reduce((acc, b) => acc + Number(b || 0), 0);
 
   return (
     <Card
@@ -316,7 +398,15 @@ function SundryHead({ title, subtitle, entityMode, table, summaryTable, summaryK
             <span>{title}</span>
             <span className="block text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5">{subtitle}</span>
           </div>
-          <GhostButton onClick={() => { setEditing(null); setOpen(true); }}>+ New</GhostButton>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <span className="block text-[11px] font-normal text-slate-400 dark:text-slate-500">Total Balance</span>
+              <span className={`block text-sm font-bold ${totalBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+                ₹{totalBalance.toLocaleString("en-IN")}
+              </span>
+            </div>
+            <GhostButton onClick={() => { setEditing(null); setOpen(true); }}>+ New</GhostButton>
+          </div>
         </div>
       }
       className={className}
