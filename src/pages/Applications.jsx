@@ -227,6 +227,21 @@ function serviceLabel(s) {
   if (!s) return "";
   return s.short_name || s.parent_service;
 }
+// Any service whose name mentions PCC (e.g. "PCC" itself, or
+// "LL RIC (with PCC Required)") gets auto-tagged with the "PCC" RTO below,
+// so filtering/searching RTO="PCC" surfaces every PCC-related application
+// in one place — not just ones on a real RTO's docket.
+function isPccRelatedService(service) {
+  const label = `${service?.parent_service || ""} ${service?.short_name || ""}`.toLowerCase();
+  return label.includes("pcc");
+}
+function findPccRto(rtoList) {
+  return (
+    rtoList.find((r) => (r.name || "").trim().toLowerCase() === "pcc") ||
+    rtoList.find((r) => (r.name || "").toLowerCase().includes("pcc")) ||
+    null
+  );
+}
 function dealerLabel(d) {
   if (!d) return "";
   return d.short_name || d.name;
@@ -572,14 +587,20 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // those joined objects, not the raw *_id, so without this they'd show
   // stale requirements until the next full page reload.
   const updateDealerOrService = async (id, field, value, list) => {
-    const { error } = await supabase.from("applications").update({ [field]: value }).eq("id", id);
+    const picked = list.find((item) => item.id === value);
+    // Changing the service to a PCC-related one (e.g. "PCC" or "LL RIC
+    // (with PCC Required)") auto-tags RTO as "PCC" too — see
+    // isPccRelatedService/findPccRto above.
+    const extra = field === "service_id" && isPccRelatedService(picked)
+      ? { rto_id: findPccRto(rtoList)?.id || null }
+      : {};
+    const { error } = await supabase.from("applications").update({ [field]: value, ...extra }).eq("id", id);
     if (error) {
       setToast("Failed to update: " + error.message);
       return;
     }
-    const picked = list.find((item) => item.id === value);
     const joinedKey = field === "dealer_id" ? "dealers" : "services";
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value, [joinedKey]: picked || r[joinedKey] } : r)));
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value, ...extra, [joinedKey]: picked || r[joinedKey] } : r)));
   };
 
   const openSarathi = async (row) => {
@@ -661,6 +682,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setToast("Failed: " + codeError.message);
       return;
     }
+    const selectedService = serviceList.find((s) => s.id === form.service_id);
+    const autoRtoId = isPccRelatedService(selectedService) ? findPccRto(rtoList)?.id || null : null;
     const { data: newApp, error } = await supabase.from("applications").insert({
       draft_code: draftCode,
       dealer_id: form.dealer_id,
@@ -674,6 +697,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       stay_since: form.stay_since || null,
       service_answers: form.service_answers && Object.keys(form.service_answers).length ? form.service_answers : null,
       status: form.status,
+      rto_id: autoRtoId,
     }).select().single();
     if (error) {
       setToast("Failed to create: " + error.message);
