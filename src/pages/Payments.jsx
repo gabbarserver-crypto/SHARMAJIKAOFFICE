@@ -93,6 +93,7 @@ export default function Payments({ staff } = {}) {
       supabase.from("ledger_transactions").insert({
         dealer_id: form.dealer_id,
         voucher_no: voucherNo,
+        payment_id: paymentRow.id,
         type: "credit",
         amount,
         description: `Payment received — ${form.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${form.remarks ? ` · ${form.remarks}` : ""}`,
@@ -104,6 +105,7 @@ export default function Payments({ staff } = {}) {
         supabase.from("agency_ledger_transactions").insert({
           agency_id: form.paid_at_agency_id,
           voucher_no: voucherNo,
+          payment_id: paymentRow.id,
           type: "credit",
           amount,
           description: `Payment collected on behalf of ${dealerName || "dealer"} — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`,
@@ -125,16 +127,40 @@ export default function Payments({ staff } = {}) {
   };
 
   // Admin-only: deleting a payment also removes the ledger entries it
-  // posted (matched on the same voucher_no used when it was created —
-  // the payment's own reference no., or the PMT-<id> fallback) so the
-  // dealer/agency ledgers stay in sync with the payments list.
+  // posted. Matches by payment_id (set on every payment going forward) and
+  // falls back to voucher_no (the payment's reference no., or a PMT-<id>
+  // fallback) for payments recorded before payment_id existed. Unlike the
+  // previous version, this checks what actually got deleted — a delete
+  // that matches zero rows doesn't error, so silently trusting it is how
+  // a payment could disappear while its ledger entry stayed behind.
   const deletePayment = async (p) => {
     if (!window.confirm(`Delete this ₹${Number(p.amount).toLocaleString("en-IN")} payment from ${p.dealers?.name || "this dealer"}? This also removes its ledger entries.`)) return;
     const voucherNo = p.reference_no?.trim() || `PMT-${p.id}`;
-    await supabase.from("ledger_transactions").delete().eq("dealer_id", p.dealer_id).eq("voucher_no", voucherNo);
+
+    const deleteLedgerRows = async (table, entityCol, entityId) => {
+      let { data, error } = await supabase.from(table).delete().eq("payment_id", p.id).select("id");
+      if (!error && (!data || data.length === 0)) {
+        // Pre-payment_id row — fall back to the old voucher_no match.
+        ({ data, error } = await supabase.from(table).delete().eq(entityCol, entityId).eq("voucher_no", voucherNo).select("id"));
+      }
+      return { data, error };
+    };
+
+    const dealerResult = await deleteLedgerRows("ledger_transactions", "dealer_id", p.dealer_id);
+    let agencyResult = { data: [], error: null };
     if (p.paid_at_agency_id) {
-      await supabase.from("agency_ledger_transactions").delete().eq("agency_id", p.paid_at_agency_id).eq("voucher_no", voucherNo);
+      agencyResult = await deleteLedgerRows("agency_ledger_transactions", "agency_id", p.paid_at_agency_id);
     }
+
+    if (dealerResult.error || agencyResult.error) {
+      setToast("Failed to remove ledger entries: " + (dealerResult.error || agencyResult.error).message + " — payment was NOT deleted.");
+      return;
+    }
+    if (!dealerResult.data || dealerResult.data.length === 0) {
+      setToast("Couldn't find this payment's ledger entry to remove — payment was NOT deleted. Please check the dealer's ledger manually.");
+      return;
+    }
+
     const { error } = await supabase.from("payments").delete().eq("id", p.id);
     if (error) {
       setToast("Failed to delete: " + error.message);
@@ -145,8 +171,9 @@ export default function Payments({ staff } = {}) {
   };
 
   // Admin-only: saves an edited amount/mode/reference/remarks and updates
-  // the matching ledger entry (matched the same way as delete, above) so
-  // the ledger reflects the corrected figure rather than drifting from it.
+  // the matching ledger entry — payment_id first, voucher_no fallback for
+  // pre-payment_id rows (see deletePayment above for why the fallback
+  // exists and why zero-row results are treated as a failure, not success).
   const savePaymentEdit = async (edited) => {
     const original = editingPayment;
     const oldVoucherNo = original.reference_no?.trim() || `PMT-${original.id}`;
@@ -165,23 +192,35 @@ export default function Payments({ staff } = {}) {
       return;
     }
     const agencyName = agencies.find((a) => a.id === original.paid_at_agency_id)?.name;
-    await supabase
-      .from("ledger_transactions")
-      .update({
+
+    const updateLedgerRow = async (table, entityCol, entityId, patch) => {
+      let { data, error } = await supabase.from(table).update(patch).eq("payment_id", original.id).select("id");
+      if (!error && (!data || data.length === 0)) {
+        ({ data, error } = await supabase.from(table).update(patch).eq(entityCol, entityId).eq("voucher_no", oldVoucherNo).select("id"));
+      }
+      return { data, error };
+    };
+
+    const dealerResult = await updateLedgerRow("ledger_transactions", "dealer_id", original.dealer_id, {
+      amount: parseFloat(edited.amount),
+      voucher_no: newVoucherNo,
+      description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
+    });
+    let agencyResult = { data: [], error: null };
+    if (original.paid_at_agency_id) {
+      agencyResult = await updateLedgerRow("agency_ledger_transactions", "agency_id", original.paid_at_agency_id, {
         amount: parseFloat(edited.amount),
         voucher_no: newVoucherNo,
-        description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
-      })
-      .eq("dealer_id", original.dealer_id)
-      .eq("voucher_no", oldVoucherNo);
-    if (original.paid_at_agency_id) {
-      await supabase
-        .from("agency_ledger_transactions")
-        .update({ amount: parseFloat(edited.amount), voucher_no: newVoucherNo })
-        .eq("agency_id", original.paid_at_agency_id)
-        .eq("voucher_no", oldVoucherNo);
+      });
     }
-    setToast("Payment updated");
+
+    if (dealerResult.error || agencyResult.error) {
+      setToast("Payment updated, but its ledger entry failed to sync: " + (dealerResult.error || agencyResult.error).message);
+    } else if (!dealerResult.data || dealerResult.data.length === 0) {
+      setToast("Payment updated, but couldn't find its ledger entry to update — please check the dealer's ledger manually.");
+    } else {
+      setToast("Payment updated");
+    }
     setEditingPayment(null);
     loadRecent();
   };
@@ -412,6 +451,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           supabase.from("ledger_transactions").insert({
             dealer_id: payload.dealer_id,
             voucher_no: voucherNo,
+            payment_id: paymentRow.id,
             type: "credit",
             amount: payload.amount,
             description: `Payment received (import) — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
@@ -422,6 +462,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             supabase.from("agency_ledger_transactions").insert({
               agency_id: payload.agency_id,
               voucher_no: voucherNo,
+              payment_id: paymentRow.id,
               type: "credit",
               amount: payload.amount,
               description: `Payment collected on behalf of ${payload.dealer_name || "dealer"} (import) — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
