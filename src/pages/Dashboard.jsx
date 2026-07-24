@@ -24,11 +24,22 @@ const TILE_STYLES = {
 
 export default function Dashboard() {
   const [counts, setCounts] = useState(null);
+  const [balances, setBalances] = useState({ dealer_total: null, agency_total: null });
 
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from("dashboard_counts").select("*").maybeSingle();
       setCounts(data);
+    })();
+    (async () => {
+      const [{ data: dealerSummaries }, { data: agencySummaries }] = await Promise.all([
+        supabase.from("dealer_ledger_summary").select("running_balance"),
+        supabase.from("agency_ledger_summary").select("running_balance"),
+      ]);
+      setBalances({
+        dealer_total: (dealerSummaries || []).reduce((acc, s) => acc + Number(s.running_balance || 0), 0),
+        agency_total: (agencySummaries || []).reduce((acc, s) => acc + Number(s.running_balance || 0), 0),
+      });
     })();
   }, []);
 
@@ -62,6 +73,21 @@ export default function Dashboard() {
             </div>
           );
         })}
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-4 mt-4">
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
+          <p className="text-xs text-slate-400 dark:text-slate-500">Total Dealer Balance</p>
+          <p className={`text-2xl font-bold mt-1 ${Number(balances.dealer_total) < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+            {balances.dealer_total === null ? "—" : `₹${balances.dealer_total.toLocaleString("en-IN")}`}
+          </p>
+        </div>
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
+          <p className="text-xs text-slate-400 dark:text-slate-500">Total Agency Balance</p>
+          <p className={`text-2xl font-bold mt-1 ${Number(balances.agency_total) < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+            {balances.agency_total === null ? "—" : `₹${balances.agency_total.toLocaleString("en-IN")}`}
+          </p>
+        </div>
       </div>
 
       <div className="mt-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4">

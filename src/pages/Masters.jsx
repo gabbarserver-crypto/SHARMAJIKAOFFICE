@@ -533,8 +533,8 @@ function DealerMaster({ notify, call }) {
     setRows(data || []);
     // Best-effort — if the summary view isn't reachable for some reason, the
     // Status column just falls back to blank rather than breaking the list.
-    const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, available_limit");
-    setSummaryByDealer(Object.fromEntries((summaries || []).map((s) => [s.dealer_id, s.available_limit])));
+    const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, credit_limit, running_balance");
+    setSummaryByDealer(Object.fromEntries((summaries || []).map((s) => [s.dealer_id, Number(s.credit_limit || 0) + Number(s.running_balance || 0)])));
   }, []);
   useEffect(() => { load(); }, [load]);
 
