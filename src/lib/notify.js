@@ -51,6 +51,23 @@ export function playPing() {
   }
 }
 
+// A repeating ringtone (reuses the same ping, looped) for incoming calls —
+// GlobalCallOverlay's banner has no sound of its own (the call's `notify()`
+// is fired with silent:true, since the banner + accept/decline UI is meant
+// to *be* the notification), so without this an incoming call is silent
+// unless you're already looking at the screen. Call stopRingtone() the
+// moment the call leaves 'ringing-incoming' (answered, declined, timed out,
+// or the caller hung up) — it does not stop itself.
+let ringtoneTimer = null;
+export function startRingtone() {
+  if (ringtoneTimer) return; // already ringing
+  playPing();
+  ringtoneTimer = setInterval(playPing, 2000);
+}
+export function stopRingtone() {
+  if (ringtoneTimer) { clearInterval(ringtoneTimer); ringtoneTimer = null; }
+}
+
 const listeners = new Set();
 // Subscribe to in-app toast notifications — used by NotificationToaster.
 export function onNotify(fn) {

@@ -22,7 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from "agora-rtc-sdk-ng/esm";
 import { supabase } from "./supabase";
 import { fetchAgoraToken, sendPush } from "./serverApi";
-import { notify } from "./notify";
+import { notify, startRingtone, stopRingtone } from "./notify";
 import { logCallStart, logCallOutcome } from "./callLog";
 
 const RING_TIMEOUT_MS = 30000;
@@ -213,6 +213,20 @@ export function useDirectCall({ identity }) {
     return () => { cancelled = true; };
   }, [status, callType, reset]);
 
+  // Keep the ringtone playing for exactly as long as there's an unanswered
+  // incoming call — see the matching effect in lib/call.js for why this is
+  // needed: the ring banner's own notify() call is silent, so without this
+  // an incoming call makes no sound at all unless you're staring at the
+  // screen already.
+  useEffect(() => {
+    if (status === "ringing-incoming") {
+      startRingtone();
+      return stopRingtone;
+    }
+    stopRingtone();
+    return undefined;
+  }, [status]);
+
   // Give up on an outgoing call nobody answers.
   useEffect(() => {
     if (status !== "ringing-outgoing") { clearRingTimer(); return undefined; }
@@ -284,7 +298,7 @@ export function useDirectCall({ identity }) {
 
   // Hang up if this hook ever unmounts (e.g. sign-out) — never leave a call
   // running silently.
-  useEffect(() => () => { cleanupMedia(); }, [cleanupMedia]);
+  useEffect(() => () => { cleanupMedia(); stopRingtone(); }, [cleanupMedia]);
 
   return {
     status, callType, remoteName, remoteIdentity, muted, cameraOff, callError, hasRemoteVideo,
