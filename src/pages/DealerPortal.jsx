@@ -1114,7 +1114,7 @@ const TOPUP_AMOUNTS = [10000, 20000];
 
 // Your UPI ID + display name — set these as Vite env vars
 // (VITE_UPI_ID / VITE_UPI_PAYEE_NAME) so they aren't hardcoded here.
-const UPI_ID = import.meta.env.VITE_UPI_ID || "your-upi-id@bank";
+const UPI_ID = import.meta.env.VITE_UPI_ID || "9999398992@yescred";
 const UPI_PAYEE_NAME = import.meta.env.VITE_UPI_PAYEE_NAME || "SJO Services";
 
 function TopUpModal({ dealer, onClose }) {
