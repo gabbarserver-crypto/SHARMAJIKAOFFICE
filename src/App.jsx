@@ -20,6 +20,7 @@ import GlobalCallOverlay from "./components/GlobalCallOverlay";
 import NotificationToaster from "./components/NotificationToaster";
 import { useDirectCall } from "./lib/directCall";
 import { notify, requestNotificationPermission } from "./lib/notify";
+import { registerForPush, unregisterForPush } from "./lib/push";
 import { identityFor, countOpenThreads } from "./lib/chat";
 import PinUnlock from "./pages/PinUnlock";
 import SetupPinPrompt from "./components/SetupPinPrompt";
@@ -354,6 +355,11 @@ export default function App() {
     ? identityFor({ staff })
     : identityFor({ dealer: dealerStaff ? null : dealer, dealerStaff });
   const directCall = useDirectCall({ identity: myIdentity });
+
+  useEffect(() => {
+    if (myIdentity) registerForPush(myIdentity);
+    else unregisterForPush();
+  }, [myIdentity?.type, myIdentity?.id]);
 
 
   if (passwordRecovery) {

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "157212169270",
+    "project_id": "sharmajikaoffice-242eb",
+    "storage_bucket": "sharmajikaoffice-242eb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:157212169270:android:96c12d3f7c721822047497",
+        "android_client_info": {
+          "package_name": "com.sharmajikaoffice.erp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDAMsSZdobBXFG98BIJSyK_hJ58fxhKa8o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

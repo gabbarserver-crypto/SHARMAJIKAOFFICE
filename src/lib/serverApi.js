@@ -38,6 +38,19 @@ export async function createDealerStaffLogin({ dealerId, fullName, email, passwo
   return post("/api/create-dealer-staff-login", { accessToken: await accessToken(), dealerId, fullName, email, password });
 }
 
+// Fire-and-forget: asks the server to push a real (lock-screen-capable)
+// notification to a target identity's registered device(s) — see
+// api/send-push.js. Never throws — a failed push shouldn't break whatever
+// in-app action triggered it (sending a message, ringing someone).
+export async function sendPush({ targetType, targetId, title, body, data }) {
+  try {
+    await post("/api/send-push", { accessToken: await accessToken(), targetType, targetId, title, body, data });
+  } catch {
+    // Best-effort — the in-app realtime notification (notify.js) still
+    // covers the case where the recipient's app is actually open.
+  }
+}
+
 // Anyone signed in (staff, dealer, or dealer sub-staff) can request a token
 // to join an Agora call on the given channel (= the chat_thread id).
 export async function fetchAgoraToken({ channel }) {
