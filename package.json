@@ -25,6 +25,7 @@
     "@tailwindcss/vite": "^4.3.2",
     "agora-rtc-sdk-ng": "^4.24.6",
     "agora-token": "^2.0.5",
+    "axios": "^1.18.1",
     "lucide-react": "^0.383.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"

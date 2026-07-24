@@ -6,7 +6,13 @@
 import React, { useState } from "react";
 import { Modal, Field, Input, PrimaryButton } from "./UI";
 
-const PCC_STATUS_API_BASE = import.meta.env.VITE_PCC_STATUS_API_BASE || "http://localhost:5000";
+// Same-origin by default — this hits the Vercel serverless function at
+// api/pcc-status/check.js, deployed alongside the frontend, so it works
+// wherever the app itself is hosted (no separate server needed). Only set
+// VITE_PCC_STATUS_API_BASE if you're intentionally pointing at a different,
+// separately-hosted proxy (e.g. the old server/index.js during local dev
+// against "http://localhost:5000").
+const PCC_STATUS_API_BASE = import.meta.env.VITE_PCC_STATUS_API_BASE || "";
 
 /**
  * Confirmed from the real get-pcc-application-status response: the API's
