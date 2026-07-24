@@ -5,6 +5,7 @@
 // admin-side PCC No column.
 import React, { useState } from "react";
 import { Modal, Field, Input, PrimaryButton } from "./UI";
+import { supabase } from "../lib/supabase";
 
 // Same-origin by default — this hits the Vercel serverless function at
 // api/pcc-status/check.js, deployed alongside the frontend, so it works
@@ -64,7 +65,31 @@ function stripKinPrefix(name) {
 // number (with the fixed DLSB-PCC/ prefix), applicant name, guardian name —
 // prefilled from our record, but editable, with an explicit "Search
 // Application" button. Nothing fires until the user clicks it.
-export default function PCCStatusCheckModal({ row, onClose }) {
+// Auto-sync (server cron, every 2 hours) already tries to fetch the
+// certificate itself, but that only works if it happens to reach the portal
+// without needing a logged-in session — see the caveat in
+// api/_lib/pccClient.js's downloadAndStoreCertificate(). Until/unless a
+// portal service-account login is wired in, the reliable path is: staff
+// clicks "Download Certificate" (opens in a new tab using their own browser
+// session, which does work), saves the PDF, then uploads it here so it's
+// stored in our own database/storage against this application going forward.
+async function saveCertificateFile(applicationId, file) {
+  const path = `pcc-certificates/${applicationId}.pdf`;
+  const { error: uploadError } = await supabase.storage
+    .from("application-documents")
+    .upload(path, file, { upsert: true, contentType: "application/pdf" });
+  if (uploadError) throw uploadError;
+
+  const { error: updateError } = await supabase
+    .from("applications")
+    .update({ pcc_certificate_path: path, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" })
+    .eq("id", applicationId);
+  if (updateError) throw updateError;
+
+  return path;
+}
+
+export default function PCCStatusCheckModal({ row, onClose, onCertificateSaved }) {
   const [applicationNumber, setApplicationNumber] = useState(
     normalizePccApplicationNumber(row.pcc_no)?.replace(/^DLSB-PCC\//i, "") || ""
   );
@@ -75,6 +100,26 @@ export default function PCCStatusCheckModal({ row, onClose }) {
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const [savingCert, setSavingCert] = useState(false);
+  const [certSaved, setCertSaved] = useState(Boolean(row.pcc_certificate_path));
+  const fileInputRef = React.useRef(null);
+
+  const handleCertFileChosen = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file later
+    if (!file) return;
+    setSavingCert(true);
+    setError(null);
+    try {
+      await saveCertificateFile(row.id, file);
+      setCertSaved(true);
+      onCertificateSaved?.(row.id);
+    } catch (err) {
+      setError(err.message || "Failed to save certificate");
+    } finally {
+      setSavingCert(false);
+    }
+  };
 
   const runCheck = async () => {
     setLoading(true);
@@ -123,9 +168,13 @@ export default function PCCStatusCheckModal({ row, onClose }) {
   };
 
   const application = result?.application || null;
-  const status = result?.status || null;
+  // Before the user clicks "Search Application", show whatever the last
+  // auto-sync run stored on the row (pcc_timeline / pcc_last_synced_at)
+  // instead of a blank stepper — it's already what the admin table shows.
+  const status = result?.status || (row.pcc_timeline?.length ? { timeline: row.pcc_timeline } : null);
   const steps = mapToSteps(status);
   const lastStep = steps[steps.length - 1];
+  const usingStoredTimeline = !result && row.pcc_timeline?.length > 0;
 
   return (
     <Modal title="Track Application" onClose={onClose} wide>
@@ -166,6 +215,36 @@ export default function PCCStatusCheckModal({ row, onClose }) {
           <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No matching application found.</p>
         )}
 
+        {usingStoredTimeline && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-semibold text-slate-700 dark:text-slate-300">
+                Application Progress <span className="text-xs font-normal text-slate-400">(as of last auto-sync)</span>
+              </h4>
+              {row.pcc_last_synced_at && (
+                <span className="text-xs text-slate-400">
+                  Synced {new Date(row.pcc_last_synced_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+            <ul>
+              {steps.map((s) => (
+                <li key={s.label} className="flex items-start gap-2 py-1.5 text-sm">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
+                    s.done ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400 dark:text-slate-500"
+                  }`}>
+                    {s.done ? "✓" : ""}
+                  </span>
+                  <div>
+                    <div className={s.done ? "text-slate-800 dark:text-slate-100 font-medium" : "text-slate-400 dark:text-slate-500"}>{s.label}</div>
+                    {s.timestamp && <div className="text-xs text-blue-600">{s.timestamp}</div>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {application && (
           <div className="mt-4">
             <div className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-3 py-2">
@@ -177,21 +256,37 @@ export default function PCCStatusCheckModal({ row, onClose }) {
                 <div className="text-xs text-slate-400 dark:text-slate-500">Applicant Name</div>
                 <div className="font-semibold text-slate-700 dark:text-slate-300">{application.applicantName}</div>
               </div>
-              {status?.certificateUrl && (
+              <div className="flex items-center gap-2 shrink-0">
+                {status?.certificateUrl && (
+                  <button
+                    type="button"
+                    disabled={downloading}
+                    onClick={handleDownload}
+                    className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg px-4 py-2 text-sm"
+                  >
+                    {downloading ? "Getting link…" : "⬇ Download Certificate"}
+                  </button>
+                )}
+                <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={handleCertFileChosen} />
                 <button
                   type="button"
-                  disabled={downloading}
-                  onClick={handleDownload}
-                  className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg px-4 py-2 text-sm"
+                  disabled={savingCert}
+                  onClick={() => fileInputRef.current?.click()}
+                  title="After downloading the PDF above, upload it here to save it in our own database"
+                  className={`inline-flex items-center gap-1.5 font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-60 ${
+                    certSaved
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-300"
+                      : "bg-blue-900 hover:bg-blue-800 text-white"
+                  }`}
                 >
-                  {downloading ? "Getting link…" : "⬇ Download Certificate"}
+                  {savingCert ? "Saving…" : certSaved ? "✓ Saved to our records" : "📤 Save Certificate to DB"}
                 </button>
-              )}
+              </div>
             </div>
             {status?.certificateUrl && (
               <p className="text-xs text-slate-400 dark:text-slate-500 mt-1.5">
-                This link requires an active, logged-in session on the Delhi Police portal in this
-                browser. If it shows a 401 error,{" "}
+                "Download Certificate" requires an active, logged-in session on the Delhi Police
+                portal in this browser. If it shows a 401 error,{" "}
                 <button
                   type="button"
                   onClick={() => window.open("https://pcccvr.delhipolice.gov.in/login", "_blank", "noopener,noreferrer")}
@@ -199,7 +294,9 @@ export default function PCCStatusCheckModal({ row, onClose }) {
                 >
                   log into the portal
                 </button>{" "}
-                first, then try the download again.
+                first, then try again. Once you have the PDF, use "Save Certificate to DB" to store
+                it against this application — auto-sync also tries to fetch it automatically every
+                couple of hours, but this manual step is the reliable path today.
               </p>
             )}
 
