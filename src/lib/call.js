@@ -21,7 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from "agora-rtc-sdk-ng/esm";
 import { supabase } from "./supabase";
 import { fetchAgoraToken } from "./serverApi";
-import { notify } from "./notify";
+import { notify, startRingtone, stopRingtone } from "./notify";
 import { logCallStart, logCallOutcome } from "./callLog";
 
 const RING_TIMEOUT_MS = 30000;
@@ -206,6 +206,19 @@ export function useCall({ threadId, identity }) {
     return () => { cancelled = true; };
   }, [status, threadId, callType, reset]);
 
+  // Keep the ringtone playing for exactly as long as there's an unanswered
+  // incoming call — starts the moment we enter 'ringing-incoming', stops on
+  // every other status (accepted, declined, caller hung up, timed out) and
+  // on unmount, so it never gets stuck looping in the background.
+  useEffect(() => {
+    if (status === "ringing-incoming") {
+      startRingtone();
+      return stopRingtone;
+    }
+    stopRingtone();
+    return undefined;
+  }, [status]);
+
   // Give up on an outgoing call nobody answers.
   useEffect(() => {
     if (status !== "ringing-outgoing") { clearRingTimer(); return undefined; }
@@ -264,7 +277,7 @@ export function useCall({ threadId, identity }) {
 
   // Hang up if the thread changes or the component using this hook unmounts
   // (e.g. the chat panel/modal closes) — never leave a call running silently.
-  useEffect(() => () => { cleanupMedia(); }, [threadId, cleanupMedia]);
+  useEffect(() => () => { cleanupMedia(); stopRingtone(); }, [threadId, cleanupMedia]);
 
   return {
     status, callType, remoteName, muted, cameraOff, callError, hasRemoteVideo,
