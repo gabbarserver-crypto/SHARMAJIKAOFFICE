@@ -1,6 +1,8 @@
 // src/pages/Login.jsx
 import React, { useState } from "react";
 import { Eye, EyeOff, Fingerprint } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { Browser } from "@capacitor/browser";
 import { supabase } from "../lib/supabase";
 import logo from "../assets/sjo-logo-full.png";
 
@@ -44,6 +46,33 @@ export default function Login({ authError }) {
   const submitWithGoogle = async () => {
     setError("");
     setGoogleLoading(true);
+
+    if (Capacitor.isNativePlatform()) {
+      // Get the Google auth URL from Supabase WITHOUT letting it redirect
+      // this page (skipBrowserRedirect) — we open that URL ourselves in an
+      // in-app Custom Tab (Browser.open), which slides up over the app
+      // instead of switching to the Chrome app. The redirectTo below must
+      // match the intent-filter added in AndroidManifest.xml, and be added
+      // as an allowed Redirect URL in Supabase Dashboard → Authentication →
+      // URL Configuration.
+      const { data, error: urlError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: "sjoerp://auth-callback", skipBrowserRedirect: true },
+      });
+      if (urlError || !data?.url) {
+        setError(urlError?.message || "Couldn't start Google sign-in");
+        setGoogleLoading(false);
+        return;
+      }
+      await Browser.open({ url: data.url, presentationStyle: "popover" });
+      // Loading state clears itself: either the appUrlOpen listener in
+      // App.jsx catches the sjoerp://auth-callback redirect and the
+      // session change unmounts this screen, or the user closes the
+      // Custom Tab manually (handled by the browserFinished listener there).
+      return;
+    }
+
+    // Web: unchanged, plain redirect.
     const { error: googleError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: window.location.origin },
@@ -152,7 +181,7 @@ export default function Login({ authError }) {
                 <button
                   type="submit"
                   disabled={forgotLoading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl mt-3 disabled:opacity-50"
+                  className="w-full btn-accent text-white font-semibold py-3 rounded-xl mt-3 disabled:opacity-50"
                 >
                   {forgotLoading ? "Sending..." : "Send Reset Link"}
                 </button>
@@ -225,7 +254,7 @@ export default function Login({ authError }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl disabled:opacity-50"
+            className="w-full btn-accent text-white font-semibold py-3 rounded-xl disabled:opacity-50"
           >
             {loading ? "Signing in..." : "Login"}
           </button>
@@ -240,7 +269,7 @@ export default function Login({ authError }) {
         <button
           onClick={submitWithGoogle}
           disabled={googleLoading}
-          className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl disabled:opacity-50 mb-3"
+          className="w-full flex items-center justify-center gap-2 bg-[#0f1b3d] hover:bg-[#16255a] text-white font-semibold py-3 rounded-xl disabled:opacity-50 mb-3 transition-colors"
         >
           <GoogleIcon />
           {googleLoading ? "Redirecting to Google…" : "Sign in with Google"}
