@@ -1,5 +1,8 @@
 // src/App.jsx
 import React, { useEffect, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
 import { supabase } from "./lib/supabase";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -29,6 +32,36 @@ export default function App() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
     return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // Catches Google sign-in's redirect back into the app (see
+  // submitWithGoogle in Login.jsx, which opens the Google login as an
+  // in-app Custom Tab rather than switching to Chrome). Once Google
+  // approves, it redirects to sjoerp://auth-callback#access_token=...,
+  // which the AndroidManifest intent-filter routes straight back here.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    const sub = CapacitorApp.addListener("appUrlOpen", async ({ url }) => {
+      if (!url.startsWith("sjoerp://auth-callback")) return;
+
+      const hashIndex = url.indexOf("#");
+      if (hashIndex === -1) {
+        await Browser.close().catch(() => {});
+        return;
+      }
+      const params = new URLSearchParams(url.slice(hashIndex + 1));
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+
+      if (access_token && refresh_token) {
+        await supabase.auth.setSession({ access_token, refresh_token });
+        // onAuthStateChange above picks up the new session automatically.
+      }
+      await Browser.close().catch(() => {});
+    });
+
+    return () => { sub.then((s) => s.remove()); };
   }, []);
 
   if (session === undefined) {

@@ -1,6 +1,25 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Accent color — kept in sync with whichever sidebar color is picked in
+   Settings (see src/lib/sidebarColor.js, which writes these three
+   variables on document.documentElement any time it changes). Defaults
+   below match the "purple" sidebar default so there's no flash of blue
+   before JS runs. Buttons/focus-rings that should always match the
+   sidebar's color use these variables instead of a fixed Tailwind blue. */
+:root {
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-ring: rgba(124, 58, 237, 0.4);
+}
+
+.btn-accent {
+  background-color: var(--accent);
+}
+.btn-accent:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
 /* Print support: hide chrome (sidebar, floating chat widget, anything else
    marked .no-print) and let a printed/exported ledger page show just its
    content — see Ledger.jsx's Print button. */

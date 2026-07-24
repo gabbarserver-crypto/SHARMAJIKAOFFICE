@@ -144,6 +144,96 @@ export async function countDealerUnread(dealerId) {
   return Object.values(latestByThread).filter((m) => m.sender_type === "staff").length;
 }
 
+// Recent conversations across EVERY dealer, most-recently-active first —
+// powers the "Recent" tab of CommsWindow for staff. Unlike countOpenThreads/
+// the old StaffChatWidget list, this isn't filtered to "awaiting reply
+// only" — it's meant to read like WhatsApp's chat list, not a to-do list.
+export async function listRecentThreadsForStaff(limit = 30) {
+  const { data: threadRows, error: threadsError } = await supabase
+    .from("chat_threads")
+    .select("id, application_id, dealer_id, applications(draft_code, application_no, applicant_name), dealers(name, short_name, code)")
+    .order("last_message_at", { ascending: false })
+    .limit(limit);
+  if (threadsError) throw threadsError;
+
+  const threadIds = (threadRows || []).map((t) => t.id);
+  let latestByThread = {};
+  if (threadIds.length) {
+    const { data: messages, error: messagesError } = await supabase
+      .from("chat_messages")
+      .select("thread_id, sender_type, body, created_at")
+      .in("thread_id", threadIds)
+      .order("created_at", { ascending: false });
+    if (messagesError) throw messagesError;
+    for (const m of messages || []) {
+      if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
+    }
+  }
+
+  return (threadRows || []).map((t) => {
+    const latest = latestByThread[t.id];
+    return {
+      threadId: t.id,
+      applicationId: t.application_id,
+      dealerId: t.dealer_id,
+      label: t.application_id
+        ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
+        : "General",
+      dealerLabel: t.dealers?.short_name || t.dealers?.name || t.dealers?.code || "—",
+      lastMessage: latest?.body || (latest?.attachment_url ? "📎 Attachment" : null),
+      lastAt: latest?.created_at || null,
+      awaitingReply: latest ? latest.sender_type !== "staff" : false,
+    };
+  });
+}
+
+// Recent conversations for ONE dealer (their general thread + every
+// per-application thread), most-recently-active first — powers the
+// "Recent" tab of CommsWindow for a dealer/dealer_staff login.
+export async function listRecentThreadsForDealer(dealerId, limit = 30) {
+  const { data: threadRows, error: threadsError } = await supabase
+    .from("chat_threads")
+    .select("id, application_id, applications(draft_code, application_no, applicant_name)")
+    .eq("dealer_id", dealerId)
+    .order("last_message_at", { ascending: false })
+    .limit(limit);
+  if (threadsError) throw threadsError;
+
+  const threadIds = (threadRows || []).map((t) => t.id);
+  let latestByThread = {};
+  if (threadIds.length) {
+    const { data: messages, error: messagesError } = await supabase
+      .from("chat_messages")
+      .select("thread_id, sender_type, body, created_at")
+      .in("thread_id", threadIds)
+      .order("created_at", { ascending: false });
+    if (messagesError) throw messagesError;
+    for (const m of messages || []) {
+      if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
+    }
+  }
+
+  return (threadRows || [])
+    .map((t) => {
+      const latest = latestByThread[t.id];
+      return {
+        threadId: t.id,
+        applicationId: t.application_id,
+        label: t.application_id
+          ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
+          : "General",
+        lastMessage: latest?.body || (latest?.attachment_url ? "📎 Attachment" : null),
+        lastAt: latest?.created_at || null,
+        awaitingReply: latest ? latest.sender_type === "staff" : false,
+      };
+    })
+    .sort((a, b) => {
+      // General thread first, then most recently active.
+      if (!a.applicationId !== !b.applicationId) return a.applicationId ? 1 : -1;
+      return new Date(b.lastAt || 0) - new Date(a.lastAt || 0);
+    });
+}
+
 // Resolves who's currently logged in, in the shape sendMessage() expects.
 // `staff` and `dealer`/`dealerStaff` are whatever App.jsx already has in
 // state — this just normalizes them into one sender object.

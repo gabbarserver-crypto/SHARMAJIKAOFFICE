@@ -22,6 +22,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Google sign-in callback: after the in-app browser (Chrome
+                 Custom Tab) finishes the Google login, it redirects here,
+                 which hands control straight back to the app instead of
+                 leaving the user sitting in Chrome. Must also be added as
+                 an allowed Redirect URL in Supabase Dashboard → Authentication
+                 → URL Configuration: sjoerp://auth-callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sjoerp" android:host="auth-callback" />
+            </intent-filter>
+
         </activity>
 
         <provider

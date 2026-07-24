@@ -19,6 +19,25 @@ export const SIDEBAR_COLORS = {
 
 const listeners = new Set();
 
+// Darkens a "#rrggbb" hex color by the given fraction (0–1), for the hover
+// shade — the .light[] pair is already a 2-stop gradient, not a hover
+// shade, so this derives one instead of hardcoding a 7th value per color.
+function darken(hex, amount) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.max(0, Math.round(((n >> 16) & 255) * (1 - amount)));
+  const g = Math.max(0, Math.round(((n >> 8) & 255) * (1 - amount)));
+  const b = Math.max(0, Math.round((n & 255) * (1 - amount)));
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
+function writeAccentVars(key) {
+  if (typeof document === "undefined") return;
+  const base = SIDEBAR_COLORS[key].light[0];
+  document.documentElement.style.setProperty("--accent", base);
+  document.documentElement.style.setProperty("--accent-hover", darken(base, 0.12));
+  document.documentElement.style.setProperty("--accent-ring", base + "66"); // ~40% alpha
+}
+
 function getInitial() {
   if (typeof window === "undefined") return "purple";
   const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -26,10 +45,12 @@ function getInitial() {
 }
 
 let current = getInitial();
+writeAccentVars(current); // set immediately so buttons match on first paint
 
 function apply(key) {
   current = key;
   window.localStorage.setItem(STORAGE_KEY, key);
+  writeAccentVars(key);
   listeners.forEach((cb) => cb(key));
 }
 

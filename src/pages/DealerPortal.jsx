@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useState, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, StatusBadge, Modal, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "../components/UI";
-import ChatWidget from "../components/ChatWidget";
+import CommsWindow from "../components/CommsWindow";
 import ChatPanel from "../components/ChatPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import BookAppointmentModal from "../components/BookAppointmentModal";
@@ -330,7 +330,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
 
-      <ChatWidget dealerId={dealer.id} identity={identity} title={dealer.name} />
+      <CommsWindow variant="dealer" dealerId={dealer.id} dealerName={dealer.name} identity={identity} call={call} />
     </div>
   );
 }
