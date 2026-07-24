@@ -1767,16 +1767,24 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
       // Rows imported directly as Accepted skip the normal "Approve" action
       // (and its ledger debit) entirely, so post the matching ledger entry
       // here — same shape as approveApplication — for any imported row
-      // that's already at that stage.
+      // that's already at that stage. Backdated to the row's own
+      // Application Date (when the CSV provided one) rather than defaulting
+      // to "now" — otherwise every imported row shows up on the ledger as
+      // if it happened at import time, and the description now also
+      // includes the service so it's identifiable without opening the row.
       const preApproved = (insertedRows || []).filter((r) => r.status === "Accepted");
       if (preApproved.length) {
-        const ledgerRows = preApproved.map((r) => ({
-          dealer_id: r.dealer_id,
-          type: "debit",
-          amount: r.amount || 0,
-          voucher_no: r.draft_code,
-          description: `Imported — ${r.applicant_name || ""}${r.application_no ? ` · App No: ${r.application_no}` : ""}`,
-        }));
+        const ledgerRows = preApproved.map((r) => {
+          const service = serviceList.find((s) => s.id === r.service_id);
+          return {
+            dealer_id: r.dealer_id,
+            type: "debit",
+            amount: r.amount || 0,
+            voucher_no: r.draft_code,
+            description: `${r.applicant_name || ""}${service ? ` · Service: ${serviceLabel(service)}` : ""}${r.application_no ? ` · App No: ${r.application_no}` : ""}`,
+            ...(r.application_date ? { created_at: r.application_date } : {}),
+          };
+        });
         const { error: ledgerError } = await supabase.from("ledger_transactions").insert(ledgerRows);
         if (ledgerError) {
           setError(`Applications imported, but ${preApproved.length} ledger entr${preApproved.length !== 1 ? "ies" : "y"} failed to post: ` + ledgerError.message);
