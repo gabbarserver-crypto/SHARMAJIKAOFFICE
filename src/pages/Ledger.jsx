@@ -1,5 +1,5 @@
 // src/pages/Ledger.jsx
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, GhostButton, PrimaryButton } from "../components/UI";
 import { DealerForm, AgencyForm } from "./Masters";
@@ -9,15 +9,16 @@ import { DealerForm, AgencyForm } from "./Masters";
 // works (see lib/csv.js).
 function exportLedgerCSV(entityName, txns) {
   const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const header = ["Date", "Voucher No.", "Description", "Type", "Amount"];
+  const header = ["Date", "Voucher No.", "Description", "Debit", "Credit", "Running Balance"];
   const lines = [header.join(",")];
   txns.forEach((t) => {
     lines.push([
       escapeCsv(new Date(t.created_at).toLocaleDateString()),
       escapeCsv(t.voucher_no),
       escapeCsv(t.description),
-      escapeCsv(t.type),
-      escapeCsv(t.amount),
+      escapeCsv(t.type === "debit" ? t.amount : ""),
+      escapeCsv(t.type === "credit" ? t.amount : ""),
+      escapeCsv(t.running_balance),
     ].join(","));
   });
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -44,6 +45,37 @@ export default function Ledger({ only, initialEntityId } = {}) {
   const [summaryError, setSummaryError] = useState(null);
   const [txns, setTxns] = useState([]);
   const [entityName, setEntityName] = useState("");
+  const [sortKey, setSortKey] = useState("created_at");
+  const [sortDir, setSortDir] = useState("desc"); // newest first by default
+
+  // Running balance is a property of *when* a transaction happened, not of
+  // whatever order it's currently displayed in — so it's always computed by
+  // walking the transactions oldest-to-newest first, then the result is
+  // re-sorted for display. Re-sorting by voucher/description/amount later
+  // never recalculates or scrambles these balances.
+  const sortedTxns = useMemo(() => {
+    const chronological = [...txns].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    let running = 0;
+    const withBalance = chronological.map((t) => {
+      running += t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0);
+      return { ...t, running_balance: running };
+    });
+    const byId = new Map(withBalance.map((t) => [t.id, t]));
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...txns].map((t) => byId.get(t.id)).sort((a, b) => {
+      let av = a[sortKey], bv = b[sortKey];
+      if (sortKey === "created_at") { av = new Date(av); bv = new Date(bv); }
+      if (sortKey === "amount") { av = Number(av || 0); bv = Number(bv || 0); }
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+  }, [txns, sortKey, sortDir]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "created_at" ? "desc" : "asc"); }
+  };
   const ledgerDetailRef = useRef(null);
 
   const openLedger = (mode, id, name) => {
@@ -140,7 +172,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
               <button onClick={() => window.print()} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
                 🖶 Print
               </button>
-              <button onClick={() => exportLedgerCSV(entityName, txns)} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
+              <button onClick={() => exportLedgerCSV(entityName, sortedTxns)} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
                 ⬇ Export CSV
               </button>
             </div>
@@ -172,25 +204,33 @@ export default function Ledger({ only, initialEntityId } = {}) {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
                 <tr>
-                  <th className="text-left font-medium px-3 py-2">Date</th>
-                  <th className="text-left font-medium px-3 py-2">Voucher No.</th>
-                  <th className="text-left font-medium px-3 py-2">Description</th>
-                  <th className="text-right font-medium px-3 py-2">Amount</th>
+                  <SortableTh label="Date" sortKeyName="created_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Voucher No." sortKeyName="voucher_no" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Description" sortKeyName="description" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Debit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                  <SortableTh label="Credit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                  <SortableTh label="Running Balance" sortKeyName="running_balance" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                 </tr>
               </thead>
               <tbody>
-                {txns.map((t) => (
+                {sortedTxns.map((t) => (
                   <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{new Date(t.created_at).toLocaleDateString()}</td>
-                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{t.voucher_no}</td>
+                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(t.created_at).toLocaleDateString()}</td>
+                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.voucher_no}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{t.description}</td>
-                    <td className={`px-3 py-2 text-right font-medium whitespace-nowrap ${t.type === "debit" ? "text-rose-600" : "text-emerald-600"}`}>
-                      {t.type === "debit" ? "-" : "+"}₹{Number(t.amount).toLocaleString("en-IN")}
+                    <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-rose-600">
+                      {t.type === "debit" ? `₹${Number(t.amount).toLocaleString("en-IN")}` : ""}
+                    </td>
+                    <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-emerald-600">
+                      {t.type === "credit" ? `₹${Number(t.amount).toLocaleString("en-IN")}` : ""}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.running_balance < 0 ? "text-rose-600" : "text-slate-700 dark:text-slate-300"}`}>
+                      ₹{Number(t.running_balance).toLocaleString("en-IN")}
                     </td>
                   </tr>
                 ))}
-                {txns.length === 0 && (
-                  <tr><td colSpan={4} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
+                {sortedTxns.length === 0 && (
+                  <tr><td colSpan={6} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
                 )}
               </tbody>
             </table>
@@ -361,5 +401,19 @@ function SundryHead({ title, subtitle, entityMode, table, summaryTable, summaryK
       </div>
       {open && <Form initial={editing} onSave={save} onClose={() => setOpen(false)} />}
     </Card>
+  );
+}
+
+// Clickable column header for the transaction table — shows an arrow when
+// this is the active sort column, flips direction on repeat clicks.
+function SortableTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "left" }) {
+  const active = sortKey === sortKeyName;
+  return (
+    <th
+      onClick={() => onSort(sortKeyName)}
+      className={`font-medium px-3 py-2 cursor-pointer select-none whitespace-nowrap ${align === "right" ? "text-right" : "text-left"} ${active ? "text-slate-800 dark:text-slate-100" : ""}`}
+    >
+      {label} {active && (sortDir === "asc" ? "↑" : "↓")}
+    </th>
   );
 }

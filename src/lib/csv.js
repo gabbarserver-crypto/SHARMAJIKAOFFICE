@@ -42,3 +42,19 @@ export function findByLabel(list, value, fields) {
   if (!needle) return null;
   return list.find((item) => fields.some((f) => item[f] && String(item[f]).trim().toLowerCase() === needle)) || null;
 }
+
+// Parses "DD-MM-YYYY" / "DD/MM/YYYY" (and passes already-ISO "YYYY-MM-DD"
+// straight through) into an ISO date string. Used when a CSV import should
+// backdate a record (e.g. a ledger entry) to the row's own date instead of
+// defaulting to "now" at import time.
+export function ddmmyyyyToISO(input) {
+  if (!input) return null;
+  const trimmed = String(input).trim();
+  const m = trimmed.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+  if (m) {
+    const [, d, mo, y] = m;
+    return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed; // already ISO
+  return null;
+}

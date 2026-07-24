@@ -2,7 +2,13 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton, GhostButton, DangerButton, Modal, Toast } from "../components/UI";
-import { parseCSV, findByLabel } from "../lib/csv";
+import { parseCSV, findByLabel, ddmmyyyyToISO } from "../lib/csv";
+
+function isoToDDMMYYYY(iso) {
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return iso;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
 
 export default function Payments({ staff } = {}) {
   const isAdmin = staff?.roles?.role_name === "Admin";
@@ -360,9 +366,11 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         const applicationRaw = get("application", "draftcode", "draftid");
         const amountRaw = get("amount");
         const modeRaw = get("paymentmode", "mode") || "Cash";
-        const referenceRaw = get("referenceno", "reference", "utr");
+        const referenceRaw = get("referenceno", "reference", "utr", "voucherno", "vouchernumber", "voucher");
         const agencyRaw = get("paidatagency", "agency");
-        const remarksRaw = get("remarks", "remark");
+        const remarksRaw = get("remarks", "remark", "narration", "description");
+        const dateRaw = get("date", "paymentdate", "paidon", "paiddate");
+        const paidOn = dateRaw ? ddmmyyyyToISO(dateRaw) : null;
 
         const dealer = findByLabel(dealers, dealerRaw, ["name", "code", "short_name"]);
         const agency = agencyRaw ? findByLabel(agencies, agencyRaw, ["name", "code"]) : null;
@@ -372,6 +380,8 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         if (!dealer) errors.push(`Dealer "${dealerRaw}" not found`);
         if (!amountRaw || Number.isNaN(amount) || amount <= 0) errors.push("Amount is missing or invalid");
         if (agencyRaw && !agency) errors.push(`Agency "${agencyRaw}" not found`);
+
+        if (dateRaw && !paidOn) errors.push(`Date "${dateRaw}" not recognized (use DD-MM-YYYY)`);
 
         return {
           dealerRaw, applicationRaw, agencyRaw,
@@ -387,6 +397,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             payment_mode: modeRaw,
             reference_no: referenceRaw || null,
             remarks: remarksRaw || null,
+            paid_on: paidOn,
           },
         };
       });
@@ -436,6 +447,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             remarks: payload.remarks,
             paid_at_agency_id: payload.agency_id || null,
             received_by: staffRow?.id || null,
+            ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
           })
           .select()
           .single();
@@ -454,7 +466,8 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             payment_id: paymentRow.id,
             type: "credit",
             amount: payload.amount,
-            description: `Payment received (import) — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+            description: `Payment received — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+            ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
           }),
         ];
         if (payload.agency_id) {
@@ -465,7 +478,8 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
               payment_id: paymentRow.id,
               type: "credit",
               amount: payload.amount,
-              description: `Payment collected on behalf of ${payload.dealer_name || "dealer"} (import) — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+              description: `Payment collected on behalf of ${payload.dealer_name || "dealer"} — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+              ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
             })
           );
         }
@@ -494,7 +508,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           <div>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
               CSV columns: <b>Dealer</b> (required — name or code), <b>Amount</b> (required), Application (optional — draft code),
-              Payment Mode (optional, defaults to Cash), Reference No, Paid At Agency, Remarks.
+              Payment Mode (optional, defaults to Cash), Reference No, Date (optional, DD-MM-YYYY — defaults to today if left blank), Paid At Agency, Remarks.
             </p>
             <input
               type="file"
@@ -515,8 +529,10 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
                     <th className="px-3 py-2 text-left">Import?</th>
                     <th className="px-3 py-2 text-left">Dealer</th>
                     <th className="px-3 py-2 text-left">Application</th>
+                    <th className="px-3 py-2 text-left">Date</th>
                     <th className="px-3 py-2 text-left">Amount</th>
                     <th className="px-3 py-2 text-left">Mode</th>
+                    <th className="px-3 py-2 text-left">Voucher No.</th>
                     <th className="px-3 py-2 text-left">Agency</th>
                     <th className="px-3 py-2 text-left">Errors</th>
                   </tr>
@@ -529,8 +545,10 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.dealer_name || r.dealerRaw || "—"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.applicationRaw || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.paid_on ? isoToDDMMYYYY(r.payload.paid_on) : "— (today)"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">₹{r.payload.amount || 0}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.payment_mode}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.reference_no || "—"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.agency_name || "—"}</td>
                       <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
                     </tr>
