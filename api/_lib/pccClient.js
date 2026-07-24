@@ -89,10 +89,59 @@ export function mapStageToDropdownStatus(status) {
   return null; // no timeline data back — don't overwrite whatever's there
 }
 
+// The 6 stages, in order, exactly as PCCStatusCheckModal.jsx renders them.
+// Kept here too so the auto-sync can persist "how far did it get" without
+// the frontend having to re-call the portal just to show the stepper.
+export const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
+
+// Given a status response, returns the furthest stage reached (or null if no
+// timeline came back) plus the raw timeline array to store as-is.
+export function buildStageSnapshot(status) {
+  const timeline = status?.timeline || [];
+  const stagesReached = new Set(timeline.map((t) => t.stage));
+  let currentStage = null;
+  for (const stage of PCC_STAGE_ORDER) {
+    if (stagesReached.has(stage)) currentStage = stage;
+  }
+  return { currentStage, timeline };
+}
+
+// Downloads the certificate PDF and stores it in the same
+// "application-documents" Supabase Storage bucket the rest of the app
+// already uses (see src/lib/chat.js), under pcc-certificates/<applicationId>.pdf.
+//
+// IMPORTANT CAVEAT: the certificateUrl the portal returns is, per
+// PCCStatusCheckModal.jsx, only good for someone with an active logged-in
+// browser session on pcccvr.delhipolice.gov.in. This serverless function has
+// no such session, so this will very likely fail with a 401 until/unless a
+// portal service-account login is wired in here too (not yet confirmed —
+// same "needs a real example from you" situation as the status endpoint
+// originally was). It's still worth attempting on every sync in case the
+// portal ever serves it without auth, but don't rely on it — the manual
+// "Upload Certificate" fallback in the UI is the reliable path today.
+export async function downloadAndStoreCertificate({ applicationId, url }) {
+  if (!supabaseSync) throw new Error("Supabase not configured");
+
+  const resp = await axios.get(url, { responseType: "arraybuffer", timeout: 20000 });
+  const path = `pcc-certificates/${applicationId}.pdf`;
+
+  const { error } = await supabaseSync.storage
+    .from("application-documents")
+    .upload(path, resp.data, { contentType: "application/pdf", upsert: true });
+
+  if (error) throw new Error(error.message);
+  return path;
+}
+
 /**
- * Re-checks every application that has a PCC number and isn't already in a
- * finished/manual-only state, and writes the current stage back into
- * applications.pcc_status.
+ * Re-checks every application that has a PCC number and isn't already fully
+ * done, and writes the current stage/timeline (and pcc_status, kept in sync
+ * for the existing dropdown/filters/reports) back onto the row. Once a row
+ * reaches "Certificate Issued" AND the certificate has actually been
+ * captured (pcc_certificate_path set), it's left alone — until then it
+ * keeps getting re-checked every run, specifically so a Certificate Issued
+ * row whose auto-download failed (see downloadAndStoreCertificate's caveat)
+ * gets retried on the next run instead of being dropped.
  */
 export async function runPccAutoSync() {
   if (!supabaseSync) {
@@ -100,21 +149,28 @@ export async function runPccAutoSync() {
     return { checked: 0, updated: 0, errors: ["Supabase not configured"] };
   }
 
-  const { data: rows, error: fetchError } = await supabaseSync
+  const { data: allRows, error: fetchError } = await supabaseSync
     .from("applications")
-    .select("id, pcc_no, applicant_name, father_husband_name, pcc_status")
+    .select("id, pcc_no, applicant_name, father_husband_name, pcc_status, pcc_stage, pcc_certificate_path")
     .not("pcc_no", "is", null)
-    .not("pcc_status", "in", '("Certificate Issued","Rejected","Police Case")');
+    .not("pcc_status", "in", '("Rejected","Police Case")');
 
   if (fetchError) {
     console.error("PCC auto-sync: failed to load applications", fetchError.message);
     return { checked: 0, updated: 0, errors: [fetchError.message] };
   }
 
+  // Fully done = certificate issued AND we already have the PDF stored — no
+  // point re-hitting the portal for those every 2 hours forever.
+  const rows = (allRows || []).filter(
+    (r) => !(r.pcc_stage === "Certificate Issued" && r.pcc_certificate_path)
+  );
+
   let updated = 0;
+  let certificatesCaptured = 0;
   const errors = [];
 
-  for (const row of rows || []) {
+  for (const row of rows) {
     const applicationNumber = normalizePccApplicationNumber(row.pcc_no);
     const guardianName = stripKinPrefix(row.father_husband_name || "");
 
@@ -127,17 +183,37 @@ export async function runPccAutoSync() {
 
       if (!result.success) continue; // not found on portal this round, leave as-is
 
-      const newStatus = mapStageToDropdownStatus(result.status);
-      if (newStatus && newStatus !== row.pcc_status) {
-        const { error: updateError } = await supabaseSync
-          .from("applications")
-          .update({ pcc_status: newStatus })
-          .eq("id", row.id);
-        if (updateError) {
-          errors.push(`row ${row.id}: ${updateError.message}`);
-        } else {
-          updated += 1;
+      const { currentStage, timeline } = buildStageSnapshot(result.status);
+      const newDropdownStatus = mapStageToDropdownStatus(result.status);
+
+      const updates = { pcc_last_synced_at: new Date().toISOString() };
+      if (currentStage && currentStage !== row.pcc_stage) updates.pcc_stage = currentStage;
+      if (timeline.length) updates.pcc_timeline = timeline;
+      if (newDropdownStatus && newDropdownStatus !== row.pcc_status) updates.pcc_status = newDropdownStatus;
+
+      if (currentStage === "Certificate Issued" && !row.pcc_certificate_path && result.status?.certificateUrl) {
+        try {
+          updates.pcc_certificate_path = await downloadAndStoreCertificate({
+            applicationId: row.id,
+            url: result.status.certificateUrl,
+          });
+          certificatesCaptured += 1;
+        } catch (certErr) {
+          // Expected to fail without a portal session (see caveat on
+          // downloadAndStoreCertificate) — logged, not fatal, retried next run.
+          errors.push(`row ${row.id} certificate download: ${certErr.message}`);
         }
+      }
+
+      const { error: updateError } = await supabaseSync
+        .from("applications")
+        .update(updates)
+        .eq("id", row.id);
+
+      if (updateError) {
+        errors.push(`row ${row.id}: ${updateError.message}`);
+      } else if (Object.keys(updates).length > 1) {
+        updated += 1;
       }
     } catch (err) {
       errors.push(`row ${row.id} (${row.pcc_no}): ${err.message}`);
@@ -147,6 +223,8 @@ export async function runPccAutoSync() {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  console.log(`PCC auto-sync: checked ${rows?.length || 0}, updated ${updated}, errors ${errors.length}`);
-  return { checked: rows?.length || 0, updated, errors };
+  console.log(
+    `PCC auto-sync: checked ${rows.length}, updated ${updated}, certificates captured ${certificatesCaptured}, errors ${errors.length}`
+  );
+  return { checked: rows.length, updated, certificatesCaptured, errors };
 }
