@@ -14,7 +14,7 @@ import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
 import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
 import { notify } from "../lib/notify";
-import { createDealerStaffLogin } from "../lib/serverApi";
+import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { useDarkMode } from "../lib/theme";
 import { Sun, Moon, Fingerprint, Download, Phone } from "lucide-react";
@@ -97,6 +97,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
     try {
       const thread = await getOrCreateThread({ dealerId: dealer.id, applicationId });
       await sendMessage({ threadId: thread.id, sender: { ...identity, body: text } });
+      sendPush({ targetType: "all_staff", title: identity?.name || "New message", body: text, data: { kind: "chat" } });
     } catch {
       // Best-effort — a missed system note shouldn't block the flow that triggered it.
     }

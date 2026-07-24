@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from "agora-rtc-sdk-ng/esm";
 import { supabase } from "./supabase";
-import { fetchAgoraToken } from "./serverApi";
+import { fetchAgoraToken, sendPush } from "./serverApi";
 import { notify } from "./notify";
 import { logCallStart, logCallOutcome } from "./callLog";
 
@@ -241,6 +241,13 @@ export function useDirectCall({ identity }) {
       logIdRef.current = id;
     });
     sendTo(target, "ring", { callType: type });
+    sendPush({
+      targetType: target.type,
+      targetId: target.id,
+      title: identityRef.current.name || "Incoming call",
+      body: `${type === "video" ? "Video" : "Voice"} call from ${identityRef.current.name || "someone"}`,
+      data: { kind: "call" },
+    });
   }, [status, sendTo]);
 
   const acceptCall = useCallback(() => {

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Send, Image as ImageIcon, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
+import { sendPush } from "../lib/serverApi";
 import { useCall } from "../lib/call";
 
 const SENDER_BUBBLE = {
@@ -26,6 +27,21 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   const bodyRef = useRef(null);
   const fileInputRef = useRef(null);
   const call = useCall({ threadId, identity });
+
+  // Whoever ISN'T the sender should hear about this, even if their app is
+  // closed. Staff messaging a dealer targets that dealer's own login (the
+  // thread is keyed by dealer_id regardless of which of their sub-staff
+  // logins actually reads it); a dealer or their sub-staff messaging staff
+  // broadcasts to every staff device, since any staff member picks up
+  // dealer chats — there's no single "assigned" staff member per thread.
+  const pushForMessage = (preview) => {
+    if (!identity) return;
+    if (identity.type === "staff") {
+      sendPush({ targetType: "dealer", targetId: dealerId, title: identity.name || "New message", body: preview, data: { kind: "chat" } });
+    } else {
+      sendPush({ targetType: "all_staff", title: identity.name || "New message", body: preview, data: { kind: "chat" } });
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +85,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
     setShowEmoji(false);
     try {
       await sendMessage({ threadId, sender: { ...identity, body: text } });
+      pushForMessage(text.length > 120 ? text.slice(0, 117) + "…" : text);
       // No optimistic push needed — the realtime subscription (including our
       // own insert) will bring it back in, keeping a single source of truth.
     } catch (e) {
@@ -83,6 +100,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
     try {
       const url = await uploadChatAttachment(threadId, file);
       await sendMessage({ threadId, sender: { ...identity, attachmentUrl: url } });
+      pushForMessage("📎 Sent an image");
     } catch (e) {
       setError(e.message || "Couldn't send image");
     } finally {
