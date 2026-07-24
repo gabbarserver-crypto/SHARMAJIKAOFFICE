@@ -1623,7 +1623,7 @@ const IMPORT_HEADER_MAP = {
   mobile: "mobile", mobileno: "mobile", phone: "mobile",
   address: "address",
   amount: "amount",
-  rtofee: "rto_fee",
+  fee: "rto_fee", rtofee: "rto_fee",
   pccfee: "pcc_fee",
   agencyfee: "agency_fee",
   applicationno: "application_no", application: "application_no",
