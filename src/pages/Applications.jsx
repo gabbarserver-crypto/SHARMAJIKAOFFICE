@@ -389,8 +389,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setStaffList(s || []);
       const { data: d } = await supabase.from("dealers").select("id, name, code, short_name").order("name");
       setDealerList(d || []);
-      const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, available_limit");
-      setDealerHold(Object.fromEntries((summaries || []).filter((s) => s.available_limit <= 0).map((s) => [s.dealer_id, true])));
+      const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, credit_limit, running_balance");
+      setDealerHold(Object.fromEntries((summaries || []).filter((s) => (Number(s.credit_limit || 0) + Number(s.running_balance || 0)) <= 0).map((s) => [s.dealer_id, true])));
       const { data: sv } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, rto_required, agency_required, slot_booking_required, chat_in_app").order("parent_service");
       setServiceList(sv || []);
       const { data: rt } = await supabase.from("rtos").select("id, name, code, type").order("name");
