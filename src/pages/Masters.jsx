@@ -9,7 +9,7 @@ import { createDealerLogin, createDealerStaffLogin } from "../lib/serverApi";
 
 const TABS = ["RTO", "Staff", "Service", "Dealer", "Agency"];
 
-export default function Masters({ call }) {
+export default function Masters({ call, staff }) {
   const [tab, setTab] = useState("RTO");
   const [toast, setToast] = useState(null);
 
@@ -33,7 +33,7 @@ export default function Masters({ call }) {
       </div>
 
       {tab === "RTO" && <RTOMaster notify={notify} />}
-      {tab === "Staff" && <StaffMaster notify={notify} />}
+      {tab === "Staff" && <StaffMaster notify={notify} call={call} myStaffId={staff?.id} />}
       {tab === "Service" && <ServiceMaster notify={notify} />}
       {tab === "Dealer" && <DealerMaster notify={notify} call={call} />}
       {tab === "Agency" && <AgencyMaster notify={notify} />}
@@ -168,7 +168,7 @@ function RTOForm({ initial, onSave, onClose }) {
 }
 
 /* ---------------- Staff Master ---------------- */
-function StaffMaster({ notify }) {
+function StaffMaster({ notify, call, myStaffId }) {
   const [rows, setRows] = useState([]);
   const [roles, setRoles] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -210,6 +210,19 @@ function StaffMaster({ notify }) {
           { key: "full_name", label: "Name" }, { key: "role", label: "Designation" },
           { key: "roles", label: "Permission Role", render: (r) => r.roles?.role_name || "—" },
           { key: "mobile", label: "Mobile" }, { key: "username", label: "Username" },
+          { key: "call", label: "Call", render: (r) => {
+            const isSelf = myStaffId && r.id === myStaffId;
+            return (
+              <button
+                onClick={() => call?.startCall({ type: "staff", id: r.id, name: r.full_name }, "audio")}
+                disabled={!call || call.status !== "idle" || isSelf}
+                title={isSelf ? "That's you" : `Call ${r.full_name}`}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+              >
+                <Phone size={16} />
+              </button>
+            );
+          } },
         ]}
         onAdd={() => { setEditing(null); setOpen(true); }}
         onEdit={(r) => { setEditing(r); setOpen(true); }}
