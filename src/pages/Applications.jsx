@@ -544,6 +544,28 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
+  // PCC Fee is the trigger for auto-stamping today's date into Slot — used
+  // here purely as a "fee received on" marker, not an actual slot booking.
+  // Only fills it in when Slot is currently blank, so it never overwrites a
+  // real slot time someone already typed in for a service that needs one.
+  const updatePccFee = async (row, rawValue) => {
+    const feeValue = rawValue === "" ? null : parseFloat(rawValue);
+    const fields = { pcc_fee: feeValue };
+    if (feeValue !== null && !row.slot_time) {
+      const today = new Date();
+      const dd = String(today.getDate()).padStart(2, "0");
+      const mm = String(today.getMonth() + 1).padStart(2, "0");
+      fields.slot_time = `${dd}-${mm}-${today.getFullYear()}`;
+    }
+    const { error } = await supabase.from("applications").update(fields).eq("id", row.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, ...fields } : r)));
+  };
+
+
   // Changing dealer/service on a Draft mid-flight (point 5/6) needs to also
   // refresh the row's joined `dealers`/`services` objects locally — other
   // cells (RTO/PCC/Agency/Slot required flags, dealer HOLD badge) read off
@@ -727,7 +749,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     application: (r) => r.application_no || "",
     lldl: (r) => r.ll_dl_no || "",
     pccno: (r) => r.pcc_no || "",
-    rto: (r) => rtoList.find((x) => x.id === r.rto_id)?.name || "",
+    rto: (r) => (r.services?.pcc_required ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name || ""),
     agency: (r) => agencyList.find((x) => x.id === r.agency_id)?.name || "",
     slot: (r) => r.slot_time || "",
     mobile: (r) => r.mobile || "",
@@ -777,17 +799,18 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     };
     const lines = [headers.join(",")];
     sortedRows.forEach((r) => {
+      const rtoCell = r.services?.pcc_required ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name;
       const fullRow = [
         r.draft_code, r.amount, r.rto_fee, r.pcc_fee, r.agency_fee, profitOf(r),
         dealerLabel(r.dealers), serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
         r.application_no, r.ll_dl_no, r.pcc_no, r.pcc_status,
-        rtoList.find((x) => x.id === r.rto_id)?.name, agencyList.find((x) => x.id === r.agency_id)?.name,
+        rtoCell, agencyList.find((x) => x.id === r.agency_id)?.name,
         r.slot_time, r.mobile, r.remarks, r.application_date ? isoToDDMMYYYY(r.application_date) : "", r.status, r.submitted_at,
       ];
       const restrictedRow = [
         r.draft_code, serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
         r.rto_fee, r.pcc_fee, r.application_no, r.ll_dl_no, r.pcc_no, r.pcc_status,
-        rtoList.find((x) => x.id === r.rto_id)?.name, agencyList.find((x) => x.id === r.agency_id)?.name,
+        rtoCell, agencyList.find((x) => x.id === r.agency_id)?.name,
         r.slot_time, r.mobile, r.remarks, r.application_date ? isoToDDMMYYYY(r.application_date) : "", r.status, r.submitted_at,
       ];
       lines.push((restricted ? restrictedRow : fullRow).map(escapeCsv).join(","));
@@ -1123,7 +1146,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-20"
                       value={r.pcc_fee}
                       disabled={!r.services?.pcc_required}
-                      onSave={(v) => updateRowField(r.id, "pcc_fee", v === "" ? null : parseFloat(v))}
+                      onSave={(v) => updatePccFee(r, v)}
                     />
                   </td>
                 )}
@@ -1192,14 +1215,26 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.rto && (
                   <td className="px-3 py-2">
-                    <EditableSelect
-                      width="w-32"
-                      value={r.rto_id}
-                      options={rtoList}
-                      placeholder="Select RTO"
-                      disabled={!r.services?.rto_required}
-                      onSave={(v) => updateRowField(r.id, "rto_id", v || null)}
-                    />
+                    {r.services?.pcc_required ? (
+                      // PCC (and anything bundling it, like LL RIC) never
+                      // needs an actual RTO office — showing "PCC" here
+                      // instead of leaving it blank makes it a quick visual
+                      // marker: sort/scan the RTO column to see PCC rows
+                      // grouped together, separate from blank = no RTO
+                      // assigned yet on a service that actually needs one.
+                      <span className="inline-block px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs font-medium">
+                        PCC
+                      </span>
+                    ) : (
+                      <EditableSelect
+                        width="w-32"
+                        value={r.rto_id}
+                        options={rtoList}
+                        placeholder="Select RTO"
+                        disabled={!r.services?.rto_required}
+                        onSave={(v) => updateRowField(r.id, "rto_id", v || null)}
+                      />
+                    )}
                   </td>
                 )}
                 {visibleCols.agency && (
@@ -1616,8 +1651,10 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
 
         if (!row.applicant_name) errors.push("Applicant name is required");
 
-        const rto = row.rto ? findByLabel(rtoList, row.rto, ["name", "code"]) : null;
-        if (row.rto && !rto) errors.push(`RTO "${row.rto}" not found`);
+        const rto = row.rto && row.rto.trim().toUpperCase() !== "PCC"
+          ? findByLabel(rtoList, row.rto, ["name", "code"])
+          : null;
+        if (row.rto && row.rto.trim().toUpperCase() !== "PCC" && !rto) errors.push(`RTO "${row.rto}" not found`);
 
         const agency = row.agency ? findByLabel(agencyList, row.agency, ["name", "code"]) : null;
         if (row.agency && !agency) errors.push(`Agency "${row.agency}" not found`);

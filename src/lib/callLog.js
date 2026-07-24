@@ -57,7 +57,8 @@ export async function logCallOutcome(id, { outcome, answeredAt = null }) {
 // from that thread's ChatPanel, plus any "direct" call between the two
 // people on that thread (dealer/dealer_staff on one side, whichever admin
 // staff they called or were called by on the other). Powers the call log
-// panel embedded in the Chats page.
+// panel embedded in the Chats page, and the dealer-side "Calls" tab of
+// CommsWindow.
 export async function fetchCallLogs({ threadId, dealerId, limit = 30 }) {
   const clauses = [];
   if (threadId) clauses.push(`thread_id.eq.${threadId}`);
@@ -69,8 +70,22 @@ export async function fetchCallLogs({ threadId, dealerId, limit = 30 }) {
 
   const { data, error } = await supabase
     .from("call_logs")
-    .select("*")
+    .select("*, chat_threads(dealer_id, application_id, dealers(name, short_name), applications(application_no, draft_code, applicant_name))")
     .or(clauses.join(","))
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  if (error) return { rows: [], error };
+  return { rows: data || [], error: null };
+}
+
+// Staff-side counterpart to fetchCallLogs — staff can see every call
+// (thread and direct alike, per the call_logs RLS policy), so this is just
+// "everything, most recent first" rather than scoped to one dealer/thread.
+// Powers the staff "Calls" tab of CommsWindow.
+export async function fetchAllCallLogs({ limit = 30 } = {}) {
+  const { data, error } = await supabase
+    .from("call_logs")
+    .select("*, chat_threads(dealer_id, application_id, dealers(name, short_name), applications(application_no, draft_code, applicant_name))")
     .order("started_at", { ascending: false })
     .limit(limit);
   if (error) return { rows: [], error };

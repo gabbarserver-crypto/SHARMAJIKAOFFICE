@@ -1,5 +1,8 @@
 // src/App.jsx
 import React, { useEffect, useState, useCallback } from "react";
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
 import { supabase } from "./lib/supabase";
 import Sidebar from "./components/Sidebar";
 import Login from "./pages/Login";
@@ -293,6 +296,37 @@ export default function App() {
     });
     return () => listener.subscription.unsubscribe();
   }, [verifySession]);
+
+  // Catches Google sign-in's redirect back into the app (see
+  // submitWithGoogle in Login.jsx, which opens the Google login as an
+  // in-app Custom Tab rather than switching to Chrome). Once Google
+  // approves, it redirects to sjoerp://auth-callback#access_token=...,
+  // which the AndroidManifest intent-filter routes straight back here.
+  // verifySession() above picks up the resulting session automatically via
+  // onAuthStateChange, once setSession() below fires it.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    const sub = CapacitorApp.addListener("appUrlOpen", async ({ url }) => {
+      if (!url.startsWith("sjoerp://auth-callback")) return;
+
+      const hashIndex = url.indexOf("#");
+      if (hashIndex === -1) {
+        await Browser.close().catch(() => {});
+        return;
+      }
+      const params = new URLSearchParams(url.slice(hashIndex + 1));
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+
+      if (access_token && refresh_token) {
+        await supabase.auth.setSession({ access_token, refresh_token });
+      }
+      await Browser.close().catch(() => {});
+    });
+
+    return () => { sub.then((s) => s.remove()); };
+  }, []);
 
   // PIN lock gating (keyed on authUserId, not on every verifySession call,
   // so a background token refresh doesn't re-lock an already-unlocked
