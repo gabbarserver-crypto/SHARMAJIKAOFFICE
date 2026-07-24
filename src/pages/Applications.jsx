@@ -122,6 +122,46 @@ function EditableSelect({ value, options, onSave, width = "w-32", placeholder = 
   );
 }
 
+// Mirrors PCC_STAGE_ORDER/LABELS in PCCStatusCheckModal.jsx and
+// api/_lib/pccClient.js — the 6 granular stages the auto-sync cron writes
+// into pcc_stage every ~2 hours, shown here as a compact dot row so staff
+// can see progress at a glance without opening the modal.
+const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
+const PCC_STAGE_SHORT_LABELS = {
+  Pending: "Submitted",
+  Assigned: "Assigned",
+  "Field Verified": "Field Verified",
+  Approved: "Approved",
+  Verified: "Verified",
+  "Certificate Issued": "Cert. Issued",
+};
+
+function PCCStageDots({ pccStage, pccCertificatePath }) {
+  if (!pccStage) return null;
+  const currentIdx = PCC_STAGE_ORDER.indexOf(pccStage);
+  return (
+    <div className="flex items-center gap-1" title={`Auto-synced stage: ${PCC_STAGE_SHORT_LABELS[pccStage] || pccStage}`}>
+      {PCC_STAGE_ORDER.map((stage, i) => (
+        <span
+          key={stage}
+          className={`w-1.5 h-1.5 rounded-full ${i <= currentIdx ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"}`}
+        />
+      ))}
+      {pccCertificatePath && (
+        <a
+          href={supabase.storage.from("application-documents").getPublicUrl(pccCertificatePath).data.publicUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Download the saved certificate"
+          className="ml-1 text-emerald-600 hover:text-emerald-700"
+        >
+          📄
+        </a>
+      )}
+    </div>
+  );
+}
+
 const PCC_STATUS_OPTIONS = ["Under Verification", "Certificate Issued", "Rejected", "Police Case"];
 const PCC_STATUS_STYLES = {
   "Under Verification": "bg-yellow-50 text-yellow-800 border-yellow-300",
@@ -1221,6 +1261,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                           onOpenPortal={() => openPccPortal(r)}
                           onSave={(fields) => updatePccFields(r.id, fields)}
                         />
+                        <PCCStageDots pccStage={r.pcc_stage} pccCertificatePath={r.pcc_certificate_path} />
                         {r.pcc_no && (
                           <button
                             type="button"
@@ -1452,7 +1493,19 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       )}
 
       {pccCheckRow && (
-        <PCCStatusCheckModal row={pccCheckRow} onClose={() => setPccCheckRow(null)} />
+        <PCCStatusCheckModal
+          row={pccCheckRow}
+          onClose={() => setPccCheckRow(null)}
+          onCertificateSaved={(id) =>
+            setRows((rs) =>
+              rs.map((r) =>
+                r.id === id
+                  ? { ...r, pcc_certificate_path: `pcc-certificates/${id}.pdf`, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" }
+                  : r
+              )
+            )
+          }
+        />
       )}
 
       {bookingApp && (

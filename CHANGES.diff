@@ -1,0 +1,420 @@
+diff --git a/api/_lib/pccClient.js b/api/_lib/pccClient.js
+index 9eb8e6f..3f5b569 100644
+--- a/api/_lib/pccClient.js
++++ b/api/_lib/pccClient.js
+@@ -89,10 +89,59 @@ export function mapStageToDropdownStatus(status) {
+   return null; // no timeline data back — don't overwrite whatever's there
+ }
+ 
++// The 6 stages, in order, exactly as PCCStatusCheckModal.jsx renders them.
++// Kept here too so the auto-sync can persist "how far did it get" without
++// the frontend having to re-call the portal just to show the stepper.
++export const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
++
++// Given a status response, returns the furthest stage reached (or null if no
++// timeline came back) plus the raw timeline array to store as-is.
++export function buildStageSnapshot(status) {
++  const timeline = status?.timeline || [];
++  const stagesReached = new Set(timeline.map((t) => t.stage));
++  let currentStage = null;
++  for (const stage of PCC_STAGE_ORDER) {
++    if (stagesReached.has(stage)) currentStage = stage;
++  }
++  return { currentStage, timeline };
++}
++
++// Downloads the certificate PDF and stores it in the same
++// "application-documents" Supabase Storage bucket the rest of the app
++// already uses (see src/lib/chat.js), under pcc-certificates/<applicationId>.pdf.
++//
++// IMPORTANT CAVEAT: the certificateUrl the portal returns is, per
++// PCCStatusCheckModal.jsx, only good for someone with an active logged-in
++// browser session on pcccvr.delhipolice.gov.in. This serverless function has
++// no such session, so this will very likely fail with a 401 until/unless a
++// portal service-account login is wired in here too (not yet confirmed —
++// same "needs a real example from you" situation as the status endpoint
++// originally was). It's still worth attempting on every sync in case the
++// portal ever serves it without auth, but don't rely on it — the manual
++// "Upload Certificate" fallback in the UI is the reliable path today.
++export async function downloadAndStoreCertificate({ applicationId, url }) {
++  if (!supabaseSync) throw new Error("Supabase not configured");
++
++  const resp = await axios.get(url, { responseType: "arraybuffer", timeout: 20000 });
++  const path = `pcc-certificates/${applicationId}.pdf`;
++
++  const { error } = await supabaseSync.storage
++    .from("application-documents")
++    .upload(path, resp.data, { contentType: "application/pdf", upsert: true });
++
++  if (error) throw new Error(error.message);
++  return path;
++}
++
+ /**
+- * Re-checks every application that has a PCC number and isn't already in a
+- * finished/manual-only state, and writes the current stage back into
+- * applications.pcc_status.
++ * Re-checks every application that has a PCC number and isn't already fully
++ * done, and writes the current stage/timeline (and pcc_status, kept in sync
++ * for the existing dropdown/filters/reports) back onto the row. Once a row
++ * reaches "Certificate Issued" AND the certificate has actually been
++ * captured (pcc_certificate_path set), it's left alone — until then it
++ * keeps getting re-checked every run, specifically so a Certificate Issued
++ * row whose auto-download failed (see downloadAndStoreCertificate's caveat)
++ * gets retried on the next run instead of being dropped.
+  */
+ export async function runPccAutoSync() {
+   if (!supabaseSync) {
+@@ -100,21 +149,28 @@ export async function runPccAutoSync() {
+     return { checked: 0, updated: 0, errors: ["Supabase not configured"] };
+   }
+ 
+-  const { data: rows, error: fetchError } = await supabaseSync
++  const { data: allRows, error: fetchError } = await supabaseSync
+     .from("applications")
+-    .select("id, pcc_no, applicant_name, father_husband_name, pcc_status")
++    .select("id, pcc_no, applicant_name, father_husband_name, pcc_status, pcc_stage, pcc_certificate_path")
+     .not("pcc_no", "is", null)
+-    .not("pcc_status", "in", '("Certificate Issued","Rejected","Police Case")');
++    .not("pcc_status", "in", '("Rejected","Police Case")');
+ 
+   if (fetchError) {
+     console.error("PCC auto-sync: failed to load applications", fetchError.message);
+     return { checked: 0, updated: 0, errors: [fetchError.message] };
+   }
+ 
++  // Fully done = certificate issued AND we already have the PDF stored — no
++  // point re-hitting the portal for those every 2 hours forever.
++  const rows = (allRows || []).filter(
++    (r) => !(r.pcc_stage === "Certificate Issued" && r.pcc_certificate_path)
++  );
++
+   let updated = 0;
++  let certificatesCaptured = 0;
+   const errors = [];
+ 
+-  for (const row of rows || []) {
++  for (const row of rows) {
+     const applicationNumber = normalizePccApplicationNumber(row.pcc_no);
+     const guardianName = stripKinPrefix(row.father_husband_name || "");
+ 
+@@ -127,18 +183,38 @@ export async function runPccAutoSync() {
+ 
+       if (!result.success) continue; // not found on portal this round, leave as-is
+ 
+-      const newStatus = mapStageToDropdownStatus(result.status);
+-      if (newStatus && newStatus !== row.pcc_status) {
++      const { currentStage, timeline } = buildStageSnapshot(result.status);
++      const newDropdownStatus = mapStageToDropdownStatus(result.status);
++
++      const updates = { pcc_last_synced_at: new Date().toISOString() };
++      if (currentStage && currentStage !== row.pcc_stage) updates.pcc_stage = currentStage;
++      if (timeline.length) updates.pcc_timeline = timeline;
++      if (newDropdownStatus && newDropdownStatus !== row.pcc_status) updates.pcc_status = newDropdownStatus;
++
++      if (currentStage === "Certificate Issued" && !row.pcc_certificate_path && result.status?.certificateUrl) {
++        try {
++          updates.pcc_certificate_path = await downloadAndStoreCertificate({
++            applicationId: row.id,
++            url: result.status.certificateUrl,
++          });
++          certificatesCaptured += 1;
++        } catch (certErr) {
++          // Expected to fail without a portal session (see caveat on
++          // downloadAndStoreCertificate) — logged, not fatal, retried next run.
++          errors.push(`row ${row.id} certificate download: ${certErr.message}`);
++        }
++      }
++
+       const { error: updateError } = await supabaseSync
+         .from("applications")
+-          .update({ pcc_status: newStatus })
++        .update(updates)
+         .eq("id", row.id);
++
+       if (updateError) {
+         errors.push(`row ${row.id}: ${updateError.message}`);
+-        } else {
++      } else if (Object.keys(updates).length > 1) {
+         updated += 1;
+       }
+-      }
+     } catch (err) {
+       errors.push(`row ${row.id} (${row.pcc_no}): ${err.message}`);
+     }
+@@ -147,6 +223,8 @@ export async function runPccAutoSync() {
+     await new Promise((r) => setTimeout(r, 300));
+   }
+ 
+-  console.log(`PCC auto-sync: checked ${rows?.length || 0}, updated ${updated}, errors ${errors.length}`);
+-  return { checked: rows?.length || 0, updated, errors };
++  console.log(
++    `PCC auto-sync: checked ${rows.length}, updated ${updated}, certificates captured ${certificatesCaptured}, errors ${errors.length}`
++  );
++  return { checked: rows.length, updated, certificatesCaptured, errors };
+ }
+diff --git a/src/components/PCCStatusCheckModal.jsx b/src/components/PCCStatusCheckModal.jsx
+index 1a51138..5ea1752 100644
+--- a/src/components/PCCStatusCheckModal.jsx
++++ b/src/components/PCCStatusCheckModal.jsx
+@@ -5,6 +5,7 @@
+ // admin-side PCC No column.
+ import React, { useState } from "react";
+ import { Modal, Field, Input, PrimaryButton } from "./UI";
++import { supabase } from "../lib/supabase";
+ 
+ // Same-origin by default — this hits the Vercel serverless function at
+ // api/pcc-status/check.js, deployed alongside the frontend, so it works
+@@ -64,7 +65,31 @@ function stripKinPrefix(name) {
+ // number (with the fixed DLSB-PCC/ prefix), applicant name, guardian name —
+ // prefilled from our record, but editable, with an explicit "Search
+ // Application" button. Nothing fires until the user clicks it.
+-export default function PCCStatusCheckModal({ row, onClose }) {
++// Auto-sync (server cron, every 2 hours) already tries to fetch the
++// certificate itself, but that only works if it happens to reach the portal
++// without needing a logged-in session — see the caveat in
++// api/_lib/pccClient.js's downloadAndStoreCertificate(). Until/unless a
++// portal service-account login is wired in, the reliable path is: staff
++// clicks "Download Certificate" (opens in a new tab using their own browser
++// session, which does work), saves the PDF, then uploads it here so it's
++// stored in our own database/storage against this application going forward.
++async function saveCertificateFile(applicationId, file) {
++  const path = `pcc-certificates/${applicationId}.pdf`;
++  const { error: uploadError } = await supabase.storage
++    .from("application-documents")
++    .upload(path, file, { upsert: true, contentType: "application/pdf" });
++  if (uploadError) throw uploadError;
++
++  const { error: updateError } = await supabase
++    .from("applications")
++    .update({ pcc_certificate_path: path, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" })
++    .eq("id", applicationId);
++  if (updateError) throw updateError;
++
++  return path;
++}
++
++export default function PCCStatusCheckModal({ row, onClose, onCertificateSaved }) {
+   const [applicationNumber, setApplicationNumber] = useState(
+     normalizePccApplicationNumber(row.pcc_no)?.replace(/^DLSB-PCC\//i, "") || ""
+   );
+@@ -75,6 +100,26 @@ export default function PCCStatusCheckModal({ row, onClose }) {
+   const [error, setError] = useState(null);
+   const [result, setResult] = useState(null);
+   const [downloading, setDownloading] = useState(false);
++  const [savingCert, setSavingCert] = useState(false);
++  const [certSaved, setCertSaved] = useState(Boolean(row.pcc_certificate_path));
++  const fileInputRef = React.useRef(null);
++
++  const handleCertFileChosen = async (e) => {
++    const file = e.target.files?.[0];
++    e.target.value = ""; // allow re-picking the same file later
++    if (!file) return;
++    setSavingCert(true);
++    setError(null);
++    try {
++      await saveCertificateFile(row.id, file);
++      setCertSaved(true);
++      onCertificateSaved?.(row.id);
++    } catch (err) {
++      setError(err.message || "Failed to save certificate");
++    } finally {
++      setSavingCert(false);
++    }
++  };
+ 
+   const runCheck = async () => {
+     setLoading(true);
+@@ -123,9 +168,13 @@ export default function PCCStatusCheckModal({ row, onClose }) {
+   };
+ 
+   const application = result?.application || null;
+-  const status = result?.status || null;
++  // Before the user clicks "Search Application", show whatever the last
++  // auto-sync run stored on the row (pcc_timeline / pcc_last_synced_at)
++  // instead of a blank stepper — it's already what the admin table shows.
++  const status = result?.status || (row.pcc_timeline?.length ? { timeline: row.pcc_timeline } : null);
+   const steps = mapToSteps(status);
+   const lastStep = steps[steps.length - 1];
++  const usingStoredTimeline = !result && row.pcc_timeline?.length > 0;
+ 
+   return (
+     <Modal title="Track Application" onClose={onClose} wide>
+@@ -166,6 +215,36 @@ export default function PCCStatusCheckModal({ row, onClose }) {
+           <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No matching application found.</p>
+         )}
+ 
++        {usingStoredTimeline && (
++          <div className="mt-4">
++            <div className="flex items-center justify-between mb-2">
++              <h4 className="font-semibold text-slate-700 dark:text-slate-300">
++                Application Progress <span className="text-xs font-normal text-slate-400">(as of last auto-sync)</span>
++              </h4>
++              {row.pcc_last_synced_at && (
++                <span className="text-xs text-slate-400">
++                  Synced {new Date(row.pcc_last_synced_at).toLocaleString()}
++                </span>
++              )}
++            </div>
++            <ul>
++              {steps.map((s) => (
++                <li key={s.label} className="flex items-start gap-2 py-1.5 text-sm">
++                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
++                    s.done ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400 dark:text-slate-500"
++                  }`}>
++                    {s.done ? "✓" : ""}
++                  </span>
++                  <div>
++                    <div className={s.done ? "text-slate-800 dark:text-slate-100 font-medium" : "text-slate-400 dark:text-slate-500"}>{s.label}</div>
++                    {s.timestamp && <div className="text-xs text-blue-600">{s.timestamp}</div>}
++                  </div>
++                </li>
++              ))}
++            </ul>
++          </div>
++        )}
++
+         {application && (
+           <div className="mt-4">
+             <div className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-3 py-2">
+@@ -177,6 +256,7 @@ export default function PCCStatusCheckModal({ row, onClose }) {
+                 <div className="text-xs text-slate-400 dark:text-slate-500">Applicant Name</div>
+                 <div className="font-semibold text-slate-700 dark:text-slate-300">{application.applicantName}</div>
+               </div>
++              <div className="flex items-center gap-2 shrink-0">
+                 {status?.certificateUrl && (
+                   <button
+                     type="button"
+@@ -187,11 +267,26 @@ export default function PCCStatusCheckModal({ row, onClose }) {
+                     {downloading ? "Getting link…" : "⬇ Download Certificate"}
+                   </button>
+                 )}
++                <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={handleCertFileChosen} />
++                <button
++                  type="button"
++                  disabled={savingCert}
++                  onClick={() => fileInputRef.current?.click()}
++                  title="After downloading the PDF above, upload it here to save it in our own database"
++                  className={`inline-flex items-center gap-1.5 font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-60 ${
++                    certSaved
++                      ? "bg-emerald-50 text-emerald-700 border border-emerald-300"
++                      : "bg-blue-900 hover:bg-blue-800 text-white"
++                  }`}
++                >
++                  {savingCert ? "Saving…" : certSaved ? "✓ Saved to our records" : "📤 Save Certificate to DB"}
++                </button>
++              </div>
+             </div>
+             {status?.certificateUrl && (
+               <p className="text-xs text-slate-400 dark:text-slate-500 mt-1.5">
+-                This link requires an active, logged-in session on the Delhi Police portal in this
+-                browser. If it shows a 401 error,{" "}
++                "Download Certificate" requires an active, logged-in session on the Delhi Police
++                portal in this browser. If it shows a 401 error,{" "}
+                 <button
+                   type="button"
+                   onClick={() => window.open("https://pcccvr.delhipolice.gov.in/login", "_blank", "noopener,noreferrer")}
+@@ -199,7 +294,9 @@ export default function PCCStatusCheckModal({ row, onClose }) {
+                 >
+                   log into the portal
+                 </button>{" "}
+-                first, then try the download again.
++                first, then try again. Once you have the PDF, use "Save Certificate to DB" to store
++                it against this application — auto-sync also tries to fetch it automatically every
++                couple of hours, but this manual step is the reliable path today.
+               </p>
+             )}
+ 
+diff --git a/src/pages/Applications.jsx b/src/pages/Applications.jsx
+index b05bb91..f574f74 100644
+--- a/src/pages/Applications.jsx
++++ b/src/pages/Applications.jsx
+@@ -122,6 +122,46 @@ function EditableSelect({ value, options, onSave, width = "w-32", placeholder =
+   );
+ }
+ 
++// Mirrors PCC_STAGE_ORDER/LABELS in PCCStatusCheckModal.jsx and
++// api/_lib/pccClient.js — the 6 granular stages the auto-sync cron writes
++// into pcc_stage every ~2 hours, shown here as a compact dot row so staff
++// can see progress at a glance without opening the modal.
++const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
++const PCC_STAGE_SHORT_LABELS = {
++  Pending: "Submitted",
++  Assigned: "Assigned",
++  "Field Verified": "Field Verified",
++  Approved: "Approved",
++  Verified: "Verified",
++  "Certificate Issued": "Cert. Issued",
++};
++
++function PCCStageDots({ pccStage, pccCertificatePath }) {
++  if (!pccStage) return null;
++  const currentIdx = PCC_STAGE_ORDER.indexOf(pccStage);
++  return (
++    <div className="flex items-center gap-1" title={`Auto-synced stage: ${PCC_STAGE_SHORT_LABELS[pccStage] || pccStage}`}>
++      {PCC_STAGE_ORDER.map((stage, i) => (
++        <span
++          key={stage}
++          className={`w-1.5 h-1.5 rounded-full ${i <= currentIdx ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"}`}
++        />
++      ))}
++      {pccCertificatePath && (
++        <a
++          href={supabase.storage.from("application-documents").getPublicUrl(pccCertificatePath).data.publicUrl}
++          target="_blank"
++          rel="noopener noreferrer"
++          title="Download the saved certificate"
++          className="ml-1 text-emerald-600 hover:text-emerald-700"
++        >
++          📄
++        </a>
++      )}
++    </div>
++  );
++}
++
+ const PCC_STATUS_OPTIONS = ["Under Verification", "Certificate Issued", "Rejected", "Police Case"];
+ const PCC_STATUS_STYLES = {
+   "Under Verification": "bg-yellow-50 text-yellow-800 border-yellow-300",
+@@ -1221,6 +1261,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
+                           onOpenPortal={() => openPccPortal(r)}
+                           onSave={(fields) => updatePccFields(r.id, fields)}
+                         />
++                        <PCCStageDots pccStage={r.pcc_stage} pccCertificatePath={r.pcc_certificate_path} />
+                         {r.pcc_no && (
+                           <button
+                             type="button"
+@@ -1452,7 +1493,19 @@ export default function Applications({ restricted = false, canEdit = true, canAp
+       )}
+ 
+       {pccCheckRow && (
+-        <PCCStatusCheckModal row={pccCheckRow} onClose={() => setPccCheckRow(null)} />
++        <PCCStatusCheckModal
++          row={pccCheckRow}
++          onClose={() => setPccCheckRow(null)}
++          onCertificateSaved={(id) =>
++            setRows((rs) =>
++              rs.map((r) =>
++                r.id === id
++                  ? { ...r, pcc_certificate_path: `pcc-certificates/${id}.pdf`, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" }
++                  : r
++              )
++            )
++          }
++        />
+       )}
+ 
+       {bookingApp && (
+diff --git a/src/pages/DealerPortal.jsx b/src/pages/DealerPortal.jsx
+index 5496a60..3a88031 100644
+--- a/src/pages/DealerPortal.jsx
++++ b/src/pages/DealerPortal.jsx
+@@ -484,7 +484,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
+     setLoading(true);
+     const { data, error } = await supabase
+       .from("applications")
+-      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days)")
++      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, pcc_status, pcc_stage, pcc_timeline, pcc_certificate_path, pcc_last_synced_at, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days)")
+       .eq("dealer_id", dealerId)
+       .order("submitted_at", { ascending: false });
+     if (error) {
