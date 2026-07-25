@@ -564,6 +564,7 @@ function DealerMaster({ notify, call }) {
       name: form.name, code: form.code, short_name: form.short_name || null, contact_name: form.contact_name, mobile: form.mobile, email: form.email,
       address: form.address, city: form.city, state: form.state, pincode: form.pincode,
       credit_limit: parseFloat(form.credit_limit) || 0,
+      opening_balance: parseFloat(form.opening_balance) || 0,
     };
     const { error } = editing
       ? await supabase.from("dealers").update(payload).eq("id", editing.id)
@@ -650,7 +651,7 @@ function DealerMaster({ notify, call }) {
 }
 
 export function DealerForm({ initial, onSave, onClose, call }) {
-  const [f, setF] = useState(initial || { name: "", code: "", short_name: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "" });
+  const [f, setF] = useState(initial || { name: "", code: "", short_name: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "", opening_balance: "" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -688,7 +689,10 @@ export function DealerForm({ initial, onSave, onClose, call }) {
         <Input value={f.state} onChange={set("state")} placeholder="State" />
         <Input value={f.pincode} onChange={set("pincode")} placeholder="Pincode" />
       </div>
-      <Field label="Credit Limit (₹)"><Input type="number" value={f.credit_limit} onChange={set("credit_limit")} /></Field>
+      <div className="grid sm:grid-cols-2 gap-x-4">
+        <Field label="Credit Limit (₹)"><Input type="number" value={f.credit_limit} onChange={set("credit_limit")} /></Field>
+        <Field label="Opening Balance (₹)"><Input type="number" value={f.opening_balance} onChange={set("opening_balance")} /></Field>
+      </div>
       <PrimaryButton onClick={() => onSave(f)}>Save Dealer</PrimaryButton>
 
       {initial && (
