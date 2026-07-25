@@ -16,6 +16,7 @@ import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
 import { notify } from "../lib/notify";
 import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
+import { ageHighlightClass, validateAgeForService } from "../lib/age";
 import { useDarkMode } from "../lib/theme";
 import { Sun, Moon, Fingerprint, Download, Phone } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
@@ -359,6 +360,11 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
       setError("Service and Applicant Name are required");
       return;
     }
+    const ageErr = validateAgeForService(f.date_of_birth, selectedService);
+    if (ageErr) {
+      setError(ageErr);
+      return;
+    }
     setSaving(true);
     setError("");
     const { data: draftCode, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: dealer.id });
@@ -431,7 +437,10 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
       </Field>
       <Field label="Applicant Name" required><Input value={f.applicant_name} onChange={set("applicant_name")} /></Field>
       <Field label="Father / Husband Name"><Input value={f.father_husband_name} onChange={set("father_husband_name")} /></Field>
-      <Field label="Date of Birth"><Input type="date" value={f.date_of_birth} onChange={set("date_of_birth")} /></Field>
+      <Field label="Date of Birth">
+        <Input type="date" value={f.date_of_birth} onChange={set("date_of_birth")}
+          className={ageHighlightClass(f.date_of_birth) ? "border-amber-400" : ""} />
+      </Field>
       <Field label="Mobile"><Input value={f.mobile} onChange={set("mobile")} /></Field>
       <Field label="Address"><Input value={f.address} onChange={set("address")} /></Field>
       {selectedService?.pcc_required && (
