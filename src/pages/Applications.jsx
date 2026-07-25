@@ -534,6 +534,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (app.status === "Accepted") {
       await supabase.from("ledger_transactions").delete().eq("dealer_id", app.dealer_id).eq("voucher_no", app.draft_code);
     }
+    // Also drop this application’s agency-ledger line (see syncAgencyLedger
+    // above) if it had one — same voucher_no match, no status check needed
+    // since that line can exist regardless of Accepted/etc.
+    await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", app.draft_code);
     await supabase.from("application_documents").delete().eq("application_id", app.id);
     const { error } = await supabase.from("applications").delete().eq("id", app.id);
     if (error) {
@@ -590,6 +594,58 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
+  // Agency Fee and the chosen Agency together decide what (if anything)
+  // this application owes that agency — kept in sync as its own line on
+  // that agency’s ledger (agency_ledger_transactions), keyed by this
+  // application’s draft_code as voucher_no so repeated edits update the
+  // SAME line instead of piling up duplicates. Unlike the dealer fee
+  // (which only posts once on approval — see approveApplication above),
+  // this reflects live: it fires on every Agency Fee / Agency edit,
+  // whatever the application’s status.
+  const syncAgencyLedger = async (row) => {
+    const voucherNo = row.draft_code;
+    if (!voucherNo) return; // shouldn’t happen, but with no voucher_no there’s no way to find this line again later
+
+    const { data: existing } = await supabase
+      .from("agency_ledger_transactions")
+      .select("id, agency_id")
+      .eq("voucher_no", voucherNo)
+      .maybeSingle();
+
+    const feeAmount = Number(row.agency_fee || 0);
+    const hasValidEntry = row.agency_id && feeAmount > 0;
+
+    // No agency picked, or fee cleared/zeroed — this application owes that
+    // agency nothing (any more), so remove whatever line used to be there.
+    if (!hasValidEntry) {
+      if (existing) await supabase.from("agency_ledger_transactions").delete().eq("id", existing.id);
+      return;
+    }
+
+    const serviceAndName = [serviceLabel(row.services), row.applicant_name].filter(Boolean).join(" ");
+    const description = [
+      serviceAndName || null,
+      row.application_no ? `App No: ${row.application_no}` : `Draft: ${row.draft_code}`,
+    ].filter(Boolean).join(" · ");
+
+    if (existing && existing.agency_id === row.agency_id) {
+      // Same agency as before — just update the amount/description in place.
+      await supabase.from("agency_ledger_transactions").update({ amount: feeAmount, description }).eq("id", existing.id);
+    } else {
+      // Either a brand-new line, or the agency was changed — either way the
+      // old line (if any, possibly on a DIFFERENT agency’s ledger) no longer
+      // applies, so drop it and post fresh under the current agency.
+      if (existing) await supabase.from("agency_ledger_transactions").delete().eq("id", existing.id);
+      await supabase.from("agency_ledger_transactions").insert({
+        agency_id: row.agency_id,
+        voucher_no: voucherNo,
+        type: "debit",
+        amount: feeAmount,
+        description,
+      });
+    }
+  };
+
   const updateRowField = async (id, field, value) => {
     const { error } = await supabase.from("applications").update({ [field]: value }).eq("id", id);
     if (error) {
@@ -597,6 +653,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return;
     }
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+
+    if (field === "agency_fee" || field === "agency_id") {
+      const current = rows.find((r) => r.id === id);
+      if (current) await syncAgencyLedger({ ...current, [field]: value });
+    }
   };
 
   // PCC Fee is the trigger for auto-stamping today's date into Slot — used

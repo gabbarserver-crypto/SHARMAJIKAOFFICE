@@ -1,45 +1,42 @@
-# Unified Chats/Calls window — setup
+# Agency Fee → Agency Ledger sync
 
-## What's in this zip
-- `src/components/CommsWindow.jsx` — NEW. The single floating chat icon +
-  window with a bottom nav (Chats / Calls / New Call), used by every login
-  type.
-- `src/lib/chat.js` — modified, adds `listRecentThreadsForStaff` and
-  `listRecentThreadsForDealer` (powers the Chats tab).
-- `src/lib/callLog.js` — modified, adds `fetchAllCallLogs` for staff and
-  joins in thread/dealer info so a call row can show who it was and jump
-  back to that conversation.
-- `src/App.jsx` — modified. Replaces `<StaffChatWidget ...>` with
-  `<CommsWindow variant="staff" ...>`.
-  **This version already includes the FCM push-notification wiring from
-  the previous zip (`push-notifications-fcm.zip`) merged in** — use THIS
-  App.jsx, not that one, if you're applying both.
-- `src/pages/DealerPortal.jsx` — modified. Replaces `<ChatWidget ...>`
-  with `<CommsWindow variant="dealer" ...>`.
+## What changed
+`src/pages/Applications.jsx` only — two spots:
 
-You can now delete `src/components/ChatWidget.jsx` and
-`src/components/StaffChatWidget.jsx` — nothing references them anymore.
+1. **New `syncAgencyLedger()` helper**, called from `updateRowField()`
+   whenever you edit the **Agency Fee** or **Agency** cell on an
+   application row (the ones circled in your screenshot). It posts a
+   `debit` line to `agency_ledger_transactions` for the chosen agency,
+   equal to the Agency Fee — same "we owe them" convention already used
+   by the Payments page. It's keyed by the application's own `draft_code`
+   as `voucher_no`, so re-editing the fee or switching the agency updates
+   that same line instead of creating duplicates.
+   - Clear the fee (or unset the agency) → the ledger line is removed.
+   - Change the agency → the old line is removed, a fresh one is posted
+     under the new agency.
+   - This reflects live, on every edit — unlike the *dealer's* fee, which
+     only posts once on Accept (that behavior is unchanged).
 
-## How the permission rule works
-"New Call" tab:
-- **Staff** see every dealer + every active dealer_staff, and can call or
-  video-call any of them.
-- **Dealer / dealer_staff** logins see ONLY admin staff. This isn't a
-  filter applied to one shared list — it's a completely separate Supabase
-  query (`select from staff`) that never touches the `dealers` or
-  `dealer_staff` tables at all, so there's no code path that could ever
-  show a dealer another dealer, or another dealer's sub-staff.
+2. **`deleteApplication()`** now also deletes that application's
+   agency-ledger line (if any), same as it already does for the dealer
+   ledger, so deleting an application doesn't leave a dangling "owed"
+   line behind.
 
-## Nothing new to install
-No new dependencies, no new migrations — this only reuses tables and
-Supabase queries that already exist in your project.
+## Not covered (by design, flag if you want it too)
+- **CSV import** (bulk-importing existing records with an Agency Fee +
+  Agency already filled in) does not currently post to the agency ledger.
+  Only edits made through the table UI do. Say the word if you'd like
+  imported rows to post too.
+- No new tables/migrations needed — this only writes to
+  `agency_ledger_transactions`, which already exists and is what the
+  Agency ledger view (Ledger.jsx) reads from.
 
 ## Test it
-1. Sign in as staff → chat bubble bottom-right → should show Chats / Calls
-   / New Call tabs. New Call should list dealers and dealer staff.
-2. Sign in as a dealer → same bubble → New Call should list ONLY admin
-   staff (try searching — a dealer's own name/company should never appear).
-3. Start a call from New Call, hang up, check it shows up in the Calls tab
-   with a "call back" button.
-4. Send a message from Chats tab, confirm it appears in the other side's
-   Recent list.
+1. Open an application row, set an Agency and an Agency Fee (e.g. ₹1,900,
+   like your screenshot).
+2. Go to Ledger → Agency → that agency → you should see a new debit line
+   for that amount, with the applicant's name / app no. in the
+   description.
+3. Edit the fee to a different amount → same ledger line updates instead
+   of a second line appearing.
+4. Clear the fee, or clear the Agency dropdown → the ledger line disappears.
