@@ -4,18 +4,56 @@ import { supabase } from "../lib/supabase";
 import { Card, Field, GhostButton, PrimaryButton } from "../components/UI";
 import { DealerForm, AgencyForm } from "./Masters";
 
+// Now that Type has its own column, strip the parts of the description that
+// just repeat it — the "Service: X" segment, and the "Payment received"
+// prefix — along with whatever separator (·, -, –, —) sat next to them, so
+// the remaining text doesn't have an orphaned separator left behind.
+function stripTypeFromDescription(description) {
+  if (!description) return description;
+  let d = description;
+  d = d.replace(/\s*[·\-–—]?\s*Service:\s*[^·\-–—\n]+/i, "");
+  d = d.replace(/^\s*Payment received\s*[·\-–—]?\s*/i, "");
+  d = d.replace(/\s*[·\-–—]\s*[·\-–—]\s*/g, " · "); // collapse any now-adjacent separators
+  d = d.replace(/\s*·\s*/g, " · "); // normalize spacing around any remaining separator
+  d = d.replace(/^[\s·\-–—]+/, "").replace(/[\s·\-–—]+$/, "");
+  return d.trim();
+}
+
+// Ledger transactions don't have their own "type" column — the type (LL RIC,
+// PCC, PAYMENT, ...) is embedded in the free-text description, e.g.
+// "MANOJ KUMAR · Service: LL RIC · App No: 3303448226" or
+// "Payment received — Cash · UPI 16-07-2026". This pulls a short label back
+// out of that text for display as its own column.
+function deriveTxnType(description) {
+  if (!description) return null;
+  if (/payment received/i.test(description)) return "PAYMENT";
+  const m = description.match(/Service:\s*([^·\n]+)/i);
+  if (m) return m[1].trim().toUpperCase();
+  return null;
+}
+
+// Tailwind classes per Type, purely cosmetic grouping — payments in green,
+// PCC in blue, anything else (service names like LL RIC, MCWG...) neutral.
+function txnTypeClass(typeLabel) {
+  if (!typeLabel) return "text-slate-400 dark:text-slate-500";
+  if (typeLabel === "PAYMENT") return "text-emerald-600 dark:text-emerald-400 font-semibold";
+  if (typeLabel === "PCC") return "text-sky-600 dark:text-sky-400 font-semibold";
+  return "text-slate-600 dark:text-slate-300 font-semibold";
+}
+
 // Builds a CSV of the given transactions and triggers a browser download —
 // entirely client-side, matching how the rest of the app's CSV export/import
 // works (see lib/csv.js).
 function exportLedgerCSV(entityName, txns) {
   const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const header = ["Date", "Voucher No.", "Description", "Debit", "Credit", "Running Balance"];
+  const header = ["Date", "Voucher No.", "Type", "Description", "Debit", "Credit", "Running Balance"];
   const lines = [header.join(",")];
   txns.forEach((t) => {
     lines.push([
       escapeCsv(new Date(t.created_at).toLocaleDateString()),
       escapeCsv(t.voucher_no),
-      escapeCsv(t.description),
+      escapeCsv(deriveTxnType(t.description) || ""),
+      escapeCsv(stripTypeFromDescription(t.description)),
       escapeCsv(t.type === "debit" ? t.amount : ""),
       escapeCsv(t.type === "credit" ? t.amount : ""),
       escapeCsv(t.running_balance),
@@ -284,6 +322,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
                 <tr>
                   <SortableTh label="Date" sortKeyName="created_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Voucher No." sortKeyName="voucher_no" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <th className="px-3 py-2 text-left">Type</th>
                   <SortableTh label="Description" sortKeyName="description" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Debit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   <SortableTh label="Credit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
@@ -295,7 +334,8 @@ export default function Ledger({ only, initialEntityId } = {}) {
                   <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(t.created_at).toLocaleDateString()}</td>
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.voucher_no}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{t.description}</td>
+                    <td className={`px-3 py-2 whitespace-nowrap ${txnTypeClass(deriveTxnType(t.description))}`}>{deriveTxnType(t.description) || "—"}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{stripTypeFromDescription(t.description)}</td>
                     <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-rose-600">
                       {t.type === "debit" ? `₹${Number(t.amount).toLocaleString("en-IN")}` : ""}
                     </td>
@@ -308,7 +348,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
                   </tr>
                 ))}
                 {periodTxns.length === 0 && (
-                  <tr><td colSpan={6} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
+                  <tr><td colSpan={7} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
                 )}
               </tbody>
             </table>
