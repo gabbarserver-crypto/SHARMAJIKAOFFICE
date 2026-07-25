@@ -13,6 +13,7 @@ import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2 } from "l
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import PCCLetterModal from "../components/PCCLetterModal";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
+import { ageHighlightClass, validateAgeForService } from "../lib/age";
 
 
 const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted"];
@@ -367,7 +368,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setLoading(true);
     let query = supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days), staff:assigned_staff_id(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name)")
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
     const { data, error } = await query;
@@ -431,7 +432,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setDealerList(d || []);
       const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, credit_limit, running_balance");
       setDealerHold(Object.fromEntries((summaries || []).filter((s) => (Number(s.credit_limit || 0) + Number(s.running_balance || 0)) <= 0).map((s) => [s.dealer_id, true])));
-      const { data: sv } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, rto_required, agency_required, slot_booking_required, chat_in_app").order("parent_service");
+      const { data: sv } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, rto_required, agency_required, slot_booking_required, chat_in_app, age_limit_required, min_age").order("parent_service");
       setServiceList(sv || []);
       const { data: rt } = await supabase.from("rtos").select("id, name, code, type").order("name");
       setRtoList(rt || []);
@@ -446,7 +447,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // assignment — and was causing "assigned staff not showing" on reopen).
     const { data: freshRow } = await supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days), staff:assigned_staff_id(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name)")
       .eq("id", row.id)
       .maybeSingle();
     const { data: docs } = await supabase.from("application_documents").select("*").eq("application_id", row.id);
@@ -534,10 +535,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (app.status === "Accepted") {
       await supabase.from("ledger_transactions").delete().eq("dealer_id", app.dealer_id).eq("voucher_no", app.draft_code);
     }
-    // Also drop this application’s agency-ledger line (see syncAgencyLedger
-    // above) if it had one — same voucher_no match, no status check needed
-    // since that line can exist regardless of Accepted/etc.
-    await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", app.draft_code);
     await supabase.from("application_documents").delete().eq("application_id", app.id);
     const { error } = await supabase.from("applications").delete().eq("id", app.id);
     if (error) {
@@ -594,58 +591,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
-  // Agency Fee and the chosen Agency together decide what (if anything)
-  // this application owes that agency — kept in sync as its own line on
-  // that agency’s ledger (agency_ledger_transactions), keyed by this
-  // application’s draft_code as voucher_no so repeated edits update the
-  // SAME line instead of piling up duplicates. Unlike the dealer fee
-  // (which only posts once on approval — see approveApplication above),
-  // this reflects live: it fires on every Agency Fee / Agency edit,
-  // whatever the application’s status.
-  const syncAgencyLedger = async (row) => {
-    const voucherNo = row.draft_code;
-    if (!voucherNo) return; // shouldn’t happen, but with no voucher_no there’s no way to find this line again later
-
-    const { data: existing } = await supabase
-      .from("agency_ledger_transactions")
-      .select("id, agency_id")
-      .eq("voucher_no", voucherNo)
-      .maybeSingle();
-
-    const feeAmount = Number(row.agency_fee || 0);
-    const hasValidEntry = row.agency_id && feeAmount > 0;
-
-    // No agency picked, or fee cleared/zeroed — this application owes that
-    // agency nothing (any more), so remove whatever line used to be there.
-    if (!hasValidEntry) {
-      if (existing) await supabase.from("agency_ledger_transactions").delete().eq("id", existing.id);
-      return;
-    }
-
-    const serviceAndName = [serviceLabel(row.services), row.applicant_name].filter(Boolean).join(" ");
-    const description = [
-      serviceAndName || null,
-      row.application_no ? `App No: ${row.application_no}` : `Draft: ${row.draft_code}`,
-    ].filter(Boolean).join(" · ");
-
-    if (existing && existing.agency_id === row.agency_id) {
-      // Same agency as before — just update the amount/description in place.
-      await supabase.from("agency_ledger_transactions").update({ amount: feeAmount, description }).eq("id", existing.id);
-    } else {
-      // Either a brand-new line, or the agency was changed — either way the
-      // old line (if any, possibly on a DIFFERENT agency’s ledger) no longer
-      // applies, so drop it and post fresh under the current agency.
-      if (existing) await supabase.from("agency_ledger_transactions").delete().eq("id", existing.id);
-      await supabase.from("agency_ledger_transactions").insert({
-        agency_id: row.agency_id,
-        voucher_no: voucherNo,
-        type: "debit",
-        amount: feeAmount,
-        description,
-      });
-    }
-  };
-
   const updateRowField = async (id, field, value) => {
     const { error } = await supabase.from("applications").update({ [field]: value }).eq("id", id);
     if (error) {
@@ -653,11 +598,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return;
     }
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
-
-    if (field === "agency_fee" || field === "agency_id") {
-      const current = rows.find((r) => r.id === id);
-      if (current) await syncAgencyLedger({ ...current, [field]: value });
-    }
   };
 
   // PCC Fee is the trigger for auto-stamping today's date into Slot — used
@@ -1253,7 +1193,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     </button>
                   </td>
                 )}
-                {visibleCols.dob && <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{isoToDDMMYYYY(r.date_of_birth)}</td>}
+                {visibleCols.dob && <td className={`px-3 py-2 whitespace-nowrap ${ageHighlightClass(r.date_of_birth) || "text-slate-500 dark:text-slate-500"}`}>{isoToDDMMYYYY(r.date_of_birth)}</td>}
                 {visibleCols.rtoFee && (
                   <td className="px-3 py-2">
                     <EditableCell
@@ -1595,10 +1535,10 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
   const rtoName = (id) => rtoList.find((x) => x.id === id)?.name || "—";
   const agencyName = (id) => agencyList.find((x) => x.id === id)?.name || "—";
 
-  const Pair = ({ top, bottom }) => (
+  const Pair = ({ top, bottom, bottomClass = "" }) => (
     <div className="leading-tight">
       <div className="text-slate-800 dark:text-slate-100">{top}</div>
-      <div className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">{bottom}</div>
+      <div className={`text-xs mt-0.5 ${bottomClass || "text-slate-400 dark:text-slate-500"}`}>{bottom}</div>
     </div>
   );
 
@@ -1636,7 +1576,7 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
                 <td className="px-3 py-2"><Pair top={r.application_no || "—"} bottom={r.pcc_no || "—"} /></td>
                 <td className="px-3 py-2"><Pair top={fee(r.rto_fee)} bottom={fee(r.pcc_fee)} /></td>
                 <td className="px-3 py-2"><Pair top={fee(r.agency_fee)} bottom={fee(profitOf(r))} /></td>
-                <td className="px-3 py-2"><Pair top={r.ll_dl_no || "—"} bottom={r.date_of_birth ? isoToDDMMYYYY(r.date_of_birth) : "—"} /></td>
+                <td className="px-3 py-2"><Pair top={r.ll_dl_no || "—"} bottom={r.date_of_birth ? isoToDDMMYYYY(r.date_of_birth) : "—"} bottomClass={ageHighlightClass(r.date_of_birth)} /></td>
                 <td className="px-3 py-2"><Pair top={rtoName(r.rto_id)} bottom={agencyName(r.agency_id)} /></td>
                 <td className="px-3 py-2"><Pair top={r.slot_time || "—"} bottom={r.remarks || "—"} /></td>
                 <td className="px-3 py-2">
@@ -2015,7 +1955,7 @@ function DraftDetailPopup({ row, profitOf, onClose }) {
             <span className="text-slate-400 dark:text-slate-500">Father/Husband</span>
             <span className="text-slate-700 dark:text-slate-200">{row.father_husband_name || "—"}</span>
             <span className="text-slate-400 dark:text-slate-500">DOB</span>
-            <span className="text-slate-700 dark:text-slate-200">{row.date_of_birth ? isoToDDMMYYYY(row.date_of_birth) : "—"}</span>
+            <span className={row.date_of_birth ? ageHighlightClass(row.date_of_birth) || "text-slate-700 dark:text-slate-200" : "text-slate-700 dark:text-slate-200"}>{row.date_of_birth ? isoToDDMMYYYY(row.date_of_birth) : "—"}</span>
             <span className="text-slate-400 dark:text-slate-500">Mobile</span>
             <span className="text-slate-700 dark:text-slate-200">{row.mobile || "—"}</span>
             <span className="text-slate-400 dark:text-slate-500">Address</span>
@@ -2069,6 +2009,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   ]);
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.value }));
   const valid = form.dealer_id && form.service_id && form.applicant_name;
+  const [ageError, setAgeError] = useState("");
 
   const setAnswerKey = (i) => (e) => setAnswers((a) => a.map((row, idx) => idx === i ? { ...row, key: e.target.value } : row));
   const setAnswerValue = (i) => (e) => setAnswers((a) => a.map((row, idx) => idx === i ? { ...row, value: e.target.value } : row));
@@ -2076,11 +2017,15 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   const addAnswer = () => setAnswers((a) => [...a, { key: "", value: "" }]);
 
   const handleCreate = () => {
+    const dobIso = ddmmyyyyToISO(form.date_of_birth);
+    const err = validateAgeForService(dobIso, selectedService);
+    if (err) { setAgeError(err); return; }
+    setAgeError("");
     const service_answers = {};
     answers.forEach(({ key, value }) => {
       if (key.trim() && value.trim()) service_answers[key.trim()] = value.trim();
     });
-    onCreate({ ...form, date_of_birth: ddmmyyyyToISO(form.date_of_birth), stay_since: ddmmyyyyToISO(form.stay_since), service_answers });
+    onCreate({ ...form, date_of_birth: dobIso, stay_since: ddmmyyyyToISO(form.stay_since), service_answers });
   };
 
   return (
@@ -2114,7 +2059,8 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
           <Input value={form.father_husband_name} onChange={set("father_husband_name")} />
         </Field>
         <Field label="Date of Birth">
-          <Input type="text" placeholder="DD-MM-YYYY" value={form.date_of_birth} onChange={set("date_of_birth")} />
+          <Input type="text" placeholder="DD-MM-YYYY" value={form.date_of_birth} onChange={set("date_of_birth")}
+            className={ageHighlightClass(ddmmyyyyToISO(form.date_of_birth)) ? "border-amber-400" : ""} />
         </Field>
         <Field label="Mobile">
           <Input value={form.mobile} onChange={set("mobile")} />
@@ -2164,6 +2110,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
       </div>
 
       <PrimaryButton disabled={!valid} onClick={handleCreate}>Create Application</PrimaryButton>
+      {ageError && <p className="text-rose-500 text-xs mt-2">{ageError}</p>}
     </Modal>
   );
 }
@@ -2191,14 +2138,19 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     stay_since: isoToDDMMYYYY(app.stay_since),
   });
   const [savingApplicant, setSavingApplicant] = useState(false);
+  const [applicantAgeError, setApplicantAgeError] = useState("");
   const setApplicantField = (k) => (e) => setApplicant((s) => ({ ...s, [k]: e.target.value }));
 
   const saveApplicant = async () => {
+    const dobIso = ddmmyyyyToISO(applicant.date_of_birth);
+    const err = validateAgeForService(dobIso, app.services);
+    if (err) { setApplicantAgeError(err); return; }
+    setApplicantAgeError("");
     setSavingApplicant(true);
     await onSaveApplicant({
       applicant_name: applicant.applicant_name || null,
       father_husband_name: applicant.father_husband_name || null,
-      date_of_birth: ddmmyyyyToISO(applicant.date_of_birth),
+      date_of_birth: dobIso,
       mobile: applicant.mobile || null,
       address: applicant.address || null,
       police_station: applicant.police_station || null,
@@ -2317,7 +2269,8 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         <Card title="Applicant Details" className="mb-4">
           <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
           <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
-          <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")} /></Field>
+          <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
+            className={ageHighlightClass(ddmmyyyyToISO(applicant.date_of_birth)) ? "border-amber-400" : ""} /></Field>
           <Field label="Mobile">
             <div className="flex items-center gap-2">
               <Input value={applicant.mobile} onChange={setApplicantField("mobile")} />
@@ -2349,6 +2302,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           <PrimaryButton disabled={savingApplicant} onClick={saveApplicant}>
             {savingApplicant ? "Saving…" : "Save Applicant Details"}
           </PrimaryButton>
+          {applicantAgeError && <p className="text-rose-500 text-xs mt-2">{applicantAgeError}</p>}
         </Card>
 
         <Card title="Service Answers" className="mb-4">
