@@ -364,6 +364,7 @@ function SundryHead({ title, subtitle, entityMode, table, summaryTable, summaryK
           name: form.name, code: form.code, short_name: form.short_name || null, contact_name: form.contact_name, mobile: form.mobile, email: form.email,
           address: form.address, city: form.city, state: form.state, pincode: form.pincode,
           credit_limit: parseFloat(form.credit_limit) || 0,
+          opening_balance: parseFloat(form.opening_balance) || 0,
         }
       : {
           name: form.name, code: form.code, contact_person: form.contact_person, mobile: form.mobile, status: form.status,
