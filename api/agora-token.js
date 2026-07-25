@@ -16,9 +16,9 @@
 //   AGORA_APP_ID                              (Agora Console → your project → App ID, public)
 //   AGORA_APP_CERTIFICATE                     (Agora Console → your project → enable a Certificate — keep secret)
 import AgoraToken from "agora-token";
+import { resolveCaller } from "./_lib/adminAuth.js";
 
 const { RtcTokenBuilder, RtcRole } = AgoraToken;
-import { resolveCaller } from "./_lib/adminAuth.js";
 
 const AGORA_APP_ID = (process.env.AGORA_APP_ID || "").trim();
 const AGORA_APP_CERTIFICATE = (process.env.AGORA_APP_CERTIFICATE || "").trim();
