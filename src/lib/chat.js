@@ -151,13 +151,14 @@ export async function countDealerUnread(dealerId) {
 export async function listRecentThreadsForStaff(limit = 30) {
   const { data: threadRows, error: threadsError } = await supabase
     .from("chat_threads")
-    .select("id, application_id, dealer_id, applications(draft_code, application_no, applicant_name), dealers(name, short_name, code)")
+    .select("id, application_id, dealer_id, applications(draft_code, application_no, applicant_name, services(parent_service, short_name)), dealers(name, short_name, code)")
     .order("last_message_at", { ascending: false })
     .limit(limit);
   if (threadsError) throw threadsError;
 
   const threadIds = (threadRows || []).map((t) => t.id);
   let latestByThread = {};
+  let unreadByThread = {};
   if (threadIds.length) {
     const { data: messages, error: messagesError } = await supabase
       .from("chat_messages")
@@ -165,13 +166,22 @@ export async function listRecentThreadsForStaff(limit = 30) {
       .in("thread_id", threadIds)
       .order("created_at", { ascending: false });
     if (messagesError) throw messagesError;
+    const unreadCountingDone = {};
     for (const m of messages || []) {
       if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
+      // Unread = how many messages in a row (most-recent-first) came from
+      // someone other than staff, before we hit one staff actually sent —
+      // i.e. how many the staff side hasn't replied to yet.
+      if (!unreadCountingDone[m.thread_id]) {
+        if (m.sender_type === "staff") unreadCountingDone[m.thread_id] = true;
+        else unreadByThread[m.thread_id] = (unreadByThread[m.thread_id] || 0) + 1;
+      }
     }
   }
 
   return (threadRows || []).map((t) => {
     const latest = latestByThread[t.id];
+    const service = t.applications?.services;
     return {
       threadId: t.id,
       applicationId: t.application_id,
@@ -179,10 +189,13 @@ export async function listRecentThreadsForStaff(limit = 30) {
       label: t.application_id
         ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
         : "General",
+      applicantName: t.applications?.applicant_name || null,
+      serviceLabel: service ? (service.short_name || service.parent_service) : null,
       dealerLabel: t.dealers?.short_name || t.dealers?.name || t.dealers?.code || "—",
       lastMessage: latest?.body || (latest?.attachment_url ? "📎 Attachment" : null),
       lastAt: latest?.created_at || null,
       awaitingReply: latest ? latest.sender_type !== "staff" : false,
+      unreadCount: unreadByThread[t.id] || 0,
     };
   });
 }
@@ -193,7 +206,7 @@ export async function listRecentThreadsForStaff(limit = 30) {
 export async function listRecentThreadsForDealer(dealerId, limit = 30) {
   const { data: threadRows, error: threadsError } = await supabase
     .from("chat_threads")
-    .select("id, application_id, applications(draft_code, application_no, applicant_name)")
+    .select("id, application_id, applications(draft_code, application_no, applicant_name, services(parent_service, short_name))")
     .eq("dealer_id", dealerId)
     .order("last_message_at", { ascending: false })
     .limit(limit);
@@ -201,6 +214,7 @@ export async function listRecentThreadsForDealer(dealerId, limit = 30) {
 
   const threadIds = (threadRows || []).map((t) => t.id);
   let latestByThread = {};
+  let unreadByThread = {};
   if (threadIds.length) {
     const { data: messages, error: messagesError } = await supabase
       .from("chat_messages")
@@ -208,23 +222,33 @@ export async function listRecentThreadsForDealer(dealerId, limit = 30) {
       .in("thread_id", threadIds)
       .order("created_at", { ascending: false });
     if (messagesError) throw messagesError;
+    const unreadCountingDone = {};
     for (const m of messages || []) {
       if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
+      // Unread here = messages in a row from staff the dealer hasn't replied to yet.
+      if (!unreadCountingDone[m.thread_id]) {
+        if (m.sender_type !== "staff") unreadCountingDone[m.thread_id] = true;
+        else unreadByThread[m.thread_id] = (unreadByThread[m.thread_id] || 0) + 1;
+      }
     }
   }
 
   return (threadRows || [])
     .map((t) => {
       const latest = latestByThread[t.id];
+      const service = t.applications?.services;
       return {
         threadId: t.id,
         applicationId: t.application_id,
         label: t.application_id
           ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
           : "General",
+        applicantName: t.applications?.applicant_name || null,
+        serviceLabel: service ? (service.short_name || service.parent_service) : null,
         lastMessage: latest?.body || (latest?.attachment_url ? "📎 Attachment" : null),
         lastAt: latest?.created_at || null,
         awaitingReply: latest ? latest.sender_type === "staff" : false,
+        unreadCount: unreadByThread[t.id] || 0,
       };
     })
     .sort((a, b) => {

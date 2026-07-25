@@ -1,11 +1,19 @@
 // src/components/CommsWindow.jsx
 //
 // Unified "chat icon" entry point — one floating button that opens a
-// WhatsApp-style window with its own bottom nav: Chats (recent
-// conversations), Calls (call history), and New Call (a directory to ring
-// someone you haven't talked to yet). Replaces the two separate widgets
-// that used to do this (ChatWidget for the dealer side, StaffChatWidget
-// for staff) with one shared component, scoped by `variant`.
+// mobile-app-style window with its own bottom nav: Recent Chats (general
+// per-dealer conversations), Recent Calls (call history), New Call (a
+// directory to ring someone you haven't talked to yet), and Customer Chat
+// (every per-application conversation, i.e. chats tied to one specific
+// applicant's case rather than a dealer's general line). Replaces the two
+// separate widgets that used to do this (ChatWidget for the dealer side,
+// StaffChatWidget for staff) with one shared component, scoped by
+// `variant`.
+//
+// Recent Chats vs Customer Chat is just a split of the SAME chat_threads
+// data by whether application_id is set — see lib/chat.js. No new backend
+// concept, just two views onto it: Recent Chats = general dealer-line
+// threads, Customer Chat = threads scoped to one applicant's case.
 //
 // IMPORTANT permission rule, enforced right here in the "New Call" tab:
 // a dealer (or their own sub-staff) can ONLY ever see and call admin
@@ -15,11 +23,11 @@
 // there's no shared code path that could ever leak another dealer into
 // it. Admin staff, on the other hand, can call/chat with any dealer or
 // dealer_staff — that's the whole point of the support desk.
-import React, { useCallback, useEffect, useState } from "react";
-import { MessageCircle, MessageSquare, History, UserPlus, Phone, Video, PhoneMissed, PhoneOff, Search, X } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { MessageCircle, MessageSquare, Users, UserPlus, Phone, Video, PhoneMissed, PhoneOff, Search, X, Plus, Filter } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import ChatPanel from "./ChatPanel";
-import Avatar from "./Avatar";
+import PastelAvatar from "./PastelAvatar";
 import { listRecentThreadsForStaff, listRecentThreadsForDealer } from "../lib/chat";
 import { fetchAllCallLogs, fetchCallLogs } from "../lib/callLog";
 
@@ -64,15 +72,36 @@ function threadLabelFromRow(row) {
   return { dealerId: t.dealer_id, applicationId: t.application_id, dealerName, appLabel };
 }
 
+// Small pill-style search input reused across tabs, matching the
+// reference design's search bars.
+function SearchBar({ value, onChange, placeholder }) {
+  return (
+    <div className="px-4 pt-3 pb-2 shrink-0">
+      <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 rounded-xl px-3 py-2">
+        <Search size={15} className="text-slate-400 shrink-0" />
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="bg-transparent text-sm outline-none flex-1 text-slate-700 dark:text-slate-200 placeholder:text-slate-400"
+        />
+      </div>
+    </div>
+  );
+}
+
 const TABS = [
-  { key: "recent", label: "Chats", Icon: MessageSquare },
-  { key: "calls", label: "Calls", Icon: History },
+  { key: "chats", label: "Recent Chats", Icon: MessageSquare },
+  { key: "calls", label: "Recent Calls", Icon: Phone },
   { key: "new", label: "New Call", Icon: UserPlus },
+  { key: "customer", label: "Customer Chat", Icon: Users },
 ];
+
+const TAB_TITLE = { chats: "Recent Chats", calls: "Recent Call Logs", new: "New Call", customer: "Customer Chat" };
 
 export default function CommsWindow({ variant, identity, call, dealerId, dealerName, staff, pendingCount = 0, onExpand }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState("recent");
+  const [tab, setTab] = useState("chats");
   const [selectedThread, setSelectedThread] = useState(null); // { dealerId, applicationId, label } | null
 
   const openWindow = () => setOpen(true);
@@ -81,9 +110,7 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
   if (variant === "staff" && !staff) return null;
   if (variant === "dealer" && !dealerId) return null;
 
-  const headerTitle = selectedThread
-    ? selectedThread.label
-    : tab === "recent" ? "Chats" : tab === "calls" ? "Call history" : "New Call";
+  const headerTitle = selectedThread ? selectedThread.label : TAB_TITLE[tab];
   const headerSubtitle = selectedThread ? (variant === "staff" ? selectedThread.dealerName : null) : null;
 
   return (
@@ -92,28 +119,29 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
       style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
     >
       {open && (
-        <div className="w-80 sm:w-96 h-[540px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-          {/* Header */}
-          <div className="bg-slate-900 text-white px-4 py-3 flex items-center gap-2.5 shrink-0">
+        <div className="w-80 sm:w-96 h-[560px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+          {/* Header — white, matches the reference design; green is reserved for the active tab/accents below. */}
+          <div className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 px-4 py-3 flex items-center gap-2.5 shrink-0">
             {selectedThread ? (
-              <button onClick={() => setSelectedThread(null)} className="text-xs font-semibold text-blue-300 hover:text-blue-200 shrink-0 mr-1">
+              <button onClick={() => setSelectedThread(null)} className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 shrink-0 mr-1">
                 ← Back
               </button>
-            ) : (
-              <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center shrink-0">
-                <MessageCircle size={18} />
-              </div>
-            )}
+            ) : null}
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold leading-tight truncate">{headerTitle}</p>
-              {headerSubtitle && <p className="text-xs text-slate-300 leading-tight truncate">{headerSubtitle}</p>}
+              <p className="text-lg font-bold leading-tight truncate text-slate-900 dark:text-slate-100">{headerTitle}</p>
+              {headerSubtitle && <p className="text-xs text-slate-400 leading-tight truncate mt-0.5">{headerSubtitle}</p>}
             </div>
+            {!selectedThread && tab === "chats" && (
+              <button onClick={() => setTab("new")} title="Start something new" className="w-8 h-8 shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center">
+                <Plus size={16} />
+              </button>
+            )}
             {onExpand && !selectedThread && (
-              <button onClick={onExpand} title="Open full Chats inbox" className="text-xs font-semibold text-blue-300 hover:text-blue-200 shrink-0 mr-1">
+              <button onClick={onExpand} title="Open full Chats inbox" className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 shrink-0">
                 Expand
               </button>
             )}
-            <button onClick={closeWindow} title="Close" className="w-7 h-7 shrink-0 rounded-lg hover:bg-white/10 flex items-center justify-center">
+            <button onClick={closeWindow} title="Close" className="w-7 h-7 shrink-0 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500">
               <X size={16} />
             </button>
           </div>
@@ -127,8 +155,10 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
                 identity={identity}
                 emptyLabel="No messages here yet."
               />
-            ) : tab === "recent" ? (
-              <RecentTab variant={variant} dealerId={dealerId} onOpenThread={setSelectedThread} />
+            ) : tab === "chats" ? (
+              <ThreadsTab variant={variant} dealerId={dealerId} scope="general" onOpenThread={setSelectedThread} />
+            ) : tab === "customer" ? (
+              <ThreadsTab variant={variant} dealerId={dealerId} scope="application" onOpenThread={setSelectedThread} />
             ) : tab === "calls" ? (
               <CallsTab variant={variant} dealerId={dealerId} identity={identity} call={call} onOpenThread={setSelectedThread} />
             ) : (
@@ -137,15 +167,16 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
           </div>
 
           {/* Bottom nav — hidden while a thread is open, same as a phone's
-              tab bar disappearing inside a conversation. */}
+              tab bar disappearing inside a conversation. Green accent for
+              the active tab, matching the reference design. */}
           {!selectedThread && (
             <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 flex">
               {TABS.map(({ key, label, Icon }) => (
                 <button
                   key={key}
                   onClick={() => setTab(key)}
-                  className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[11px] font-medium ${
-                    tab === key ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500"
+                  className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[10px] leading-tight text-center px-0.5 ${
+                    tab === key ? "text-emerald-600 dark:text-emerald-400 font-bold" : "text-slate-400 dark:text-slate-500 font-medium"
                   }`}
                 >
                   <Icon size={18} />
@@ -160,7 +191,7 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
       <button
         onClick={() => (open ? closeWindow() : openWindow())}
         aria-label={open ? "Close chat" : "Open chat"}
-        className="relative w-14 h-14 rounded-full bg-slate-900 text-white shadow-lg flex items-center justify-center hover:bg-slate-800 transition-colors"
+        className="relative w-14 h-14 rounded-full bg-emerald-600 text-white shadow-lg flex items-center justify-center hover:bg-emerald-700 transition-colors"
       >
         {open ? <X size={24} /> : <MessageCircle size={24} />}
         {!open && pendingCount > 0 && (
@@ -174,18 +205,24 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
 }
 
 // ============================================================
-// Recent tab — every conversation, most-recently-active first.
+// Threads tab — powers BOTH "Recent Chats" (scope="general", the dealer's
+// one running line) and "Customer Chat" (scope="application", one thread
+// per applicant/case). Same underlying data (see lib/chat.js), just
+// filtered by whether applicationId is set, with a title/subtitle that
+// fits each: dealer name + last message for general, applicant name +
+// service for per-application.
 // ============================================================
-function RecentTab({ variant, dealerId, onOpenThread }) {
+function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
   const [threads, setThreads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const rows = variant === "staff" ? await listRecentThreadsForStaff(30) : await listRecentThreadsForDealer(dealerId, 30);
+      const rows = variant === "staff" ? await listRecentThreadsForStaff(60) : await listRecentThreadsForDealer(dealerId, 60);
       setThreads(rows);
     } catch (e) {
       setError(e.message || "Couldn't load chats");
@@ -196,34 +233,61 @@ function RecentTab({ variant, dealerId, onOpenThread }) {
 
   useEffect(() => { load(); }, [load]);
 
-  if (loading) return <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8">Loading…</p>;
-  if (error) return <p className="text-sm text-rose-500 text-center py-8 px-4">{error}</p>;
-  if (threads.length === 0) return <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8 px-4">No conversations yet.</p>;
+  const scoped = useMemo(
+    () => threads.filter((t) => (scope === "application" ? !!t.applicationId : !t.applicationId)),
+    [threads, scope]
+  );
+
+  const titleOf = (t) => (scope === "application" ? (t.applicantName || t.label) : (variant === "staff" ? t.dealerLabel : "Support Team"));
+  const subtitleOf = (t) => (scope === "application" ? (t.serviceLabel || "Service") : (t.lastMessage || "No messages yet"));
+
+  const filtered = scoped.filter((t) => {
+    if (!query.trim()) return true;
+    const q = query.trim().toLowerCase();
+    return titleOf(t).toLowerCase().includes(q) || (subtitleOf(t) || "").toLowerCase().includes(q);
+  });
+
+  const placeholder = scope === "application" ? "Search customers…" : "Search chats…";
+  const emptyLabel = scope === "application" ? "No customer chats yet." : "No conversations yet.";
 
   return (
-    <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-      {threads.map((t) => (
-        <button
-          key={t.threadId}
-          onClick={() => onOpenThread({ dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: t.label, dealerName: t.dealerLabel })}
-          className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-2.5"
-        >
-          <Avatar name={variant === "staff" ? t.dealerLabel : t.label} size={34} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between mb-0.5">
-              <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 truncate">
-                {variant === "staff" ? t.dealerLabel : t.label}
-              </span>
-              {t.lastAt && <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0 ml-2">{timeAgo(t.lastAt)}</span>}
-            </div>
-            {variant === "staff" && <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{t.label}</p>}
-            <div className="flex items-center gap-1.5">
-              {t.awaitingReply && <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />}
-              <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{t.lastMessage || "No messages yet"}</p>
-            </div>
-          </div>
-        </button>
-      ))}
+    <div className="flex-1 min-h-0 flex flex-col">
+      <SearchBar value={query} onChange={setQuery} placeholder={placeholder} />
+      {loading ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8">Loading…</p>
+      ) : error ? (
+        <p className="text-sm text-rose-500 text-center py-8 px-4">{error}</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8 px-4">{emptyLabel}</p>
+      ) : (
+        <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+          {filtered.map((t) => {
+            const title = titleOf(t);
+            const subtitle = subtitleOf(t);
+            return (
+              <button
+                key={t.threadId}
+                onClick={() => onOpenThread({ dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: scope === "application" ? t.label : title, dealerName: t.dealerLabel })}
+                className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3"
+              >
+                <PastelAvatar name={title} size={40} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{title}</span>
+                    {t.lastAt && <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0">{timeAgo(t.lastAt)}</span>}
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">{subtitle}</p>
+                </div>
+                {t.unreadCount > 0 && (
+                  <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">
+                    {t.unreadCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -232,15 +296,17 @@ function RecentTab({ variant, dealerId, onOpenThread }) {
 // Calls tab — call history, most recent first. Tapping a direct call's
 // icon calls that same person back; tapping a thread call jumps into that
 // conversation instead (there's no single "person" to call back for one
-// of those — see lib/call.js).
+// of those — see lib/call.js). The funnel icon toggles All / Missed only.
 // ============================================================
 function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [missedOnly, setMissedOnly] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { rows: fetched } = variant === "staff" ? await fetchAllCallLogs({ limit: 30 }) : await fetchCallLogs({ dealerId, limit: 30 });
+    const { rows: fetched } = variant === "staff" ? await fetchAllCallLogs({ limit: 40 }) : await fetchCallLogs({ dealerId, limit: 40 });
     setRows(fetched);
     setLoading(false);
   }, [variant, dealerId]);
@@ -254,54 +320,76 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
     return () => supabase.removeChannel(channel);
   }, [load, variant, dealerId]);
 
-  if (loading) return <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8">Loading…</p>;
-  if (rows.length === 0) return <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8 px-4">No calls yet.</p>;
+  const visibleRows = missedOnly ? rows.filter((r) => r.outcome !== "answered") : rows;
 
   return (
-    <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-      {rows.map((r) => {
-        const { Icon, color, label } = callRowMeta(r);
-        const iAmCaller = identity && r.caller_type === identity.type && r.caller_id === identity.id;
-        const counterpart = r.source === "direct"
-          ? (iAmCaller ? { type: r.callee_type, id: r.callee_id, name: r.callee_name } : { type: r.caller_type, id: r.caller_id, name: r.caller_name })
-          : null;
-        const who = r.caller_name || r.callee_name || "Unknown";
-        const threadInfo = r.source === "thread" ? threadLabelFromRow(r) : null;
-
-        return (
-          <div key={r.id} className="w-full px-4 py-3 flex items-center gap-2.5">
-            <Avatar name={who} size={34} />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 truncate">{who}</p>
-              <div className="flex items-center gap-1.5">
-                <Icon size={13} className={color} />
-                <span className="text-xs text-slate-500 dark:text-slate-400">
-                  {label}{r.duration_seconds ? ` · ${formatDuration(r.duration_seconds)}` : ""}
-                </span>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500">· {timeAgo(r.started_at)}</span>
-              </div>
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="px-4 pt-3 pb-1 shrink-0 flex items-center justify-between">
+        <span className="text-xs font-semibold text-slate-400">{missedOnly ? "Missed calls" : "All calls"}</span>
+        <div className="relative">
+          <button onClick={() => setShowFilter((s) => !s)} className="w-7 h-7 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+            <Filter size={15} />
+          </button>
+          {showFilter && (
+            <div className="absolute right-0 top-8 z-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 w-32">
+              <button onClick={() => { setMissedOnly(false); setShowFilter(false); }} className={`w-full text-left px-3 py-1.5 text-xs ${!missedOnly ? "text-emerald-600 font-semibold" : "text-slate-600 dark:text-slate-300"}`}>All calls</button>
+              <button onClick={() => { setMissedOnly(true); setShowFilter(false); }} className={`w-full text-left px-3 py-1.5 text-xs ${missedOnly ? "text-emerald-600 font-semibold" : "text-slate-600 dark:text-slate-300"}`}>Missed only</button>
             </div>
-            {counterpart?.id ? (
-              <button
-                onClick={() => call?.startCall(counterpart, "audio")}
-                disabled={!call || call.status !== "idle"}
-                title={`Call ${who} back`}
-                className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 disabled:opacity-30"
-              >
-                <Phone size={14} />
-              </button>
-            ) : threadInfo ? (
-              <button
-                onClick={() => onOpenThread({ dealerId: variant === "staff" ? threadInfo.dealerId : dealerId, applicationId: threadInfo.applicationId, label: threadInfo.appLabel, dealerName: threadInfo.dealerName })}
-                title="Open this chat"
-                className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30"
-              >
-                <MessageSquare size={14} />
-              </button>
-            ) : null}
-          </div>
-        );
-      })}
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8">Loading…</p>
+      ) : visibleRows.length === 0 ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8 px-4">{missedOnly ? "No missed calls." : "No calls yet."}</p>
+      ) : (
+        <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+          {visibleRows.map((r) => {
+            const { Icon, color, label } = callRowMeta(r);
+            const iAmCaller = identity && r.caller_type === identity.type && r.caller_id === identity.id;
+            const counterpart = r.source === "direct"
+              ? (iAmCaller ? { type: r.callee_type, id: r.callee_id, name: r.callee_name } : { type: r.caller_type, id: r.caller_id, name: r.caller_name })
+              : null;
+            const who = r.caller_name || r.callee_name || "Unknown";
+            const threadInfo = r.source === "thread" ? threadLabelFromRow(r) : null;
+
+            return (
+              <div key={r.id} className="w-full px-4 py-3 flex items-center gap-3">
+                <PastelAvatar name={who} size={38} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{who}</p>
+                  <div className="flex items-center gap-1.5">
+                    <Icon size={13} className={color} />
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {label}{r.duration_seconds ? ` · ${formatDuration(r.duration_seconds)}` : ""}
+                    </span>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">· {timeAgo(r.started_at)}</span>
+                  </div>
+                </div>
+                {counterpart?.id ? (
+                  <button
+                    onClick={() => call?.startCall(counterpart, "audio")}
+                    disabled={!call || call.status !== "idle"}
+                    title={`Call ${who} back`}
+                    className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100 disabled:opacity-30"
+                  >
+                    <Phone size={15} />
+                  </button>
+                ) : threadInfo ? (
+                  <button
+                    onClick={() => onOpenThread({ dealerId: variant === "staff" ? threadInfo.dealerId : dealerId, applicationId: threadInfo.applicationId, label: threadInfo.appLabel, dealerName: threadInfo.dealerName })}
+                    title="Open this chat"
+                    className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100"
+                  >
+                    <MessageSquare size={15} />
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -368,17 +456,8 @@ function DealerNewCallList({ call }) {
 function ContactList({ contacts, loading, query, setQuery, call, emptyLabel = "No contacts found." }) {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="px-3 pt-3 pb-2 shrink-0">
-        <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 rounded-lg px-2.5 py-1.5">
-          <Search size={14} className="text-slate-400 shrink-0" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search…"
-            className="bg-transparent text-sm outline-none flex-1 text-slate-700 dark:text-slate-200 placeholder:text-slate-400"
-          />
-        </div>
-      </div>
+      <SearchBar value={query} onChange={setQuery} placeholder="Search contacts…" />
+      <p className="px-4 pb-1 text-xs font-semibold text-slate-400">All Contacts</p>
       <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
         {loading ? (
           <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8">Loading…</p>
@@ -386,27 +465,27 @@ function ContactList({ contacts, loading, query, setQuery, call, emptyLabel = "N
           <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8 px-4">{emptyLabel}</p>
         ) : (
           contacts.map((c) => (
-            <div key={`${c.type}-${c.id}`} className="px-4 py-2.5 flex items-center gap-2.5">
-              <Avatar name={c.name} size={32} />
+            <div key={`${c.type}-${c.id}`} className="px-4 py-2.5 flex items-center gap-3">
+              <PastelAvatar name={c.name} size={36} />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{c.name}</p>
-                <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{c.sub}</p>
+                <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{c.name}</p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 truncate font-medium">{c.sub}</p>
               </div>
               <button
                 onClick={() => call?.startCall(c, "audio")}
                 disabled={!call || call.status !== "idle"}
                 title={`Call ${c.name}`}
-                className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 disabled:opacity-30"
+                className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100 disabled:opacity-30"
               >
-                <Phone size={14} />
+                <Phone size={15} />
               </button>
               <button
                 onClick={() => call?.startCall(c, "video")}
                 disabled={!call || call.status !== "idle"}
                 title={`Video call ${c.name}`}
-                className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 disabled:opacity-30"
+                className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-sky-600 bg-sky-50 dark:bg-sky-900/30 hover:bg-sky-100 disabled:opacity-30"
               >
-                <Video size={14} />
+                <Video size={15} />
               </button>
             </div>
           ))
