@@ -298,6 +298,8 @@ function ServiceMaster({ notify }) {
       rto_required: form.rto_required, agency_required: form.agency_required,
       previous_ll_required: form.previous_ll_required,
       otp_required: form.otp_required, chat_in_app: form.chat_in_app,
+      age_limit_required: !!form.age_limit_required,
+      min_age: form.age_limit_required ? (parseInt(form.min_age, 10) || null) : null,
       gov_fee: parseFloat(form.gov_fee) || 0, processing_charges: parseFloat(form.processing_charges) || 0,
       other_charges: parseFloat(form.other_charges) || 0, pcc_fee: parseFloat(form.pcc_fee) || 0,
       post_timing: form.post_timing,
@@ -363,6 +365,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
   const [f, setF] = useState(initial || {
     parent_service: "", short_name: "", pcc_required: true, slot_booking_required: true,
     rto_required: false, agency_required: false, previous_ll_required: false, otp_required: false, chat_in_app: false,
+    age_limit_required: false, min_age: "",
     gov_fee: "", processing_charges: "", other_charges: "", pcc_fee: "", post_timing: "After Approval",
     next_service_id: "", next_service_wait_days: 30,
   });
@@ -432,7 +435,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
 
         <div>
           <Card title="Service Requirements" className="mb-4">
-            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"]].map(([k, label]) => (
+            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"], ["age_limit_required", "Age Limitation"]].map(([k, label]) => (
               <Field key={k} label={label}>
                 <Select value={String(!!f[k])} onChange={setBool(k)}>
                   <option value="false">Not Required</option>
@@ -440,6 +443,11 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
                 </Select>
               </Field>
             ))}
+            {f.age_limit_required && (
+              <Field label="Minimum Age">
+                <Input type="number" min="0" value={f.min_age} onChange={set("min_age")} placeholder="e.g. 18" />
+              </Field>
+            )}
           </Card>
 
           <Card title="Workflow Rules" className="mb-4">

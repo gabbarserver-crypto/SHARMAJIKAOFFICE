@@ -33,11 +33,21 @@ export function ageHighlightClass(dob) {
   return "";
 }
 
-// Minimum legal age for a service, based on its name. Rickshaw / E-Cart
-// licences require 20; LMV and MCWG require 18. Returns null when the
-// service doesn't match any known category — no age check is enforced
-// in that case (so this never blocks services we don't have a rule for).
+// Minimum legal age for a service.
+//
+// Primary source: the service's own Master config (age_limit_required +
+// min_age, set in Masters → Service → Service Requirements → "Age
+// Limitation"). Falls back to a name-based guess only for services that
+// haven't been configured yet, so nothing silently loses its existing
+// check the moment this field shipped.
 export function minAgeForService(service) {
+  if (service?.age_limit_required) {
+    const n = Number(service.min_age);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  if (service?.age_limit_required === false) return null; // explicitly configured as "not required"
+
+  // Fallback for services not yet configured in Master:
   const name = `${service?.parent_service || ""} ${service?.short_name || ""}`.toLowerCase();
   if (/rickshaw|e-?cart|\bcart\b/.test(name)) return 20;
   if (/\blmv\b|\bmcwg\b/.test(name)) return 18;

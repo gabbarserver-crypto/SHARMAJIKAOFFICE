@@ -350,7 +350,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required").order("parent_service");
+      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, age_limit_required, min_age").order("parent_service");
       setServices(data || []);
     })();
   }, []);
