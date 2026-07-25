@@ -15,7 +15,7 @@ import Masters from "./pages/Masters";
 import Settings from "./pages/Settings";
 import Chats from "./pages/Chats";
 import DealerPortal from "./pages/DealerPortal";
-import StaffChatWidget from "./components/StaffChatWidget";
+import CommsWindow from "./components/CommsWindow";
 import GlobalCallOverlay from "./components/GlobalCallOverlay";
 import NotificationToaster from "./components/NotificationToaster";
 import { useDirectCall } from "./lib/directCall";
@@ -415,9 +415,11 @@ export default function App() {
       <main className="flex-1 p-8 overflow-y-auto">
         <Active staff={staff} canEdit={canEditActive} canApprove={canApproveActive} initialEntityId={initialEntityId} call={directCall} />
       </main>
-      <StaffChatWidget
+      <CommsWindow
+        variant="staff"
         staff={staff}
         identity={myIdentity}
+        call={directCall}
         pendingCount={pendingChatCount}
         onExpand={() => setActive("chats")}
       />
