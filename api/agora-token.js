@@ -18,8 +18,8 @@
 import { RtcTokenBuilder, RtcRole } from "agora-token";
 import { resolveCaller } from "./_lib/adminAuth.js";
 
-const AGORA_APP_ID = process.env.AGORA_APP_ID;
-const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE;
+const AGORA_APP_ID = (process.env.AGORA_APP_ID || "").trim();
+const AGORA_APP_CERTIFICATE = (process.env.AGORA_APP_CERTIFICATE || "").trim();
 const TOKEN_TTL_SECONDS = 3600; // 1 hour — plenty for any single call
 
 export default async function handler(req, res) {
@@ -31,7 +31,12 @@ export default async function handler(req, res) {
   const { accessToken, channel } = req.body || {};
   if (!channel) return res.status(400).json({ error: "channel is required" });
 
-  const caller = await resolveCaller(accessToken);
+  let caller;
+  try {
+    caller = await resolveCaller(accessToken);
+  } catch (e) {
+    return res.status(500).json({ error: "Auth check failed: " + (e?.message || String(e)) });
+  }
   if (!caller) return res.status(403).json({ error: "Not signed in" });
 
   // uid 0 = a "wildcard" token — the client picks its own numeric uid at
@@ -40,14 +45,22 @@ export default async function handler(req, res) {
   const uid = 0;
   const privilegeExpiredTs = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
 
-  const token = RtcTokenBuilder.buildTokenWithUid(
-    AGORA_APP_ID,
-    AGORA_APP_CERTIFICATE,
-    String(channel),
-    uid,
-    RtcRole.PUBLISHER,
-    privilegeExpiredTs
-  );
+  let token;
+  try {
+    token = RtcTokenBuilder.buildTokenWithUid(
+      AGORA_APP_ID,
+      AGORA_APP_CERTIFICATE,
+      String(channel),
+      uid,
+      RtcRole.PUBLISHER,
+      privilegeExpiredTs
+    );
+  } catch (e) {
+    // Almost always means AGORA_APP_ID / AGORA_APP_CERTIFICATE is malformed
+    // (wrong value, swapped with each other, or has stray whitespace) —
+    // surfacing the real message here beats a bare, undiagnosable 500.
+    return res.status(500).json({ error: "Agora token generation failed: " + (e?.message || String(e)) });
+  }
 
   res.json({ token, appId: AGORA_APP_ID, uid });
 }
