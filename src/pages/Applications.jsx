@@ -1769,7 +1769,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
           status: status || "Draft Submitted",
         };
 
-        return { raw, errors, payload, dealerRaw: row.dealer || "", serviceRaw: row.service || "", included: errors.length === 0 };
+        return { raw, errors, payload, dealerRaw: row.dealer || "", serviceRaw: row.service || "", rtoRaw: row.rto || "", rtoResolvedName: rto?.name || null, included: errors.length === 0 };
       });
 
       setPreview(built);
@@ -1894,6 +1894,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
                   <th className="px-3 py-2 text-left">Dealer</th>
                   <th className="px-3 py-2 text-left">Service</th>
                   <th className="px-3 py-2 text-left">Applicant</th>
+                  <th className="px-3 py-2 text-left">RTO</th>
                   <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-left">Issues</th>
                 </tr>
@@ -1913,6 +1914,13 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
                     <td className="px-3 py-2 whitespace-nowrap">{r.dealerRaw || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.serviceRaw || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.payload.applicant_name || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {r.rtoRaw
+                        ? (r.rtoResolvedName && r.rtoResolvedName.trim().toLowerCase() !== r.rtoRaw.trim().toLowerCase()
+                            ? <span title={`Typed "${r.rtoRaw}"`} className="text-amber-600 font-semibold">{r.rtoResolvedName}</span>
+                            : (r.rtoResolvedName || <span className="text-rose-500">{r.rtoRaw}</span>))
+                        : "—"}
+                    </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.payload.status}</td>
                     <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
                   </tr>
