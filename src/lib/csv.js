@@ -36,11 +36,25 @@ export function parseCSV(text) {
 // Looks a free-text CSV value up against a master list by name/short
 // name/code, case-insensitively — used to resolve "Dealer", "Service",
 // "RTO", "Agency" columns to their real IDs during import.
+//
+// Matches by field PRIORITY across the whole list, not by list order: it
+// checks every item's `fields[0]` (e.g. "name") first, and only falls back
+// to `fields[1]` (e.g. "code") across the whole list if nothing matched on
+// the first field. Checking item-by-item instead (i.e. field A-then-B for
+// item 1, then field A-then-B for item 2, ...) was the actual bug behind
+// "I select Raja Garden, but after import it shows CVR Raja Garden" — if
+// some other RTO earlier in the list happened to have code "Raja Garden",
+// it matched on ITS code before the search ever reached the RTO whose name
+// is actually "Raja Garden".
 export function findByLabel(list, value, fields) {
   if (!value) return null;
   const needle = value.trim().toLowerCase();
   if (!needle) return null;
-  return list.find((item) => fields.some((f) => item[f] && String(item[f]).trim().toLowerCase() === needle)) || null;
+  for (const field of fields) {
+    const match = list.find((item) => item[field] && String(item[field]).trim().toLowerCase() === needle);
+    if (match) return match;
+  }
+  return null;
 }
 
 // Parses "DD-MM-YYYY" / "DD/MM/YYYY" (and passes already-ISO "YYYY-MM-DD"
