@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton, GhostButton, DangerButton, Modal, Toast } from "../components/UI";
-import { parseCSV, findByLabel, ddmmyyyyToISO, normalizePaymentMode } from "../lib/csv";
+import { parseCSV, findByLabel, ddmmyyyyToISO } from "../lib/csv";
 
 function isoToDDMMYYYY(iso) {
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -16,11 +16,7 @@ export default function Payments({ staff } = {}) {
   const [dealers, setDealers] = useState([]);
   const [agencies, setAgencies] = useState([]);
   const [applications, setApplications] = useState([]);
-  const [form, setForm] = useState({ dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
-  const [recordFor, setRecordFor] = useState("dealer"); // "dealer" | "agency"
-  const [agencyForm, setAgencyForm] = useState({ agency_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
-  const [agencyRecent, setAgencyRecent] = useState([]);
-  const [savingAgency, setSavingAgency] = useState(false);
+  const [form, setForm] = useState({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
   const [recent, setRecent] = useState([]);
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -55,63 +51,18 @@ export default function Payments({ staff } = {}) {
       .from("payments")
       .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
       .order("created_at", { ascending: false })
-      .limit(30);
+      .limit(20);
     setRecent(data || []);
-    loadAgencyRecent();
-  };
-
-  // Payments recorded directly against an Agency (no dealer picked at all)
-  // are plain agency_ledger_transactions rows with no payment_id — that's
-  // what distinguishes them from the ledger entries a normal dealer
-  // payment's "Paid At Agency" side-effect creates.
-  const loadAgencyRecent = async () => {
-    const { data } = await supabase
-      .from("agency_ledger_transactions")
-      .select("*, agencies(name)")
-      .is("payment_id", null)
-      .order("created_at", { ascending: false })
-      .limit(30);
-    setAgencyRecent(data || []);
-  };
-
-  // Posts a payment's ledger entries — a credit to the dealer (payment
-  // received reduces what they owe) and, if a "Paid At" agency was
-  // chosen, a mirrored credit on that agency's ledger too (they're
-  // holding money on our behalf). Shared by submit() below AND by
-  // verifyPendingPayment() further down, since a dealer-submitted payment
-  // only ever gets these posted once staff verifies it — not at the
-  // moment the dealer submits it.
-  const postPaymentLedgers = async ({ paymentId, dealerId, dealerName, agencyId, agencyName, amount, paymentMode, referenceNo, remarks }) => {
-    const voucherNo = referenceNo?.trim() || `PMT-${paymentId}`;
-    const ledgerInserts = [
-      supabase.from("ledger_transactions").insert({
-        dealer_id: dealerId,
-        voucher_no: voucherNo,
-        payment_id: paymentId,
-        type: "credit",
-        amount,
-        description: `Payment received — ${paymentMode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${remarks ? ` · ${remarks}` : ""}`,
-      }),
-    ];
-    if (agencyId) {
-      ledgerInserts.push(
-        supabase.from("agency_ledger_transactions").insert({
-          agency_id: agencyId,
-          voucher_no: voucherNo,
-          payment_id: paymentId,
-          type: "credit",
-          amount,
-          description: `Payment collected on behalf of ${dealerName || "dealer"} — ${paymentMode}${remarks ? ` · ${remarks}` : ""}`,
-        })
-      );
-    }
-    const results = await Promise.all(ledgerInserts);
-    return results.find((r) => r.error)?.error || null;
   };
 
   const submit = async () => {
-    if (!form.dealer_id || !form.amount) {
-      setToast("Dealer and amount are required");
+    const isAgencyOnly = form.payment_type === "agency";
+    if (isAgencyOnly ? !form.paid_at_agency_id : !form.dealer_id) {
+      setToast(isAgencyOnly ? "Agency and amount are required" : "Dealer and amount are required");
+      return;
+    }
+    if (!form.amount) {
+      setToast("Amount is required");
       return;
     }
     setSaving(true);
@@ -121,18 +72,14 @@ export default function Payments({ staff } = {}) {
     const { data: paymentRow, error } = await supabase
       .from("payments")
       .insert({
-        dealer_id: form.dealer_id,
-        application_id: form.application_id || null,
+        dealer_id: isAgencyOnly ? null : form.dealer_id,
+        application_id: isAgencyOnly ? null : (form.application_id || null),
         amount: parseFloat(form.amount),
         payment_mode: form.payment_mode,
         reference_no: form.reference_no || null,
         remarks: form.remarks || null,
         paid_at_agency_id: form.paid_at_agency_id || null,
         received_by: staffRow?.id || null,
-        // status/submitted_by default to 'verified'/'staff' in the DB —
-        // staff-recorded payments post to the ledger immediately, same as
-        // always. Only a dealer's own self-submission (see
-        // DealerPaymentsPanel.jsx) ever lands as 'pending'.
       })
       .select()
       .single();
@@ -143,59 +90,60 @@ export default function Payments({ staff } = {}) {
       return;
     }
 
+    // Post this payment to the dealer ledger (a payment received reduces
+    // what the dealer owes, so it's posted as a credit) and, if a "Paid At"
+    // agency was chosen, mirror the same amount as a credit on that
+    // agency's ledger too. For a pure Agency payment (no dealer at all),
+    // only the agency side is posted. Voucher no. is the payment's own
+    // reference no. (or a generated fallback) so this stays a distinct,
+    // traceable line.
     const dealerName = dealers.find((d) => d.id === form.dealer_id)?.name;
     const agencyName = agencies.find((a) => a.id === form.paid_at_agency_id)?.name;
+    const voucherNo = form.reference_no?.trim() || `PMT-${paymentRow.id}`;
+    const amount = parseFloat(form.amount);
 
-    const ledgerError = await postPaymentLedgers({
-      paymentId: paymentRow.id,
-      dealerId: form.dealer_id,
-      dealerName,
-      agencyId: form.paid_at_agency_id || null,
-      agencyName,
-      amount: parseFloat(form.amount),
-      paymentMode: form.payment_mode,
-      referenceNo: form.reference_no,
-      remarks: form.remarks,
-    });
+    const ledgerInserts = [];
+    if (!isAgencyOnly) {
+      ledgerInserts.push(
+        supabase.from("ledger_transactions").insert({
+          dealer_id: form.dealer_id,
+          voucher_no: voucherNo,
+          payment_id: paymentRow.id,
+          type: "credit",
+          amount,
+          description: `Payment received — ${form.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${form.remarks ? ` · ${form.remarks}` : ""}`,
+        })
+      );
+    }
+
+    if (form.paid_at_agency_id) {
+      ledgerInserts.push(
+        supabase.from("agency_ledger_transactions").insert({
+          agency_id: form.paid_at_agency_id,
+          voucher_no: voucherNo,
+          payment_id: paymentRow.id,
+          type: "credit",
+          amount,
+          description: isAgencyOnly
+            ? `Payment received — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`
+            : `Payment collected on behalf of ${dealerName || "dealer"} — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`,
+        })
+      );
+    }
+
+    const ledgerResults = await Promise.all(ledgerInserts);
+    const ledgerError = ledgerResults.find((r) => r.error)?.error;
 
     setSaving(false);
     if (ledgerError) {
       setToast("Payment saved, but ledger sync failed: " + ledgerError.message);
+    } else if (isAgencyOnly) {
+      setToast(`Payment recorded — ${agencyName || "agency"} ledger updated`);
     } else {
       setToast(`Payment recorded — ledger entry & receipt generated${agencyName ? ` (dealer & ${agencyName} ledgers updated)` : ""}`);
     }
-    setForm({ dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
+    setForm({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
     loadRecent();
-  };
-
-  // A payment recorded straight against an Agency — no dealer involved at
-  // all. Posts only to that agency's own ledger (agency_ledger_transactions),
-  // since there's no dealer/application to tie it to and nothing for the
-  // payments table (which is dealer-centric) to attach to.
-  const submitAgencyPayment = async () => {
-    if (!agencyForm.agency_id || !agencyForm.amount) {
-      setToast("Agency and amount are required");
-      return;
-    }
-    setSavingAgency(true);
-    const amount = parseFloat(agencyForm.amount);
-    const voucherNo = agencyForm.reference_no?.trim() || `AGPMT-${Date.now()}`;
-    const { error } = await supabase.from("agency_ledger_transactions").insert({
-      agency_id: agencyForm.agency_id,
-      voucher_no: voucherNo,
-      type: "credit",
-      amount,
-      description: `Direct agency payment — ${agencyForm.payment_mode}${agencyForm.remarks ? ` · ${agencyForm.remarks}` : ""}`,
-    });
-    setSavingAgency(false);
-    if (error) {
-      setToast("Failed: " + error.message);
-      return;
-    }
-    const agencyName = agencies.find((a) => a.id === agencyForm.agency_id)?.name;
-    setToast(`Payment recorded to ${agencyName || "agency"}'s ledger`);
-    setAgencyForm({ agency_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
-    loadAgencyRecent();
   };
 
   // Admin-only: deleting a payment also removes the ledger entries it
@@ -206,7 +154,8 @@ export default function Payments({ staff } = {}) {
   // that matches zero rows doesn't error, so silently trusting it is how
   // a payment could disappear while its ledger entry stayed behind.
   const deletePayment = async (p) => {
-    if (!window.confirm(`Delete this ₹${Number(p.amount).toLocaleString("en-IN")} payment from ${p.dealers?.name || "this dealer"}? This also removes its ledger entries.`)) return;
+    const payerName = p.dealers?.name || p.paid_at_agency?.name || "this payer";
+    if (!window.confirm(`Delete this ₹${Number(p.amount).toLocaleString("en-IN")} payment from ${payerName}? This also removes its ledger entries.`)) return;
     const voucherNo = p.reference_no?.trim() || `PMT-${p.id}`;
 
     const deleteLedgerRows = async (table, entityCol, entityId) => {
@@ -218,18 +167,24 @@ export default function Payments({ staff } = {}) {
       return { data, error };
     };
 
-    const dealerResult = await deleteLedgerRows("ledger_transactions", "dealer_id", p.dealer_id);
-    let agencyResult = { data: [], error: null };
-    if (p.paid_at_agency_id) {
-      agencyResult = await deleteLedgerRows("agency_ledger_transactions", "agency_id", p.paid_at_agency_id);
-    }
+    // Only the side(s) this payment actually posted to are required to
+    // match — a pure Agency payment (p.dealer_id null) never had a dealer
+    // ledger row to begin with, so there's nothing to find there.
+    const dealerResult = p.dealer_id
+      ? await deleteLedgerRows("ledger_transactions", "dealer_id", p.dealer_id)
+      : { data: [], error: null, skipped: true };
+    const agencyResult = p.paid_at_agency_id
+      ? await deleteLedgerRows("agency_ledger_transactions", "agency_id", p.paid_at_agency_id)
+      : { data: [], error: null, skipped: true };
 
     if (dealerResult.error || agencyResult.error) {
       setToast("Failed to remove ledger entries: " + (dealerResult.error || agencyResult.error).message + " — payment was NOT deleted.");
       return;
     }
-    if (!dealerResult.data || dealerResult.data.length === 0) {
-      setToast("Couldn't find this payment's ledger entry to remove — payment was NOT deleted. Please check the dealer's ledger manually.");
+    const dealerOk = dealerResult.skipped || (dealerResult.data && dealerResult.data.length > 0);
+    const agencyOk = agencyResult.skipped || (agencyResult.data && agencyResult.data.length > 0);
+    if (!dealerOk || !agencyOk) {
+      setToast("Couldn't find this payment's ledger entry to remove — payment was NOT deleted. Please check the ledger manually.");
       return;
     }
 
@@ -273,12 +228,14 @@ export default function Payments({ staff } = {}) {
       return { data, error };
     };
 
-    const dealerResult = await updateLedgerRow("ledger_transactions", "dealer_id", original.dealer_id, {
-      amount: parseFloat(edited.amount),
-      voucher_no: newVoucherNo,
-      description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
-    });
-    let agencyResult = { data: [], error: null };
+    const dealerResult = original.dealer_id
+      ? await updateLedgerRow("ledger_transactions", "dealer_id", original.dealer_id, {
+          amount: parseFloat(edited.amount),
+          voucher_no: newVoucherNo,
+          description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
+        })
+      : { data: [], error: null, skipped: true };
+    let agencyResult = { data: [], error: null, skipped: true };
     if (original.paid_at_agency_id) {
       agencyResult = await updateLedgerRow("agency_ledger_transactions", "agency_id", original.paid_at_agency_id, {
         amount: parseFloat(edited.amount),
@@ -288,8 +245,8 @@ export default function Payments({ staff } = {}) {
 
     if (dealerResult.error || agencyResult.error) {
       setToast("Payment updated, but its ledger entry failed to sync: " + (dealerResult.error || agencyResult.error).message);
-    } else if (!dealerResult.data || dealerResult.data.length === 0) {
-      setToast("Payment updated, but couldn't find its ledger entry to update — please check the dealer's ledger manually.");
+    } else if (!(dealerResult.skipped || (dealerResult.data && dealerResult.data.length > 0)) || !(agencyResult.skipped || (agencyResult.data && agencyResult.data.length > 0))) {
+      setToast("Payment updated, but couldn't find its ledger entry to update — please check the ledger manually.");
     } else {
       setToast("Payment updated");
     }
@@ -297,113 +254,20 @@ export default function Payments({ staff } = {}) {
     loadRecent();
   };
 
-  // A dealer submitted this themselves (see DealerPaymentsPanel.jsx) — it's
-  // sat as 'pending' with no ledger entries at all until now. Verifying
-  // posts the SAME ledger entries a staff-recorded payment gets (via the
-  // shared postPaymentLedgers above) and flips it to 'verified'.
-  const verifyPendingPayment = async (p) => {
-    const { data: userData } = await supabase.auth.getUser();
-    const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
-
-    const dealerName = p.dealers?.name;
-    const agencyName = p.paid_at_agency?.name;
-
-    const ledgerError = await postPaymentLedgers({
-      paymentId: p.id,
-      dealerId: p.dealer_id,
-      dealerName,
-      agencyId: p.paid_at_agency_id || null,
-      agencyName,
-      amount: Number(p.amount),
-      paymentMode: p.payment_mode,
-      referenceNo: p.reference_no,
-      remarks: p.remarks,
-    });
-    if (ledgerError) {
-      setToast("Failed to post ledger entry — payment NOT verified: " + ledgerError.message);
-      return;
-    }
-
-    const { error } = await supabase
-      .from("payments")
-      .update({ status: "verified", verified_by: staffRow?.id || null, verified_at: new Date().toISOString() })
-      .eq("id", p.id);
-    if (error) {
-      setToast("Ledger posted, but couldn't mark the payment verified: " + error.message);
-      return;
-    }
-    setToast(`Verified — ₹${Number(p.amount).toLocaleString("en-IN")} posted to ${dealerName || "dealer"}'s ledger`);
-    loadRecent();
-  };
-
-  // Rejects a dealer's self-submitted payment — no ledger entries were
-  // ever posted for it (see verifyPendingPayment above), so this is just
-  // a status flip; nothing to undo.
-  const rejectPendingPayment = async (p) => {
-    if (!window.confirm(`Reject this ₹${Number(p.amount).toLocaleString("en-IN")} submission from ${p.dealers?.name || "this dealer"}? No ledger entry was posted for it, so there's nothing to undo.`)) return;
-    const { error } = await supabase.from("payments").update({ status: "rejected" }).eq("id", p.id);
-    if (error) {
-      setToast("Failed to reject: " + error.message);
-      return;
-    }
-    setToast("Payment submission rejected");
-    loadRecent();
-  };
-
-  const pending = recent.filter((p) => p.status === "pending");
-
   return (
     <div className="grid lg:grid-cols-2 gap-6">
       <div className="lg:col-span-2 flex justify-end">
         <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
       </div>
 
-      {pending.length > 0 && (
-        <Card title={`Pending Verification (${pending.length})`} className="lg:col-span-2">
-          <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
-            Submitted by dealers themselves from their portal — nothing posts to any ledger until you verify.
-          </p>
-          <div className="space-y-2">
-            {pending.map((p) => (
-              <div key={p.id} className="flex items-center justify-between border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-500/10 rounded-lg px-3 py-2">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">{p.dealers?.name}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {p.applications?.draft_code ? `${p.applications.draft_code} · ` : ""}{p.payment_mode} · {new Date(p.created_at).toLocaleString()}
-                    {p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
-                    {p.remarks ? ` · ${p.remarks}` : ""}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-100">₹{Number(p.amount).toLocaleString("en-IN")}</p>
-                  <button onClick={() => verifyPendingPayment(p)} className="text-xs font-semibold text-emerald-600 hover:underline">Verify</button>
-                  <button onClick={() => rejectPendingPayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Reject</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
       <Card title="Record New Payment">
-        <div className="flex gap-2 mb-4">
-          <button
-            type="button"
-            onClick={() => setRecordFor("dealer")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${recordFor === "dealer" ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"}`}
-          >
-            For a Dealer
-          </button>
-          <button
-            type="button"
-            onClick={() => setRecordFor("agency")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${recordFor === "agency" ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"}`}
-          >
-            Direct to Agency
-          </button>
-        </div>
-
-        {recordFor === "dealer" ? (
+        <Field label="Payment Type" required>
+          <Select value={form.payment_type} onChange={set("payment_type")}>
+            <option value="dealer">Dealer</option>
+            <option value="agency">Agency (no dealer involved)</option>
+          </Select>
+        </Field>
+        {form.payment_type === "dealer" ? (
           <>
             <Field label="Dealer" required>
               <Select value={form.dealer_id} onChange={set("dealer_id")}>
@@ -417,102 +281,60 @@ export default function Payments({ staff } = {}) {
                 {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
               </Select>
             </Field>
-            <div className="grid sm:grid-cols-2 gap-x-4">
-              <Field label="Amount (₹)" required>
-                <Input type="number" value={form.amount} onChange={set("amount")} />
-              </Field>
-              <Field label="Payment Mode" required>
-                <Select value={form.payment_mode} onChange={set("payment_mode")}>
-                  <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
-                </Select>
-              </Field>
-            </div>
-            <Field label="Reference No.">
-              <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
-            </Field>
-            <Field label="Paid At (Agency)">
-              <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
-                <option value="">— Not via an agency —</option>
-                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
-              </Select>
-            </Field>
-            <Field label="Remarks">
-              <Input value={form.remarks} onChange={set("remarks")} />
-            </Field>
-            <PrimaryButton onClick={submit} disabled={saving}>
-              {saving ? "Saving..." : "Save Payment & Generate Receipt"}
-            </PrimaryButton>
           </>
         ) : (
-          <>
-            <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
-              For money paid straight to an Agency, with no dealer or application attached — posts only to that agency's own ledger.
-            </p>
-            <Field label="Agency" required>
-              <Select value={agencyForm.agency_id} onChange={(e) => setAgencyForm((s) => ({ ...s, agency_id: e.target.value }))}>
-                <option value="">Select Agency</option>
-                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
-              </Select>
-            </Field>
-            <div className="grid sm:grid-cols-2 gap-x-4">
-              <Field label="Amount (₹)" required>
-                <Input type="number" value={agencyForm.amount} onChange={(e) => setAgencyForm((s) => ({ ...s, amount: e.target.value }))} />
-              </Field>
-              <Field label="Payment Mode" required>
-                <Select value={agencyForm.payment_mode} onChange={(e) => setAgencyForm((s) => ({ ...s, payment_mode: e.target.value }))}>
-                  <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
-                </Select>
-              </Field>
-            </div>
-            <Field label="Reference No.">
-              <Input value={agencyForm.reference_no} onChange={(e) => setAgencyForm((s) => ({ ...s, reference_no: e.target.value }))} placeholder="UTR / cheque no." />
-            </Field>
-            <Field label="Remarks">
-              <Input value={agencyForm.remarks} onChange={(e) => setAgencyForm((s) => ({ ...s, remarks: e.target.value }))} />
-            </Field>
-            <PrimaryButton onClick={submitAgencyPayment} disabled={savingAgency}>
-              {savingAgency ? "Saving..." : "Save Payment to Agency Ledger"}
-            </PrimaryButton>
-          </>
+          <Field label="Agency" required>
+            <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
+              <option value="">Select Agency</option>
+              {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+            </Select>
+          </Field>
         )}
+        <div className="grid sm:grid-cols-2 gap-x-4">
+          <Field label="Amount (₹)" required>
+            <Input type="number" value={form.amount} onChange={set("amount")} />
+          </Field>
+          <Field label="Payment Mode" required>
+            <Select value={form.payment_mode} onChange={set("payment_mode")}>
+              <option>Cash</option><option>UPI</option><option>Bank</option><option>Cheque</option>
+            </Select>
+          </Field>
+        </div>
+        <Field label="Reference No.">
+          <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
+        </Field>
+        {form.payment_type === "dealer" && (
+          <Field label="Paid At (Agency)">
+            <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
+              <option value="">— Not via an agency —</option>
+              {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+            </Select>
+          </Field>
+        )}
+        <Field label="Remarks">
+          <Input value={form.remarks} onChange={set("remarks")} />
+        </Field>
+        <PrimaryButton onClick={submit} disabled={saving}>
+          {saving ? "Saving..." : "Save Payment & Generate Receipt"}
+        </PrimaryButton>
       </Card>
 
-      <Card title={recordFor === "agency" ? "Recent Agency Payments" : "Recent Payments"}>
-        {recordFor === "agency" ? (
-          <div className="space-y-2 max-h-[520px] overflow-y-auto">
-            {agencyRecent.map((t) => (
-              <div key={t.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">{t.agencies?.name}</p>
-                  <p className="text-xs text-slate-400 dark:text-slate-500">{new Date(t.created_at).toLocaleString()}{t.description ? ` · ${t.description}` : ""}</p>
-                </div>
-                <p className="text-sm font-bold text-emerald-600">₹{Number(t.amount).toLocaleString("en-IN")}</p>
-              </div>
-            ))}
-            {agencyRecent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No direct agency payments yet</p>}
-          </div>
-        ) : (
+      <Card title="Recent Payments">
         <div className="space-y-2 max-h-[520px] overflow-y-auto">
-          {recent.filter((p) => p.status !== "pending").map((p) => (
-            <div key={p.id} className={`flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 ${p.status === "rejected" ? "opacity-50" : ""}`}>
+          {recent.map((p) => (
+            <div key={p.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
               <div>
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  {p.dealers?.name}
-                  {p.submitted_by === "dealer" && (
-                    <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-blue-500 align-middle">Self-submitted</span>
-                  )}
-                  {p.status === "rejected" && (
-                    <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-rose-500 align-middle">Rejected</span>
-                  )}
+                  {p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—")}
                 </p>
                 <p className="text-xs text-slate-400 dark:text-slate-500">
                   {p.applications?.draft_code ? `${p.applications.draft_code} · ` : ""}{p.payment_mode} · {new Date(p.created_at).toLocaleString()}
-                  {p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
+                  {p.dealer_id && p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
                 </p>
               </div>
               <div className="flex items-center gap-3">
-                <p className={`text-sm font-bold ${p.status === "rejected" ? "text-slate-400 line-through" : "text-emerald-600"}`}>₹{Number(p.amount).toLocaleString("en-IN")}</p>
-                {isAdmin && p.status === "verified" && (
+                <p className="text-sm font-bold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</p>
+                {isAdmin && (
                   <div className="flex items-center gap-2">
                     <button onClick={() => setEditingPayment(p)} className="text-xs font-semibold text-blue-600 hover:underline">Edit</button>
                     <button onClick={() => deletePayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
@@ -521,9 +343,8 @@ export default function Payments({ staff } = {}) {
               </div>
             </div>
           ))}
-          {recent.filter((p) => p.status !== "pending").length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No payments yet</p>}
+          {recent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No payments yet</p>}
         </div>
-        )}
       </Card>
 
       {editingPayment && (
@@ -562,25 +383,6 @@ export default function Payments({ staff } = {}) {
 // Application (optional — draft code), Amount, Payment Mode (optional,
 // defaults to Cash), Reference No (optional), Paid At Agency (optional),
 // Remarks (optional).
-// Generates and downloads a starter CSV with the exact headers the import
-// parser looks for, plus one example row, so there's always a correct
-// template one click away instead of the person having to remember/guess
-// the column names.
-function downloadPaymentsCsvTemplate() {
-  const headers = ["Dealer", "Application", "Amount", "Payment Mode", "Reference No", "Paid At Agency", "Remarks", "Date"];
-  const example = ["GANESH", "GAN023", "800", "Cash", "", "", "", "25-03-2026"];
-  const csv = [headers, example].map((row) => row.map((v) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "payments-import-template.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
   const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState([]);
@@ -607,8 +409,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         const dealerRaw = get("dealer", "dealername", "dealercode");
         const applicationRaw = get("application", "draftcode", "draftid");
         const amountRaw = get("amount");
-        const modeRawInput = get("paymentmode", "mode") || "Cash";
-        const paymentMode = normalizePaymentMode(modeRawInput);
+        const modeRaw = get("paymentmode", "mode") || "Cash";
         const referenceRaw = get("referenceno", "reference", "utr", "voucherno", "vouchernumber", "voucher");
         const agencyRaw = get("paidatagency", "agency");
         const remarksRaw = get("remarks", "remark", "narration", "description");
@@ -620,10 +421,14 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         const amount = parseFloat(amountRaw);
 
         const errors = [];
-        if (!dealer) errors.push(`Dealer "${dealerRaw}" not found`);
-        if (!amountRaw || Number.isNaN(amount) || amount <= 0) errors.push("Amount is missing or invalid");
+        // A row is valid if it has a payer — either a Dealer, or (when
+        // Dealer is left blank on purpose) an Agency standing in as a pure
+        // Agency payment. Only actually error if dealerRaw was given but
+        // didn't match anything, or if BOTH are missing entirely.
+        if (dealerRaw && !dealer) errors.push(`Dealer "${dealerRaw}" not found`);
+        if (!dealerRaw && !agencyRaw) errors.push("Either Dealer or Agency is required");
         if (agencyRaw && !agency) errors.push(`Agency "${agencyRaw}" not found`);
-        if (!paymentMode) errors.push(`Payment Mode "${modeRawInput}" not recognized (use Cash, Bank, UPI or Cheque)`);
+        if (!amountRaw || Number.isNaN(amount) || amount <= 0) errors.push("Amount is missing or invalid");
 
         if (dateRaw && !paidOn) errors.push(`Date "${dateRaw}" not recognized (use DD-MM-YYYY)`);
 
@@ -638,7 +443,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             agency_name: agency?.name,
             application_draft_code: applicationRaw || null,
             amount,
-            payment_mode: paymentMode || "Cash",
+            payment_mode: modeRaw,
             reference_no: referenceRaw || null,
             remarks: remarksRaw || null,
             paid_on: paidOn,
@@ -663,15 +468,16 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
       const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
 
       let imported = 0;
-      const failed = [];
       for (const r of rowsToImport) {
         const { payload } = r;
 
         // Resolve an application draft code to its id, if one was given —
         // best-effort: an unmatched code just leaves the payment untied to
         // a specific application rather than failing the whole row.
+        // Doesn't apply at all to a pure Agency row (no dealer_id) since
+        // applications are always dealer-scoped.
         let applicationId = null;
-        if (payload.application_draft_code) {
+        if (payload.application_draft_code && payload.dealer_id) {
           const { data: appRow } = await supabase
             .from("applications")
             .select("id")
@@ -684,7 +490,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         const { data: paymentRow, error: insertError } = await supabase
           .from("payments")
           .insert({
-            dealer_id: payload.dealer_id,
+            dealer_id: payload.dealer_id || null,
             application_id: applicationId,
             amount: payload.amount,
             payment_mode: payload.payment_mode,
@@ -698,26 +504,26 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           .single();
 
         if (insertError) {
-          // Keep going instead of aborting the whole batch — earlier rows
-          // that already inserted successfully stay inserted either way, so
-          // stopping here only hides how far it actually got and strands
-          // every row after this one for no reason.
-          failed.push({ dealer_name: payload.dealer_name, amount: payload.amount, message: insertError.message });
-          continue;
+          setError(`Import stopped at "${payload.dealer_name || payload.agency_name}" (₹${payload.amount}): ` + insertError.message);
+          setImporting(false);
+          return;
         }
 
         const voucherNo = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
-        const ledgerInserts = [
-          supabase.from("ledger_transactions").insert({
-            dealer_id: payload.dealer_id,
-            voucher_no: voucherNo,
-            payment_id: paymentRow.id,
-            type: "credit",
-            amount: payload.amount,
-            description: `Payment received — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
-            ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
-          }),
-        ];
+        const ledgerInserts = [];
+        if (payload.dealer_id) {
+          ledgerInserts.push(
+            supabase.from("ledger_transactions").insert({
+              dealer_id: payload.dealer_id,
+              voucher_no: voucherNo,
+              payment_id: paymentRow.id,
+              type: "credit",
+              amount: payload.amount,
+              description: `Payment received — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+              ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
+            })
+          );
+        }
         if (payload.agency_id) {
           ledgerInserts.push(
             supabase.from("agency_ledger_transactions").insert({
@@ -726,7 +532,9 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
               payment_id: paymentRow.id,
               type: "credit",
               amount: payload.amount,
-              description: `Payment collected on behalf of ${payload.dealer_name || "dealer"} — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+              description: payload.dealer_id
+                ? `Payment collected on behalf of ${payload.dealer_name || "dealer"} — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`
+                : `Payment received — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
               ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
             })
           );
@@ -735,7 +543,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         imported++;
       }
 
-      setResult({ imported, skipped: preview.length - rowsToImport.length, failed });
+      setResult({ imported, skipped: preview.length - rowsToImport.length });
       setImporting(false);
       onImported();
     } catch (err) {
@@ -755,16 +563,10 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         {!preview.length && (
           <div>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
-              CSV columns: <b>Dealer</b> (required — name or code), <b>Amount</b> (required), Application (optional — draft code),
-              Payment Mode (optional, defaults to Cash), Reference No, Date (optional, DD-MM-YYYY — defaults to today if left blank), Paid At Agency, Remarks.
+              CSV columns: <b>Dealer</b> (name or code) and <b>Amount</b> (required). Leave Dealer blank and fill in <b>Paid At Agency</b> instead
+              for a pure Agency payment (no dealer involved) — otherwise Dealer is required. Also: Application (optional — draft code),
+              Payment Mode (optional, defaults to Cash), Reference No, Date (optional, DD-MM-YYYY — defaults to today if left blank), Remarks.
             </p>
-            <button
-              onClick={downloadPaymentsCsvTemplate}
-              className="text-xs font-semibold text-blue-600 hover:underline mb-3 inline-block"
-            >
-              ⬇ Download sample CSV template
-            </button>
-            <br />
             <input
               type="file"
               accept=".csv,text/csv"
@@ -798,7 +600,9 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
                       <td className="px-3 py-2">
                         <input type="checkbox" checked={r.included} disabled={r.errors.length > 0} onChange={() => toggleIncluded(i)} />
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.dealer_name || r.dealerRaw || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {r.payload.dealer_name || r.dealerRaw || (r.payload.agency_name ? `${r.payload.agency_name} (Agency)` : "—")}
+                      </td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.applicationRaw || "—"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.paid_on ? isoToDDMMYYYY(r.payload.paid_on) : "— (today)"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">₹{r.payload.amount || 0}</td>
@@ -827,17 +631,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         {result && (
           <div className="text-center py-6">
             <p className="text-lg font-semibold text-emerald-600">Imported {result.imported} payment{result.imported !== 1 ? "s" : ""}</p>
-            {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped (validation errors above)</p>}
-            {result.failed?.length > 0 && (
-              <div className="mt-2 text-sm text-rose-600">
-                <p className="font-semibold">{result.failed.length} row(s) failed to save:</p>
-                <ul className="list-disc list-inside mt-1 space-y-0.5">
-                  {result.failed.map((f, i) => (
-                    <li key={i}>{f.dealer_name} (₹{f.amount}) — {f.message}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped</p>}
             <PrimaryButton onClick={onClose} className="mt-4">Done</PrimaryButton>
           </div>
         )}
@@ -864,7 +658,7 @@ function EditPaymentModal({ payment, onClose, onSave }) {
       <Field label="Amount" required><Input type="number" value={f.amount} onChange={set("amount")} /></Field>
       <Field label="Payment Mode">
         <Select value={f.payment_mode} onChange={set("payment_mode")}>
-          {["Cash", "Bank", "UPI", "Cheque"].map((m) => <option key={m} value={m}>{m}</option>)}
+          {["Cash", "UPI", "Bank Transfer", "Cheque", "Card"].map((m) => <option key={m} value={m}>{m}</option>)}
         </Select>
       </Field>
       <Field label="Reference No."><Input value={f.reference_no} onChange={set("reference_no")} /></Field>
