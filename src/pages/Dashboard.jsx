@@ -1,7 +1,14 @@
 // src/pages/Dashboard.jsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone } from "lucide-react";
+import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone, CreditCard, BarChart2, Settings as SettingsIcon, LayoutGrid } from "lucide-react";
+import { BOTTOM_TAB_KEYS } from "../components/BottomTabBar";
+
+// Icons for whichever nav items land in the mobile-only overflow row below
+// (see Dashboard()'s OVERFLOW_KEYS) — anything not already in the bottom
+// tab bar. Dealer/Agency are excluded on purpose (same reasoning as
+// BottomTabBar.jsx: Ledger already covers both).
+const OVERFLOW_ICONS = { payments: CreditCard, reports: BarChart2, settings: SettingsIcon };
 
 // Bump this when you replace public/downloads/sjo-app.apk with a new build
 // so the version number on the dashboard stays in sync.
@@ -22,7 +29,7 @@ const TILE_STYLES = {
   active_dealers:         { icon: UserCheck,      classes: "bg-teal-600" },
 };
 
-export default function Dashboard() {
+export default function Dashboard({ visibleNav = [], onNavigate, active }) {
   const [counts, setCounts] = useState(null);
   const [balances, setBalances] = useState({ dealer_total: null, agency_total: null });
 
@@ -56,10 +63,43 @@ export default function Dashboard() {
       ]
     : [];
 
+  // Everything visible to this role that ISN'T already in the bottom tab
+  // bar (see BottomTabBar.jsx) — Dealer/Agency are filtered out here too,
+  // same reasoning: Ledger already covers both, no need for their own
+  // shortcut. Mobile-only; on tablet/desktop the sidebar already lists
+  // every section, so this row would just be redundant there.
+  const overflowNav = visibleNav.filter(
+    (n) => !BOTTOM_TAB_KEYS.includes(n.key) && n.key !== "dealerLedger" && n.key !== "agencyLedger"
+  );
+
   return (
     <div>
       <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-1">Dashboard</h2>
       <p className="text-slate-400 dark:text-slate-500 mb-6">Live snapshot of office activity</p>
+
+      {overflowNav.length > 0 && onNavigate && (
+        <div className="md:hidden flex gap-2 overflow-x-auto pb-1 mb-5 -mx-1 px-1">
+          {overflowNav.map((n) => {
+            const Icon = OVERFLOW_ICONS[n.key] || LayoutGrid;
+            const isActive = active === n.key;
+            return (
+              <button
+                key={n.key}
+                onClick={() => onNavigate(n.key)}
+                className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-full text-sm font-semibold border ${
+                  isActive
+                    ? "bg-blue-600 border-blue-600 text-white"
+                    : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+                }`}
+              >
+                <Icon size={15} />
+                {n.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {tiles.map((t) => {
           const style = TILE_STYLES[t.key] || { icon: FileText, classes: "bg-slate-600" };

@@ -894,33 +894,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const clearFilters = () => { setFilterDealer(""); setFilterRto(""); setFilterAgency(""); setFilterService(""); setFilterDateFrom(""); setFilterDateTo(""); };
   const activeFilterCount = [filterDealer, filterRto, filterAgency, filterService, filterDateFrom, filterDateTo].filter(Boolean).length;
-  // Count of applications currently awaiting a staff reply in chat — same
-  // "awaiting reply" definition as the Chats page/sidebar badge — shown as
-  // a chat-count badge next to the page title.
-  const openChatCount = Object.values(chatStatus).filter(Boolean).length;
 
   return (
     <CanEditContext.Provider value={canEdit}>
     <div>
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Applications</h2>
-            {openChatCount > 0 && (
-              <span
-                title={`${openChatCount} chat${openChatCount !== 1 ? "s" : ""} awaiting your reply`}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-rose-500 text-white"
-              >
-                <MessageCircle size={12} />
-                {openChatCount}
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-slate-400 dark:text-slate-500">
-            {filteredRows.length} record{filteredRows.length !== 1 ? "s" : ""}
-            {filteredRows.length !== rows.length && ` (of ${rows.length})`}
-          </p>
-        </div>
+      <div className="flex items-center justify-end mb-4 flex-wrap gap-3">
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
             <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>

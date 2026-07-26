@@ -5,7 +5,9 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { supabase } from "./lib/supabase";
 import Sidebar from "./components/Sidebar";
+import BottomTabBar, { BOTTOM_TAB_KEYS } from "./components/BottomTabBar";
 import Login from "./pages/Login";
+import Welcome from "./pages/Welcome";
 import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
 import Applications, { StaffApplications } from "./pages/Applications";
@@ -68,6 +70,10 @@ const MODULE_BY_NAV_KEY = {
 export default function App() {
   // authStatus: "loading" | "signed-out" | "signed-in"
   const [authStatus, setAuthStatus] = useState("loading");
+  // Shown once per browser session (sessionStorage, not localStorage) so a
+  // dealer/staff member who signs out and back in during the same visit
+  // isn't made to click through it again — but a fresh tab/visit sees it.
+  const [showWelcome, setShowWelcome] = useState(() => !sessionStorage.getItem("sjo_welcome_seen"));
   const [staff, setStaff] = useState(null);
   const [dealer, setDealer] = useState(null);
   const [dealerStaff, setDealerStaff] = useState(null); // set only for a dealer sub-staff login
@@ -371,6 +377,9 @@ export default function App() {
   }
 
   if (authStatus === "signed-out") {
+    if (showWelcome) {
+      return <Welcome onContinue={() => { sessionStorage.setItem("sjo_welcome_seen", "1"); setShowWelcome(false); }} />;
+    }
     return <Login authError={authError} />;
   }
 
@@ -412,9 +421,24 @@ export default function App() {
         badges={{ chats: pendingChatCount }}
         onLogout={() => supabase.auth.signOut()}
       />
-      <main className="flex-1 p-8 overflow-y-auto">
-        <Active staff={staff} canEdit={canEditActive} canApprove={canApproveActive} initialEntityId={initialEntityId} call={directCall} />
+      <main className="flex-1 p-8 pb-24 md:pb-8 overflow-y-auto">
+        <Active
+          staff={staff}
+          canEdit={canEditActive}
+          canApprove={canApproveActive}
+          initialEntityId={initialEntityId}
+          call={directCall}
+          visibleNav={visibleNav}
+          onNavigate={(key) => { setActive(key); refreshPendingChatCount(); }}
+          active={active}
+        />
       </main>
+      <BottomTabBar
+        nav={visibleNav}
+        active={active}
+        onNavigate={(key) => { setActive(key); refreshPendingChatCount(); }}
+        badges={{ chats: pendingChatCount }}
+      />
       <CommsWindow
         variant="staff"
         staff={staff}

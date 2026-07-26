@@ -18,8 +18,11 @@
 import AgoraToken from "agora-token";
 import { resolveCaller } from "./_lib/adminAuth.js";
 
+<<<<<<< HEAD
 const { RtcTokenBuilder, RtcRole } = AgoraToken;
 
+=======
+>>>>>>> 6e3a58d830f2f1971bdc52c8ede867d432f58e7a
 const AGORA_APP_ID = (process.env.AGORA_APP_ID || "").trim();
 const AGORA_APP_CERTIFICATE = (process.env.AGORA_APP_CERTIFICATE || "").trim();
 const TOKEN_TTL_SECONDS = 3600; // 1 hour — plenty for any single call
