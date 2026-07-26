@@ -16,19 +16,17 @@ import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
 import { notify } from "../lib/notify";
 import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
-import { ageHighlightClass, validateAgeForService } from "../lib/age";
-import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
-import { scanAadhaarImage } from "../lib/aadhaarOcr";
 import { useDarkMode } from "../lib/theme";
-import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText } from "lucide-react";
+import { Sun, Moon, Fingerprint, Download, Phone } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
+import DealerPaymentsPanel from "../components/DealerPaymentsPanel";
 
 // Same file the Dashboard's "Download App" card points to (see
 // src/pages/Dashboard.jsx) — one APK, linked from every portal.
 const APK_PATH = "/downloads/sjo-app.apk";
 
-const TABS = ["Applications", "Call/Chat", "Ledger"];
+const TABS = ["Applications", "Call/Chat", "Ledger", "Payments"];
 
 // `identity` is { type: 'dealer' | 'dealer_staff', id, name } — resolved in
 // App.jsx from whichever login this is. It's what scopes chat messages to
@@ -294,6 +292,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           </div>
         )}
         {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
+        {tab === "Payments" && <DealerPaymentsPanel dealerId={dealer.id} identity={identity} />}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
 
@@ -343,12 +342,6 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
   const [services, setServices] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [scanning, setScanning] = useState(false); // QR
-  const [ocrScanning, setOcrScanning] = useState(false);
-  const [ocrProgress, setOcrProgress] = useState(0);
-  const [scanNote, setScanNote] = useState("");
-  const qrInputRef = useRef(null);
-  const ocrInputRef = useRef(null);
   const [f, setF] = useState({
     service_id: "", applicant_name: "", father_husband_name: "",
     date_of_birth: "", mobile: "", address: "", police_station: "", stay_since: "",
@@ -356,69 +349,9 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const selectedService = services.find((s) => s.id === f.service_id);
 
-  const scanAadhaar = async (file) => {
-    if (!file) return;
-    setScanning(true);
-    setScanNote("");
-    setError("");
-    try {
-      const result = await scanAadhaarQr(file);
-      setF((s) => ({
-        ...s,
-        applicant_name: result.name || s.applicant_name,
-        father_husband_name: result.fatherHusbandName || s.father_husband_name,
-        address: result.address || s.address,
-      }));
-      // The QR only carries a year of birth, not the full date — never
-      // silently fabricate a day/month onto official RTO paperwork, so we
-      // just tell the dealer what year to look for and leave the actual
-      // date field for them to set.
-      setScanNote(
-        result.yearOfBirth
-          ? `Filled from Aadhaar QR. Year of birth on the card: ${result.yearOfBirth} — please set the exact Date of Birth below.`
-          : "Filled from Aadhaar QR. Please double-check the details below."
-      );
-    } catch (e) {
-      setError(e.message || "Couldn't read the Aadhaar QR");
-    } finally {
-      setScanning(false);
-      if (qrInputRef.current) qrInputRef.current.value = "";
-    }
-  };
-
-  const scanFromImage = async (file) => {
-    if (!file) return;
-    setOcrScanning(true);
-    setOcrProgress(0);
-    setScanNote("");
-    setError("");
-    try {
-      const result = await scanAadhaarImage(file, setOcrProgress);
-      setF((s) => ({
-        ...s,
-        applicant_name: result.name || s.applicant_name,
-        father_husband_name: result.fatherHusbandName || s.father_husband_name,
-        address: result.address || s.address,
-        date_of_birth: result.dateOfBirth || s.date_of_birth,
-      }));
-      const missing = [!result.name && "name", !result.dateOfBirth && "DOB", !result.address && "address"].filter(Boolean);
-      setScanNote(
-        missing.length
-          ? `Filled what could be read from the image. Couldn't find: ${missing.join(", ")} — please fill those in and double-check the rest.`
-          : "Filled from the image — please double-check everything before submitting."
-      );
-    } catch (e) {
-      setError(e.message || "Couldn't read this image");
-    } finally {
-      setOcrScanning(false);
-      setOcrProgress(0);
-      if (ocrInputRef.current) ocrInputRef.current.value = "";
-    }
-  };
-
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, age_limit_required, min_age").order("parent_service");
+      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required").order("parent_service");
       setServices(data || []);
     })();
   }, []);
@@ -426,11 +359,6 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
   const submit = async () => {
     if (!f.service_id || !f.applicant_name.trim()) {
       setError("Service and Applicant Name are required");
-      return;
-    }
-    const ageErr = validateAgeForService(f.date_of_birth, selectedService);
-    if (ageErr) {
-      setError(ageErr);
       return;
     }
     setSaving(true);
@@ -495,36 +423,6 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
 
   return (
     <Modal title="New Application" onClose={onClose}>
-      <div className="mb-4">
-        <p className="text-xs font-semibold text-slate-500 mb-1.5">Fill from Aadhaar (optional)</p>
-        <div className="grid grid-cols-2 gap-2">
-          {isAadhaarQrScanSupported() && (
-            <>
-              <input ref={qrInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => scanAadhaar(e.target.files?.[0])} />
-              <button
-                type="button"
-                onClick={() => qrInputRef.current?.click()}
-                disabled={scanning || ocrScanning}
-                className="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-blue-300 hover:bg-blue-50 text-blue-700 font-semibold py-3 rounded-xl disabled:opacity-50 text-sm"
-              >
-                <ScanLine size={18} />
-                {scanning ? "Reading QR…" : "Scan QR"}
-              </button>
-            </>
-          )}
-          <input ref={ocrInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => scanFromImage(e.target.files?.[0])} />
-          <button
-            type="button"
-            onClick={() => ocrInputRef.current?.click()}
-            disabled={scanning || ocrScanning}
-            className={`flex flex-col items-center justify-center gap-1 border-2 border-dashed border-purple-300 hover:bg-purple-50 text-purple-700 font-semibold py-3 rounded-xl disabled:opacity-50 text-sm ${!isAadhaarQrScanSupported() ? "col-span-2" : ""}`}
-          >
-            <ScanText size={18} />
-            {ocrScanning ? `Reading image… ${ocrProgress}%` : "Fill from Image"}
-          </button>
-        </div>
-        {scanNote && <p className="text-xs text-emerald-600 mt-1.5">{scanNote}</p>}
-      </div>
       <Field label="Service" required>
         <SearchableSelect
           value={f.service_id}
@@ -535,10 +433,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
       </Field>
       <Field label="Applicant Name" required><Input value={f.applicant_name} onChange={set("applicant_name")} /></Field>
       <Field label="Father / Husband Name"><Input value={f.father_husband_name} onChange={set("father_husband_name")} /></Field>
-      <Field label="Date of Birth">
-        <Input type="date" value={f.date_of_birth} onChange={set("date_of_birth")}
-          className={ageHighlightClass(f.date_of_birth) ? "border-amber-400" : ""} />
-      </Field>
+      <Field label="Date of Birth"><Input type="date" value={f.date_of_birth} onChange={set("date_of_birth")} /></Field>
       <Field label="Mobile"><Input value={f.mobile} onChange={set("mobile")} /></Field>
       <Field label="Address"><Input value={f.address} onChange={set("address")} /></Field>
       {selectedService?.pcc_required && (

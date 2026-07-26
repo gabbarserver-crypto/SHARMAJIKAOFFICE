@@ -51,8 +51,43 @@ export default function Payments({ staff } = {}) {
       .from("payments")
       .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(30);
     setRecent(data || []);
+  };
+
+  // Posts a payment's ledger entries — a credit to the dealer (payment
+  // received reduces what they owe) and, if a "Paid At" agency was
+  // chosen, a mirrored credit on that agency's ledger too (they're
+  // holding money on our behalf). Shared by submit() below AND by
+  // verifyPendingPayment() further down, since a dealer-submitted payment
+  // only ever gets these posted once staff verifies it — not at the
+  // moment the dealer submits it.
+  const postPaymentLedgers = async ({ paymentId, dealerId, dealerName, agencyId, agencyName, amount, paymentMode, referenceNo, remarks }) => {
+    const voucherNo = referenceNo?.trim() || `PMT-${paymentId}`;
+    const ledgerInserts = [
+      supabase.from("ledger_transactions").insert({
+        dealer_id: dealerId,
+        voucher_no: voucherNo,
+        payment_id: paymentId,
+        type: "credit",
+        amount,
+        description: `Payment received — ${paymentMode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${remarks ? ` · ${remarks}` : ""}`,
+      }),
+    ];
+    if (agencyId) {
+      ledgerInserts.push(
+        supabase.from("agency_ledger_transactions").insert({
+          agency_id: agencyId,
+          voucher_no: voucherNo,
+          payment_id: paymentId,
+          type: "credit",
+          amount,
+          description: `Payment collected on behalf of ${dealerName || "dealer"} — ${paymentMode}${remarks ? ` · ${remarks}` : ""}`,
+        })
+      );
+    }
+    const results = await Promise.all(ledgerInserts);
+    return results.find((r) => r.error)?.error || null;
   };
 
   const submit = async () => {
@@ -75,6 +110,10 @@ export default function Payments({ staff } = {}) {
         remarks: form.remarks || null,
         paid_at_agency_id: form.paid_at_agency_id || null,
         received_by: staffRow?.id || null,
+        // status/submitted_by default to 'verified'/'staff' in the DB —
+        // staff-recorded payments post to the ledger immediately, same as
+        // always. Only a dealer's own self-submission (see
+        // DealerPaymentsPanel.jsx) ever lands as 'pending'.
       })
       .select()
       .single();
@@ -85,42 +124,20 @@ export default function Payments({ staff } = {}) {
       return;
     }
 
-    // Post this payment to the dealer ledger (a payment received reduces
-    // what the dealer owes, so it's posted as a credit) and, if a "Paid At"
-    // agency was chosen, mirror the same amount as a credit on that
-    // agency's ledger too. Voucher no. is the payment's own reference no.
-    // (or a generated fallback) so this stays a distinct, traceable line.
     const dealerName = dealers.find((d) => d.id === form.dealer_id)?.name;
     const agencyName = agencies.find((a) => a.id === form.paid_at_agency_id)?.name;
-    const voucherNo = form.reference_no?.trim() || `PMT-${paymentRow.id}`;
-    const amount = parseFloat(form.amount);
 
-    const ledgerInserts = [
-      supabase.from("ledger_transactions").insert({
-        dealer_id: form.dealer_id,
-        voucher_no: voucherNo,
-        payment_id: paymentRow.id,
-        type: "credit",
-        amount,
-        description: `Payment received — ${form.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${form.remarks ? ` · ${form.remarks}` : ""}`,
-      }),
-    ];
-
-    if (form.paid_at_agency_id) {
-      ledgerInserts.push(
-        supabase.from("agency_ledger_transactions").insert({
-          agency_id: form.paid_at_agency_id,
-          voucher_no: voucherNo,
-          payment_id: paymentRow.id,
-          type: "credit",
-          amount,
-          description: `Payment collected on behalf of ${dealerName || "dealer"} — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`,
-        })
-      );
-    }
-
-    const ledgerResults = await Promise.all(ledgerInserts);
-    const ledgerError = ledgerResults.find((r) => r.error)?.error;
+    const ledgerError = await postPaymentLedgers({
+      paymentId: paymentRow.id,
+      dealerId: form.dealer_id,
+      dealerName,
+      agencyId: form.paid_at_agency_id || null,
+      agencyName,
+      amount: parseFloat(form.amount),
+      paymentMode: form.payment_mode,
+      referenceNo: form.reference_no,
+      remarks: form.remarks,
+    });
 
     setSaving(false);
     if (ledgerError) {
@@ -231,11 +248,93 @@ export default function Payments({ staff } = {}) {
     loadRecent();
   };
 
+  // A dealer submitted this themselves (see DealerPaymentsPanel.jsx) — it's
+  // sat as 'pending' with no ledger entries at all until now. Verifying
+  // posts the SAME ledger entries a staff-recorded payment gets (via the
+  // shared postPaymentLedgers above) and flips it to 'verified'.
+  const verifyPendingPayment = async (p) => {
+    const { data: userData } = await supabase.auth.getUser();
+    const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
+
+    const dealerName = p.dealers?.name;
+    const agencyName = p.paid_at_agency?.name;
+
+    const ledgerError = await postPaymentLedgers({
+      paymentId: p.id,
+      dealerId: p.dealer_id,
+      dealerName,
+      agencyId: p.paid_at_agency_id || null,
+      agencyName,
+      amount: Number(p.amount),
+      paymentMode: p.payment_mode,
+      referenceNo: p.reference_no,
+      remarks: p.remarks,
+    });
+    if (ledgerError) {
+      setToast("Failed to post ledger entry — payment NOT verified: " + ledgerError.message);
+      return;
+    }
+
+    const { error } = await supabase
+      .from("payments")
+      .update({ status: "verified", verified_by: staffRow?.id || null, verified_at: new Date().toISOString() })
+      .eq("id", p.id);
+    if (error) {
+      setToast("Ledger posted, but couldn't mark the payment verified: " + error.message);
+      return;
+    }
+    setToast(`Verified — ₹${Number(p.amount).toLocaleString("en-IN")} posted to ${dealerName || "dealer"}'s ledger`);
+    loadRecent();
+  };
+
+  // Rejects a dealer's self-submitted payment — no ledger entries were
+  // ever posted for it (see verifyPendingPayment above), so this is just
+  // a status flip; nothing to undo.
+  const rejectPendingPayment = async (p) => {
+    if (!window.confirm(`Reject this ₹${Number(p.amount).toLocaleString("en-IN")} submission from ${p.dealers?.name || "this dealer"}? No ledger entry was posted for it, so there's nothing to undo.`)) return;
+    const { error } = await supabase.from("payments").update({ status: "rejected" }).eq("id", p.id);
+    if (error) {
+      setToast("Failed to reject: " + error.message);
+      return;
+    }
+    setToast("Payment submission rejected");
+    loadRecent();
+  };
+
+  const pending = recent.filter((p) => p.status === "pending");
+
   return (
     <div className="grid lg:grid-cols-2 gap-6">
       <div className="lg:col-span-2 flex justify-end">
         <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
       </div>
+
+      {pending.length > 0 && (
+        <Card title={`Pending Verification (${pending.length})`} className="lg:col-span-2">
+          <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
+            Submitted by dealers themselves from their portal — nothing posts to any ledger until you verify.
+          </p>
+          <div className="space-y-2">
+            {pending.map((p) => (
+              <div key={p.id} className="flex items-center justify-between border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-500/10 rounded-lg px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">{p.dealers?.name}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {p.applications?.draft_code ? `${p.applications.draft_code} · ` : ""}{p.payment_mode} · {new Date(p.created_at).toLocaleString()}
+                    {p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
+                    {p.remarks ? ` · ${p.remarks}` : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-100">₹{Number(p.amount).toLocaleString("en-IN")}</p>
+                  <button onClick={() => verifyPendingPayment(p)} className="text-xs font-semibold text-emerald-600 hover:underline">Verify</button>
+                  <button onClick={() => rejectPendingPayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card title="Record New Payment">
         <Field label="Dealer" required>
@@ -279,18 +378,26 @@ export default function Payments({ staff } = {}) {
 
       <Card title="Recent Payments">
         <div className="space-y-2 max-h-[520px] overflow-y-auto">
-          {recent.map((p) => (
-            <div key={p.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+          {recent.filter((p) => p.status !== "pending").map((p) => (
+            <div key={p.id} className={`flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 ${p.status === "rejected" ? "opacity-50" : ""}`}>
               <div>
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">{p.dealers?.name}</p>
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  {p.dealers?.name}
+                  {p.submitted_by === "dealer" && (
+                    <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-blue-500 align-middle">Self-submitted</span>
+                  )}
+                  {p.status === "rejected" && (
+                    <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-rose-500 align-middle">Rejected</span>
+                  )}
+                </p>
                 <p className="text-xs text-slate-400 dark:text-slate-500">
                   {p.applications?.draft_code ? `${p.applications.draft_code} · ` : ""}{p.payment_mode} · {new Date(p.created_at).toLocaleString()}
                   {p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
                 </p>
               </div>
               <div className="flex items-center gap-3">
-                <p className="text-sm font-bold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</p>
-                {isAdmin && (
+                <p className={`text-sm font-bold ${p.status === "rejected" ? "text-slate-400 line-through" : "text-emerald-600"}`}>₹{Number(p.amount).toLocaleString("en-IN")}</p>
+                {isAdmin && p.status === "verified" && (
                   <div className="flex items-center gap-2">
                     <button onClick={() => setEditingPayment(p)} className="text-xs font-semibold text-blue-600 hover:underline">Edit</button>
                     <button onClick={() => deletePayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
@@ -299,7 +406,7 @@ export default function Payments({ staff } = {}) {
               </div>
             </div>
           ))}
-          {recent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No payments yet</p>}
+          {recent.filter((p) => p.status !== "pending").length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No payments yet</p>}
         </div>
       </Card>
 
