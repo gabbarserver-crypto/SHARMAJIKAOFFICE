@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Image as ImageIcon, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
+import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
 import { sendPush } from "../lib/serverApi";
 import { useCall } from "../lib/call";
@@ -12,6 +12,28 @@ const SENDER_BUBBLE = {
 
 const QUICK_EMOJI = ["👍", "❤️", "😂", "😮", "🙏", "✅"];
 
+// attachment_url doubles for three things now: an actual uploaded file
+// (image or otherwise), or a Google Maps link for a shared live location —
+// see sendLocation below. This tells the bubble renderer which of the
+// three it's looking at, so it doesn't try to <img> a Maps link or a PDF.
+function attachmentKind(url) {
+  if (!url) return null;
+  if (/^https:\/\/www\.google\.com\/maps\?q=/.test(url)) return "location";
+  if (/\.(png|jpe?g|gif|webp)(\?|$)/i.test(url)) return "image";
+  return "file";
+}
+
+// Uploaded paths are `chat/<threadId>/<timestamp>-<original filename>` —
+// strip the timestamp prefix back off for display.
+function attachmentFileName(url) {
+  try {
+    const last = decodeURIComponent(url.split("/").pop().split("?")[0]);
+    return last.replace(/^\d+-/, "");
+  } catch {
+    return "Attachment";
+  }
+}
+
 // Renders the message list + composer for one thread (general dealer thread,
 // or one scoped to a single application). Owns thread resolution, initial
 // load, and the realtime subscription; the caller just tells it who's
@@ -22,6 +44,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [sharingLocation, setSharingLocation] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [error, setError] = useState("");
   const bodyRef = useRef(null);
@@ -93,20 +116,53 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
     }
   };
 
-  const sendImage = async (file) => {
+  const sendAttachment = async (file) => {
     if (!file || !threadId || !identity) return;
     setUploading(true);
     setError("");
     try {
       const url = await uploadChatAttachment(threadId, file);
       await sendMessage({ threadId, sender: { ...identity, attachmentUrl: url } });
-      pushForMessage("📎 Sent an image");
+      pushForMessage(file.type?.startsWith("image/") ? "📎 Sent an image" : `📎 Sent a file: ${file.name}`);
     } catch (e) {
-      setError(e.message || "Couldn't send image");
+      setError(e.message || "Couldn't send attachment");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  // Shares the sender's current GPS position as a Google Maps link — this
+  // is a one-time "here's where I am right now" share (like WhatsApp's
+  // "Send your current location"), not a live-updating tracker: it doesn't
+  // keep moving after it's sent, and nothing about it lingers once you
+  // leave the chat.
+  const sendLocation = () => {
+    if (!threadId || !identity || !navigator.geolocation) {
+      setError("Location isn't available in this browser");
+      return;
+    }
+    setSharingLocation(true);
+    setError("");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+          await sendMessage({ threadId, sender: { ...identity, body: "📍 Shared their current location", attachmentUrl: mapsUrl } });
+          pushForMessage("📍 Shared their current location");
+        } catch (e) {
+          setError(e.message || "Couldn't send location");
+        } finally {
+          setSharingLocation(false);
+        }
+      },
+      (err) => {
+        setSharingLocation(false);
+        setError(err.code === err.PERMISSION_DENIED ? "Location permission was denied" : "Couldn't get your location");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   return (
@@ -220,9 +276,31 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                   }`}
                 >
                   {!mine && <p className="text-[11px] font-semibold opacity-60 mb-0.5">{m.sender_name}</p>}
-                  {m.attachment_url && (
+                  {m.attachment_url && attachmentKind(m.attachment_url) === "image" && (
                     <a href={m.attachment_url} target="_blank" rel="noreferrer" className="block mb-1">
                       <img src={m.attachment_url} alt="attachment" className="rounded-lg max-w-full max-h-48 object-cover" />
+                    </a>
+                  )}
+                  {m.attachment_url && attachmentKind(m.attachment_url) === "location" && (
+                    <a
+                      href={m.attachment_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`flex items-center gap-2 rounded-lg px-2.5 py-2 mb-1 ${mine ? "bg-white/10" : "bg-slate-100"}`}
+                    >
+                      <MapPin size={16} className="shrink-0" />
+                      <span className="text-xs font-semibold underline">View location on map</span>
+                    </a>
+                  )}
+                  {m.attachment_url && attachmentKind(m.attachment_url) === "file" && (
+                    <a
+                      href={m.attachment_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`flex items-center gap-2 rounded-lg px-2.5 py-2 mb-1 ${mine ? "bg-white/10" : "bg-slate-100"}`}
+                    >
+                      <Paperclip size={16} className="shrink-0" />
+                      <span className="text-xs font-semibold underline truncate">{attachmentFileName(m.attachment_url)}</span>
                     </a>
                   )}
                   {m.body && <p>{m.body}</p>}
@@ -231,7 +309,8 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
             );
           })
         )}
-        {uploading && <p className="text-xs text-slate-400 text-right pr-1">Sending image…</p>}
+        {uploading && <p className="text-xs text-slate-400 text-right pr-1">Sending attachment…</p>}
+        {sharingLocation && <p className="text-xs text-slate-400 text-right pr-1">Getting your location…</p>}
       </div>
 
       {error && <p className="text-rose-500 text-xs px-3 py-1">{error}</p>}
@@ -255,14 +334,22 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
         >
           <Smile size={19} />
         </button>
-        <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={(e) => sendImage(e.target.files?.[0])} />
+        <input ref={fileInputRef} type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" hidden onChange={(e) => sendAttachment(e.target.files?.[0])} />
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={!identity || uploading}
-          title="Send an image"
+          title="Send an attachment"
           className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 disabled:opacity-40"
         >
           <ImageIcon size={19} />
+        </button>
+        <button
+          onClick={sendLocation}
+          disabled={!identity || sharingLocation}
+          title="Share your current location"
+          className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 disabled:opacity-40"
+        >
+          <MapPin size={19} />
         </button>
         {identity?.type === "staff" && (
           <button
