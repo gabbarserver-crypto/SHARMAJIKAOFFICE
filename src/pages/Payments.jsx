@@ -355,7 +355,7 @@ export default function Payments({ staff } = {}) {
           </Field>
           <Field label="Payment Mode" required>
             <Select value={form.payment_mode} onChange={set("payment_mode")}>
-              <option>Cash</option><option>UPI</option><option>Bank</option><option>Cheque</option>
+              <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
             </Select>
           </Field>
         </div>
@@ -706,7 +706,7 @@ function EditPaymentModal({ payment, onClose, onSave }) {
       <Field label="Amount" required><Input type="number" value={f.amount} onChange={set("amount")} /></Field>
       <Field label="Payment Mode">
         <Select value={f.payment_mode} onChange={set("payment_mode")}>
-          {["Cash", "UPI", "Bank Transfer", "Cheque", "Card"].map((m) => <option key={m} value={m}>{m}</option>)}
+          {["Cash", "Bank", "UPI", "Cheque"].map((m) => <option key={m} value={m}>{m}</option>)}
         </Select>
       </Field>
       <Field label="Reference No."><Input value={f.reference_no} onChange={set("reference_no")} /></Field>

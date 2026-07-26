@@ -19,27 +19,24 @@ const STATUS_META = {
 
 export default function DealerPaymentsPanel({ dealerId, identity }) {
   const [applications, setApplications] = useState([]);
-  const [agencies, setAgencies] = useState([]);
   const [recent, setRecent] = useState([]);
-  const [form, setForm] = useState({ application_id: "", amount: "", payment_mode: "Cash", reference_no: "", paid_at_agency_id: "", remarks: "" });
+  const [form, setForm] = useState({ application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
 
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.value }));
 
   const load = async () => {
-    const [{ data: apps }, { data: agencyRows }, { data: paymentRows }] = await Promise.all([
+    const [{ data: apps }, { data: paymentRows }] = await Promise.all([
       supabase.from("applications").select("id, draft_code, applicant_name").eq("dealer_id", dealerId).order("submitted_at", { ascending: false }),
-      supabase.from("agencies").select("id, name, code"),
       supabase
         .from("payments")
-        .select("*, applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
+        .select("*, applications(draft_code)")
         .eq("dealer_id", dealerId)
         .order("created_at", { ascending: false })
         .limit(30),
     ]);
     setApplications(apps || []);
-    setAgencies(agencyRows || []);
     setRecent(paymentRows || []);
   };
 
@@ -57,7 +54,6 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
       amount: parseFloat(form.amount),
       payment_mode: form.payment_mode,
       reference_no: form.reference_no || null,
-      paid_at_agency_id: form.paid_at_agency_id || null,
       remarks: form.remarks || null,
       status: "pending",
       submitted_by: "dealer",
@@ -68,7 +64,7 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
       return;
     }
     setToast("Submitted — this'll show as Pending until our team verifies it.");
-    setForm({ application_id: "", amount: "", payment_mode: "Cash", reference_no: "", paid_at_agency_id: "", remarks: "" });
+    setForm({ application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
     load();
   };
 
@@ -90,18 +86,12 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
           </Field>
           <Field label="Payment Mode" required>
             <Select value={form.payment_mode} onChange={set("payment_mode")}>
-              <option>Cash</option><option>UPI</option><option>Bank</option><option>Cheque</option>
+              <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
             </Select>
           </Field>
         </div>
         <Field label="Reference No.">
           <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
-        </Field>
-        <Field label="Paid At (Agency)">
-          <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
-            <option value="">— Not via an agency —</option>
-            {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
-          </Select>
         </Field>
         <Field label="Remarks">
           <Input value={form.remarks} onChange={set("remarks")} />
@@ -123,7 +113,6 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
                   </p>
                   <p className="text-xs text-slate-400 dark:text-slate-500">
                     {p.payment_mode} · {new Date(p.created_at).toLocaleString()}
-                    {p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
                   </p>
                   <p className={`text-xs font-semibold mt-0.5 ${meta.className}`}>{meta.label}</p>
                 </div>
