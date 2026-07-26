@@ -19,21 +19,30 @@ export const supabaseAdmin =
 
 // Verifies the caller's access token (sent from the already-logged-in React
 // app) and returns { kind: 'staff' } or { kind: 'dealer', dealerId } —
-// or null if the token doesn't resolve to either.
+// or null if the token doesn't resolve to either (including if it's
+// missing, expired, or malformed — this NEVER throws, on purpose: every
+// api/*.js handler calls this unguarded before its own try/catch even
+// starts, so a throw here used to crash the whole function with an opaque
+// Vercel "FUNCTION_INVOCATION_FAILED" instead of a normal 403).
 export async function resolveCaller(accessToken) {
   if (!accessToken || !supabaseAdmin) return null;
-  const { data: userData, error } = await supabaseAdmin.auth.getUser(accessToken);
-  if (error || !userData?.user) return null;
-  const authUserId = userData.user.id;
+  try {
+    const { data: userData, error } = await supabaseAdmin.auth.getUser(accessToken);
+    if (error || !userData?.user) return null;
+    const authUserId = userData.user.id;
 
-  const { data: staffRow } = await supabaseAdmin.from("staff").select("id").eq("auth_user_id", authUserId).maybeSingle();
-  if (staffRow) return { kind: "staff" };
+    const { data: staffRow } = await supabaseAdmin.from("staff").select("id").eq("auth_user_id", authUserId).maybeSingle();
+    if (staffRow) return { kind: "staff" };
 
-  const { data: dealerRow } = await supabaseAdmin.from("dealers").select("id").eq("auth_user_id", authUserId).maybeSingle();
-  if (dealerRow) return { kind: "dealer", dealerId: dealerRow.id };
+    const { data: dealerRow } = await supabaseAdmin.from("dealers").select("id").eq("auth_user_id", authUserId).maybeSingle();
+    if (dealerRow) return { kind: "dealer", dealerId: dealerRow.id };
 
-  const { data: dealerStaffRow } = await supabaseAdmin.from("dealer_staff").select("id, dealer_id").eq("auth_user_id", authUserId).maybeSingle();
-  if (dealerStaffRow) return { kind: "dealer_staff", dealerId: dealerStaffRow.dealer_id };
+    const { data: dealerStaffRow } = await supabaseAdmin.from("dealer_staff").select("id, dealer_id").eq("auth_user_id", authUserId).maybeSingle();
+    if (dealerStaffRow) return { kind: "dealer_staff", dealerId: dealerStaffRow.dealer_id };
 
-  return null;
+    return null;
+  } catch (e) {
+    console.error("resolveCaller failed:", e.message);
+    return null;
+  }
 }
