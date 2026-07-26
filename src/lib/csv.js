@@ -72,3 +72,20 @@ export function ddmmyyyyToISO(input) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed; // already ISO
   return null;
 }
+
+// Maps whatever a spreadsheet actually says ("NEFT", "bank transfer",
+// "net banking", "Card", mixed case, extra spaces, ...) onto the 4 modes
+// the app uses (Cash / Bank / UPI / Cheque). Returns null for anything it
+// doesn't recognize, so the caller can flag the row instead of sending a
+// raw string to the database and having the whole import batch fail on a
+// check-constraint violation.
+export function normalizePaymentMode(raw) {
+  if (!raw) return "Cash";
+  const key = String(raw).trim().toLowerCase().replace(/[^a-z]/g, "");
+  if (!key) return "Cash";
+  if (key === "cash") return "Cash";
+  if (key === "upi") return "UPI";
+  if (key === "cheque" || key === "check") return "Cheque";
+  if (["bank", "banktransfer", "neft", "rtgs", "imps", "netbanking", "onlinetransfer", "card", "creditcard", "debitcard"].includes(key)) return "Bank";
+  return null;
+}

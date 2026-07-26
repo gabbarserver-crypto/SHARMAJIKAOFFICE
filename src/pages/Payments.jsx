@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton, GhostButton, DangerButton, Modal, Toast } from "../components/UI";
-import { parseCSV, findByLabel, ddmmyyyyToISO } from "../lib/csv";
+import { parseCSV, findByLabel, ddmmyyyyToISO, normalizePaymentMode } from "../lib/csv";
 
 function isoToDDMMYYYY(iso) {
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -17,6 +17,10 @@ export default function Payments({ staff } = {}) {
   const [agencies, setAgencies] = useState([]);
   const [applications, setApplications] = useState([]);
   const [form, setForm] = useState({ dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
+  const [recordFor, setRecordFor] = useState("dealer"); // "dealer" | "agency"
+  const [agencyForm, setAgencyForm] = useState({ agency_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
+  const [agencyRecent, setAgencyRecent] = useState([]);
+  const [savingAgency, setSavingAgency] = useState(false);
   const [recent, setRecent] = useState([]);
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -53,6 +57,21 @@ export default function Payments({ staff } = {}) {
       .order("created_at", { ascending: false })
       .limit(30);
     setRecent(data || []);
+    loadAgencyRecent();
+  };
+
+  // Payments recorded directly against an Agency (no dealer picked at all)
+  // are plain agency_ledger_transactions rows with no payment_id — that's
+  // what distinguishes them from the ledger entries a normal dealer
+  // payment's "Paid At Agency" side-effect creates.
+  const loadAgencyRecent = async () => {
+    const { data } = await supabase
+      .from("agency_ledger_transactions")
+      .select("*, agencies(name)")
+      .is("payment_id", null)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    setAgencyRecent(data || []);
   };
 
   // Posts a payment's ledger entries — a credit to the dealer (payment
@@ -147,6 +166,36 @@ export default function Payments({ staff } = {}) {
     }
     setForm({ dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
     loadRecent();
+  };
+
+  // A payment recorded straight against an Agency — no dealer involved at
+  // all. Posts only to that agency's own ledger (agency_ledger_transactions),
+  // since there's no dealer/application to tie it to and nothing for the
+  // payments table (which is dealer-centric) to attach to.
+  const submitAgencyPayment = async () => {
+    if (!agencyForm.agency_id || !agencyForm.amount) {
+      setToast("Agency and amount are required");
+      return;
+    }
+    setSavingAgency(true);
+    const amount = parseFloat(agencyForm.amount);
+    const voucherNo = agencyForm.reference_no?.trim() || `AGPMT-${Date.now()}`;
+    const { error } = await supabase.from("agency_ledger_transactions").insert({
+      agency_id: agencyForm.agency_id,
+      voucher_no: voucherNo,
+      type: "credit",
+      amount,
+      description: `Direct agency payment — ${agencyForm.payment_mode}${agencyForm.remarks ? ` · ${agencyForm.remarks}` : ""}`,
+    });
+    setSavingAgency(false);
+    if (error) {
+      setToast("Failed: " + error.message);
+      return;
+    }
+    const agencyName = agencies.find((a) => a.id === agencyForm.agency_id)?.name;
+    setToast(`Payment recorded to ${agencyName || "agency"}'s ledger`);
+    setAgencyForm({ agency_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
+    loadAgencyRecent();
   };
 
   // Admin-only: deleting a payment also removes the ledger entries it
@@ -337,46 +386,112 @@ export default function Payments({ staff } = {}) {
       )}
 
       <Card title="Record New Payment">
-        <Field label="Dealer" required>
-          <Select value={form.dealer_id} onChange={set("dealer_id")}>
-            <option value="">Select Dealer</option>
-            {dealers.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
-          </Select>
-        </Field>
-        <Field label="Application (optional)">
-          <Select value={form.application_id} onChange={set("application_id")} disabled={!form.dealer_id}>
-            <option value="">— General payment, not tied to one application —</option>
-            {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
-          </Select>
-        </Field>
-        <div className="grid sm:grid-cols-2 gap-x-4">
-          <Field label="Amount (₹)" required>
-            <Input type="number" value={form.amount} onChange={set("amount")} />
-          </Field>
-          <Field label="Payment Mode" required>
-            <Select value={form.payment_mode} onChange={set("payment_mode")}>
-              <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
-            </Select>
-          </Field>
+        <div className="flex gap-2 mb-4">
+          <button
+            type="button"
+            onClick={() => setRecordFor("dealer")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${recordFor === "dealer" ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"}`}
+          >
+            For a Dealer
+          </button>
+          <button
+            type="button"
+            onClick={() => setRecordFor("agency")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${recordFor === "agency" ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"}`}
+          >
+            Direct to Agency
+          </button>
         </div>
-        <Field label="Reference No.">
-          <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
-        </Field>
-        <Field label="Paid At (Agency)">
-          <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
-            <option value="">— Not via an agency —</option>
-            {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
-          </Select>
-        </Field>
-        <Field label="Remarks">
-          <Input value={form.remarks} onChange={set("remarks")} />
-        </Field>
-        <PrimaryButton onClick={submit} disabled={saving}>
-          {saving ? "Saving..." : "Save Payment & Generate Receipt"}
-        </PrimaryButton>
+
+        {recordFor === "dealer" ? (
+          <>
+            <Field label="Dealer" required>
+              <Select value={form.dealer_id} onChange={set("dealer_id")}>
+                <option value="">Select Dealer</option>
+                {dealers.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+              </Select>
+            </Field>
+            <Field label="Application (optional)">
+              <Select value={form.application_id} onChange={set("application_id")} disabled={!form.dealer_id}>
+                <option value="">— General payment, not tied to one application —</option>
+                {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
+              </Select>
+            </Field>
+            <div className="grid sm:grid-cols-2 gap-x-4">
+              <Field label="Amount (₹)" required>
+                <Input type="number" value={form.amount} onChange={set("amount")} />
+              </Field>
+              <Field label="Payment Mode" required>
+                <Select value={form.payment_mode} onChange={set("payment_mode")}>
+                  <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
+                </Select>
+              </Field>
+            </div>
+            <Field label="Reference No.">
+              <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
+            </Field>
+            <Field label="Paid At (Agency)">
+              <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
+                <option value="">— Not via an agency —</option>
+                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+              </Select>
+            </Field>
+            <Field label="Remarks">
+              <Input value={form.remarks} onChange={set("remarks")} />
+            </Field>
+            <PrimaryButton onClick={submit} disabled={saving}>
+              {saving ? "Saving..." : "Save Payment & Generate Receipt"}
+            </PrimaryButton>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
+              For money paid straight to an Agency, with no dealer or application attached — posts only to that agency's own ledger.
+            </p>
+            <Field label="Agency" required>
+              <Select value={agencyForm.agency_id} onChange={(e) => setAgencyForm((s) => ({ ...s, agency_id: e.target.value }))}>
+                <option value="">Select Agency</option>
+                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+              </Select>
+            </Field>
+            <div className="grid sm:grid-cols-2 gap-x-4">
+              <Field label="Amount (₹)" required>
+                <Input type="number" value={agencyForm.amount} onChange={(e) => setAgencyForm((s) => ({ ...s, amount: e.target.value }))} />
+              </Field>
+              <Field label="Payment Mode" required>
+                <Select value={agencyForm.payment_mode} onChange={(e) => setAgencyForm((s) => ({ ...s, payment_mode: e.target.value }))}>
+                  <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
+                </Select>
+              </Field>
+            </div>
+            <Field label="Reference No.">
+              <Input value={agencyForm.reference_no} onChange={(e) => setAgencyForm((s) => ({ ...s, reference_no: e.target.value }))} placeholder="UTR / cheque no." />
+            </Field>
+            <Field label="Remarks">
+              <Input value={agencyForm.remarks} onChange={(e) => setAgencyForm((s) => ({ ...s, remarks: e.target.value }))} />
+            </Field>
+            <PrimaryButton onClick={submitAgencyPayment} disabled={savingAgency}>
+              {savingAgency ? "Saving..." : "Save Payment to Agency Ledger"}
+            </PrimaryButton>
+          </>
+        )}
       </Card>
 
-      <Card title="Recent Payments">
+      <Card title={recordFor === "agency" ? "Recent Agency Payments" : "Recent Payments"}>
+        {recordFor === "agency" ? (
+          <div className="space-y-2 max-h-[520px] overflow-y-auto">
+            {agencyRecent.map((t) => (
+              <div key={t.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">{t.agencies?.name}</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">{new Date(t.created_at).toLocaleString()}{t.description ? ` · ${t.description}` : ""}</p>
+                </div>
+                <p className="text-sm font-bold text-emerald-600">₹{Number(t.amount).toLocaleString("en-IN")}</p>
+              </div>
+            ))}
+            {agencyRecent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No direct agency payments yet</p>}
+          </div>
+        ) : (
         <div className="space-y-2 max-h-[520px] overflow-y-auto">
           {recent.filter((p) => p.status !== "pending").map((p) => (
             <div key={p.id} className={`flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 ${p.status === "rejected" ? "opacity-50" : ""}`}>
@@ -408,6 +523,7 @@ export default function Payments({ staff } = {}) {
           ))}
           {recent.filter((p) => p.status !== "pending").length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No payments yet</p>}
         </div>
+        )}
       </Card>
 
       {editingPayment && (
@@ -446,6 +562,25 @@ export default function Payments({ staff } = {}) {
 // Application (optional — draft code), Amount, Payment Mode (optional,
 // defaults to Cash), Reference No (optional), Paid At Agency (optional),
 // Remarks (optional).
+// Generates and downloads a starter CSV with the exact headers the import
+// parser looks for, plus one example row, so there's always a correct
+// template one click away instead of the person having to remember/guess
+// the column names.
+function downloadPaymentsCsvTemplate() {
+  const headers = ["Dealer", "Application", "Amount", "Payment Mode", "Reference No", "Paid At Agency", "Remarks", "Date"];
+  const example = ["GANESH", "GAN023", "800", "Cash", "", "", "", "25-03-2026"];
+  const csv = [headers, example].map((row) => row.map((v) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "payments-import-template.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
   const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState([]);
@@ -472,7 +607,8 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         const dealerRaw = get("dealer", "dealername", "dealercode");
         const applicationRaw = get("application", "draftcode", "draftid");
         const amountRaw = get("amount");
-        const modeRaw = get("paymentmode", "mode") || "Cash";
+        const modeRawInput = get("paymentmode", "mode") || "Cash";
+        const paymentMode = normalizePaymentMode(modeRawInput);
         const referenceRaw = get("referenceno", "reference", "utr", "voucherno", "vouchernumber", "voucher");
         const agencyRaw = get("paidatagency", "agency");
         const remarksRaw = get("remarks", "remark", "narration", "description");
@@ -487,6 +623,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         if (!dealer) errors.push(`Dealer "${dealerRaw}" not found`);
         if (!amountRaw || Number.isNaN(amount) || amount <= 0) errors.push("Amount is missing or invalid");
         if (agencyRaw && !agency) errors.push(`Agency "${agencyRaw}" not found`);
+        if (!paymentMode) errors.push(`Payment Mode "${modeRawInput}" not recognized (use Cash, Bank, UPI or Cheque)`);
 
         if (dateRaw && !paidOn) errors.push(`Date "${dateRaw}" not recognized (use DD-MM-YYYY)`);
 
@@ -501,7 +638,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             agency_name: agency?.name,
             application_draft_code: applicationRaw || null,
             amount,
-            payment_mode: modeRaw,
+            payment_mode: paymentMode || "Cash",
             reference_no: referenceRaw || null,
             remarks: remarksRaw || null,
             paid_on: paidOn,
@@ -526,6 +663,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
       const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
 
       let imported = 0;
+      const failed = [];
       for (const r of rowsToImport) {
         const { payload } = r;
 
@@ -560,9 +698,12 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           .single();
 
         if (insertError) {
-          setError(`Import stopped at "${payload.dealer_name}" (₹${payload.amount}): ` + insertError.message);
-          setImporting(false);
-          return;
+          // Keep going instead of aborting the whole batch — earlier rows
+          // that already inserted successfully stay inserted either way, so
+          // stopping here only hides how far it actually got and strands
+          // every row after this one for no reason.
+          failed.push({ dealer_name: payload.dealer_name, amount: payload.amount, message: insertError.message });
+          continue;
         }
 
         const voucherNo = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
@@ -594,7 +735,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         imported++;
       }
 
-      setResult({ imported, skipped: preview.length - rowsToImport.length });
+      setResult({ imported, skipped: preview.length - rowsToImport.length, failed });
       setImporting(false);
       onImported();
     } catch (err) {
@@ -617,6 +758,13 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
               CSV columns: <b>Dealer</b> (required — name or code), <b>Amount</b> (required), Application (optional — draft code),
               Payment Mode (optional, defaults to Cash), Reference No, Date (optional, DD-MM-YYYY — defaults to today if left blank), Paid At Agency, Remarks.
             </p>
+            <button
+              onClick={downloadPaymentsCsvTemplate}
+              className="text-xs font-semibold text-blue-600 hover:underline mb-3 inline-block"
+            >
+              ⬇ Download sample CSV template
+            </button>
+            <br />
             <input
               type="file"
               accept=".csv,text/csv"
@@ -679,7 +827,17 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         {result && (
           <div className="text-center py-6">
             <p className="text-lg font-semibold text-emerald-600">Imported {result.imported} payment{result.imported !== 1 ? "s" : ""}</p>
-            {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped</p>}
+            {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped (validation errors above)</p>}
+            {result.failed?.length > 0 && (
+              <div className="mt-2 text-sm text-rose-600">
+                <p className="font-semibold">{result.failed.length} row(s) failed to save:</p>
+                <ul className="list-disc list-inside mt-1 space-y-0.5">
+                  {result.failed.map((f, i) => (
+                    <li key={i}>{f.dealer_name} (₹{f.amount}) — {f.message}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <PrimaryButton onClick={onClose} className="mt-4">Done</PrimaryButton>
           </div>
         )}
