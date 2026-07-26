@@ -246,43 +246,36 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       )}
 
       <main className="max-w-5xl mx-auto p-6 pb-24 md:pb-6">
-        {(() => {
-          const showWalletAndRunning = tab !== "Applications" && tab !== "Call/Chat";
-          return (
-            <div className={`grid gap-2 sm:gap-3 mb-5 ${showWalletAndRunning ? "grid-cols-3" : "grid-cols-1 max-w-xs"}`}>
-              {showWalletAndRunning && (
-                <>
-                  <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
-                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Wallet Balance</p>
-                    <div className="flex items-center justify-between gap-1 mt-0.5">
-                      <p className="text-base font-bold text-emerald-600 truncate">
-                        ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
-                      </p>
-                      <button
-                        onClick={() => setShowTopUp(true)}
-                        className="shrink-0 text-[11px] font-semibold text-blue-600 hover:underline"
-                      >
-                        Top Up
-                      </button>
-                    </div>
-                  </div>
-                  <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
-                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Running Balance</p>
-                    <p className={`text-base font-bold mt-0.5 truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
-                      {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
-                    </p>
-                  </div>
-                </>
-              )}
-              <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
-                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Credit Limit</p>
-                <p className="text-base font-bold text-slate-800 dark:text-slate-100 mt-0.5 truncate">
-                  ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
+        {tab !== "Applications" && tab !== "Call/Chat" && (
+          <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-5">
+            <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+              <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Wallet Balance</p>
+              <div className="flex items-center justify-between gap-1 mt-0.5">
+                <p className="text-base font-bold text-emerald-600 truncate">
+                  ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
                 </p>
+                <button
+                  onClick={() => setShowTopUp(true)}
+                  className="shrink-0 text-[11px] font-semibold text-blue-600 hover:underline"
+                >
+                  Top Up
+                </button>
               </div>
             </div>
-          );
-        })()}
+            <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+              <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Running Balance</p>
+              <p className={`text-base font-bold mt-0.5 truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+                {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
+              </p>
+            </div>
+            <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+              <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Credit Limit</p>
+              <p className="text-base font-bold text-slate-800 dark:text-slate-100 mt-0.5 truncate">
+                ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           <div className="hidden md:flex flex-wrap gap-2">
