@@ -898,7 +898,54 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   return (
     <CanEditContext.Provider value={canEdit}>
     <div>
-      <div className="flex items-center justify-end mb-4 flex-wrap gap-3">
+      <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
+        <div className="flex gap-2 flex-wrap items-center">
+          {STATUS_TABS.map((t) => {
+            const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
+            return (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                  tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+                }`}
+              >
+                {STATUS_DISPLAY_LABELS[t] || t}
+                {t === "Draft Submitted" && draftCount > 0 && (
+                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                    {draftCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <span className="w-px h-5 bg-slate-200 mx-1" />
+          <button
+            onClick={() => setChatOnly((c) => !c)}
+            title="Show only applications with chat enabled"
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+              chatOnly ? "bg-blue-600 text-white border-blue-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+            }`}
+          >
+            💬 Chats
+            {Object.values(chatStatus).some(Boolean) && (
+              <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                {Object.values(chatStatus).filter(Boolean).length}
+              </span>
+            )}
+          </button>
+          {!restricted && (
+            <button
+              onClick={() => setCompactView((c) => !c)}
+              title="Toggle a denser, grouped-column table layout"
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                compactView ? "bg-violet-600 text-white border-violet-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              ▦ Compact View
+            </button>
+          )}
+        </div>
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
             <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
@@ -912,54 +959,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             {showRemarkMobile ? "Hide" : "Show"} Remark &amp; Mobile
           </button>
         </div>
-      </div>
-
-      <div className="flex gap-2 mb-4 flex-wrap items-center">
-        {STATUS_TABS.map((t) => {
-          const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
-          return (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
-                tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-              }`}
-            >
-              {STATUS_DISPLAY_LABELS[t] || t}
-              {t === "Draft Submitted" && draftCount > 0 && (
-                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                  {draftCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-        <span className="w-px h-5 bg-slate-200 mx-1" />
-        <button
-          onClick={() => setChatOnly((c) => !c)}
-          title="Show only applications with chat enabled"
-          className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
-            chatOnly ? "bg-blue-600 text-white border-blue-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-          }`}
-        >
-          💬 Chats
-          {Object.values(chatStatus).some(Boolean) && (
-            <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-              {Object.values(chatStatus).filter(Boolean).length}
-            </span>
-          )}
-        </button>
-        {!restricted && (
-          <button
-            onClick={() => setCompactView((c) => !c)}
-            title="Toggle a denser, grouped-column table layout"
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-              compactView ? "bg-violet-600 text-white border-violet-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-            }`}
-          >
-            ▦ Compact View
-          </button>
-        )}
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
