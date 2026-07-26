@@ -1,171 +1,184 @@
 // src/components/ImageCropModal.jsx
 //
-// A small, dependency-free crop tool shown before a photo/signature/Aadhaar
-// image is uploaded (see ApplicationDocsModal in DealerPortal.jsx). Pure
-// <canvas> — no react-easy-crop/cropper.js — since this app doesn't
-// otherwise bundle an image library and this only needs pan + zoom + crop.
-//
-// For signature uploads specifically, an optional "Remove background"
-// toggle is offered — a simple luminance-threshold trick (anything close
-// to white/paper becomes transparent) rather than true ML background
-// removal, which isn't feasible to run client-side here. It works well for
-// the common case (dark ink signed on plain white/light paper) but isn't
-// perfect for shadowy scans or colored paper — it's offered as a toggle,
-// not forced, so the dealer can just skip it if the result looks wrong.
+// Shown before a photo/signature/Aadhaar upload actually goes through —
+// lets the dealer drag a crop box over the image (corner handles to
+// resize, drag the middle to move), and for signatures specifically,
+// offers turning the paper background transparent. See lib/imageEdit.js
+// for how both of those are actually done (plain canvas, no dependency).
 import React, { useEffect, useRef, useState } from "react";
-import { Modal, GhostButton, PrimaryButton } from "./UI";
+import { Modal, PrimaryButton, GhostButton } from "./UI";
+import { loadImageFromFile, cropImage, removeLightBackground, canvasToBlob } from "../lib/imageEdit";
 
-const VIEWPORT = 320; // px, square on-screen crop window
+const HANDLE_SIZE = 22; // touch-friendly hit target, bigger than its visible dot
 
-export default function ImageCropModal({ file, aspect = 1, allowBgRemove = false, onCancel, onCropped }) {
-  const [imgEl, setImgEl] = useState(null);
-  const [scale, setScale] = useState(1);
-  const [minScale, setMinScale] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+export default function ImageCropModal({ file, allowBackgroundRemoval = false, onDone, onClose }) {
+  const [img, setImg] = useState(null);
+  const [error, setError] = useState("");
+  const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 });
+  const [box, setBox] = useState(null); // { x, y, width, height } in DISPLAY pixels
   const [removeBg, setRemoveBg] = useState(false);
-  const dragRef = useRef(null); // { startX, startY, origX, origY } | null
-  const canvasRef = useRef(null);
-
-  const viewportW = VIEWPORT;
-  const viewportH = Math.round(VIEWPORT / aspect);
+  const [saving, setSaving] = useState(false);
+  const containerRef = useRef(null);
+  const dragRef = useRef(null); // { mode: 'move'|'nw'|'ne'|'sw'|'se', startX, startY, startBox }
 
   useEffect(() => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      // Start zoomed so the image fully covers the viewport (like a
-      // "cover" background), centered.
-      const cover = Math.max(viewportW / img.width, viewportH / img.height);
-      setMinScale(cover);
-      setScale(cover);
-      setOffset({ x: 0, y: 0 });
-      setImgEl(img);
-    };
-    img.src = url;
-    return () => URL.revokeObjectURL(url);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    loadImageFromFile(file)
+      .then((loaded) => {
+        if (cancelled) return;
+        setImg(loaded);
+        // Fit the image into a reasonable on-screen box, capped so it never
+        // outgrows the modal on a phone.
+        const maxW = Math.min(window.innerWidth - 64, 420);
+        const maxH = 380;
+        const scale = Math.min(maxW / loaded.width, maxH / loaded.height, 1);
+        const w = loaded.width * scale;
+        const h = loaded.height * scale;
+        setDisplaySize({ width: w, height: h });
+        // Start with a crop box covering 80% of the image, centered.
+        setBox({ x: w * 0.1, y: h * 0.1, width: w * 0.8, height: h * 0.8 });
+      })
+      .catch((e) => setError(e.message));
+    return () => { cancelled = true; };
   }, [file]);
 
-  const clampOffset = (o, s) => {
-    if (!imgEl) return o;
-    const w = imgEl.width * s;
-    const h = imgEl.height * s;
-    const maxX = Math.max(0, (w - viewportW) / 2);
-    const maxY = Math.max(0, (h - viewportH) / 2);
-    return { x: Math.min(maxX, Math.max(-maxX, o.x)), y: Math.min(maxY, Math.max(-maxY, o.y)) };
+  const clampBox = (b, containerW, containerH) => {
+    let { x, y, width, height } = b;
+    width = Math.max(30, Math.min(width, containerW));
+    height = Math.max(30, Math.min(height, containerH));
+    x = Math.max(0, Math.min(x, containerW - width));
+    y = Math.max(0, Math.min(y, containerH - height));
+    return { x, y, width, height };
   };
 
-  const onPointerDown = (e) => {
-    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: offset.x, origY: offset.y };
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+  const onPointerDown = (mode) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { mode, startX: e.clientX, startY: e.clientY, startBox: { ...box } };
+    e.target.setPointerCapture?.(e.pointerId);
   };
+
   const onPointerMove = (e) => {
     if (!dragRef.current) return;
-    const dx = e.clientX - dragRef.current.startX;
-    const dy = e.clientY - dragRef.current.startY;
-    setOffset(clampOffset({ x: dragRef.current.origX + dx, y: dragRef.current.origY + dy }, scale));
+    const { mode, startX, startY, startBox } = dragRef.current;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    let next = { ...startBox };
+    if (mode === "move") {
+      next.x = startBox.x + dx;
+      next.y = startBox.y + dy;
+    } else {
+      if (mode.includes("w")) { next.x = startBox.x + dx; next.width = startBox.width - dx; }
+      if (mode.includes("e")) { next.width = startBox.width + dx; }
+      if (mode.includes("n")) { next.y = startBox.y + dy; next.height = startBox.height - dy; }
+      if (mode.includes("s")) { next.height = startBox.height + dy; }
+    }
+    setBox(clampBox(next, displaySize.width, displaySize.height));
   };
+
   const onPointerUp = () => { dragRef.current = null; };
 
-  const onZoom = (e) => {
-    const s = Number(e.target.value);
-    setScale(s);
-    setOffset((o) => clampOffset(o, s));
-  };
-
-  const confirm = () => {
-    if (!imgEl) return;
-    const outW = 800;
-    const outH = Math.round(outW / aspect);
-    const canvas = canvasRef.current;
-    canvas.width = outW;
-    canvas.height = outH;
-    const ctx = canvas.getContext("2d");
-
-    // Map from the on-screen viewport (viewportW x viewportH, showing the
-    // image at `scale` centered + offset) to the full-res output canvas.
-    const ratio = outW / viewportW;
-    const drawW = imgEl.width * scale * ratio;
-    const drawH = imgEl.height * scale * ratio;
-    const drawX = outW / 2 - drawW / 2 + offset.x * ratio;
-    const drawY = outH / 2 - drawH / 2 + offset.y * ratio;
-    ctx.clearRect(0, 0, outW, outH);
-    ctx.drawImage(imgEl, drawX, drawY, drawW, drawH);
-
-    if (allowBgRemove && removeBg) {
-      const imageData = ctx.getImageData(0, 0, outW, outH);
-      const d = imageData.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const luminance = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        if (luminance > 200) d[i + 3] = 0; // near-white paper -> transparent
+  const confirmCrop = async () => {
+    if (!img || !box) return;
+    setSaving(true);
+    setError("");
+    try {
+      const scaleX = img.width / displaySize.width;
+      const scaleY = img.height / displaySize.height;
+      const cropRect = {
+        x: box.x * scaleX,
+        y: box.y * scaleY,
+        width: box.width * scaleX,
+        height: box.height * scaleY,
+      };
+      let canvas = cropImage(img, cropRect);
+      if (allowBackgroundRemoval && removeBg) {
+        canvas = removeLightBackground(canvas);
       }
-      ctx.putImageData(imageData, 0, 0);
+      const blob = await canvasToBlob(canvas, removeBg ? "image/png" : "image/jpeg", 0.92);
+      const ext = removeBg ? "png" : "jpg";
+      const baseName = file.name.replace(/\.[^.]+$/, "");
+      const croppedFile = new File([blob], `${baseName}-cropped.${ext}`, { type: blob.type });
+      onDone(croppedFile);
+    } catch (e) {
+      setError(e.message || "Couldn't process this image");
+      setSaving(false);
     }
-
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return;
-        const ext = allowBgRemove && removeBg ? "png" : (file.name.split(".").pop() || "jpg");
-        const outName = file.name.replace(/\.[^.]+$/, "") + `-cropped.${ext}`;
-        onCropped(new File([blob], outName, { type: blob.type }));
-      },
-      allowBgRemove && removeBg ? "image/png" : "image/jpeg",
-      0.92
-    );
   };
 
   return (
-    <Modal title="Crop image" onClose={onCancel}>
-      <p className="text-xs text-slate-500 dark:text-slate-500 mb-3">Drag to reposition, use the slider to zoom, then confirm.</p>
-      <div
-        className="mx-auto relative overflow-hidden rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 touch-none select-none"
-        style={{ width: viewportW, height: viewportH, cursor: dragRef.current ? "grabbing" : "grab" }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-      >
-        {imgEl && (
-          <img
-            src={imgEl.src}
-            alt=""
-            draggable={false}
-            className="absolute top-1/2 left-1/2 pointer-events-none"
-            style={{
-              width: imgEl.width * scale,
-              height: imgEl.height * scale,
-              transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px))`,
-            }}
-          />
-        )}
-      </div>
+    <Modal title="Adjust before uploading" onClose={onClose}>
+      {error && <p className="text-rose-500 text-xs mb-3">{error}</p>}
+      {!img ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-6 text-center">Loading…</p>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500 dark:text-slate-500 mb-2">Drag the corners to crop, drag the middle to move.</p>
+          <div
+            ref={containerRef}
+            className="relative mx-auto select-none touch-none bg-slate-900 rounded-lg overflow-hidden"
+            style={{ width: displaySize.width, height: displaySize.height }}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerLeave={onPointerUp}
+          >
+            <img src={img.src} alt="" draggable={false} className="absolute inset-0 w-full h-full object-fill pointer-events-none opacity-50" />
+            {box && (
+              <>
+                {/* Cropped-in preview window (full brightness, rest dimmed via the base image's opacity above) */}
+                <div
+                  className="absolute overflow-hidden"
+                  style={{ left: box.x, top: box.y, width: box.width, height: box.height }}
+                >
+                  <img
+                    src={img.src}
+                    alt=""
+                    draggable={false}
+                    className="pointer-events-none absolute"
+                    style={{
+                      left: -box.x, top: -box.y, width: displaySize.width, height: displaySize.height,
+                    }}
+                  />
+                </div>
+                {/* Draggable crop box outline + handles */}
+                <div
+                  onPointerDown={onPointerDown("move")}
+                  className="absolute border-2 border-white cursor-move"
+                  style={{ left: box.x, top: box.y, width: box.width, height: box.height, boxShadow: "0 0 0 9999px rgba(0,0,0,0.5)" }}
+                >
+                  {["nw", "ne", "sw", "se"].map((corner) => (
+                    <div
+                      key={corner}
+                      onPointerDown={onPointerDown(corner)}
+                      className="absolute bg-white rounded-full border-2 border-blue-600"
+                      style={{
+                        width: HANDLE_SIZE, height: HANDLE_SIZE,
+                        left: corner.includes("w") ? -HANDLE_SIZE / 2 : undefined,
+                        right: corner.includes("e") ? -HANDLE_SIZE / 2 : undefined,
+                        top: corner.includes("n") ? -HANDLE_SIZE / 2 : undefined,
+                        bottom: corner.includes("s") ? -HANDLE_SIZE / 2 : undefined,
+                        cursor: corner === "nw" || corner === "se" ? "nwse-resize" : "nesw-resize",
+                      }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
 
-      <div className="mt-3 flex items-center gap-2">
-        <span className="text-xs text-slate-400 dark:text-slate-500">Zoom</span>
-        <input
-          type="range"
-          min={minScale}
-          max={minScale * 4}
-          step={0.01}
-          value={scale}
-          onChange={onZoom}
-          className="flex-1"
-        />
-      </div>
+          {allowBackgroundRemoval && (
+            <label className="flex items-center gap-2 mt-3 text-sm text-slate-600 dark:text-slate-300">
+              <input type="checkbox" checked={removeBg} onChange={(e) => setRemoveBg(e.target.checked)} className="rounded" />
+              Remove background (makes the paper transparent, keeps just the signature)
+            </label>
+          )}
 
-      {allowBgRemove && (
-        <label className="mt-3 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-          <input type="checkbox" checked={removeBg} onChange={(e) => setRemoveBg(e.target.checked)} />
-          Remove background (best for a signature on plain white paper)
-        </label>
+          <div className="flex gap-2 mt-4">
+            <GhostButton onClick={onClose}>Cancel</GhostButton>
+            <PrimaryButton onClick={confirmCrop} disabled={saving}>{saving ? "Processing…" : "Use this"}</PrimaryButton>
+          </div>
+        </>
       )}
-
-      <canvas ref={canvasRef} className="hidden" />
-
-      <div className="flex gap-2 mt-4">
-        <PrimaryButton onClick={confirm} disabled={!imgEl}>Use this crop</PrimaryButton>
-        <GhostButton onClick={onCancel}>Cancel</GhostButton>
-      </div>
     </Modal>
   );
 }
