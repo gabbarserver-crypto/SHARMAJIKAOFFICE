@@ -22,7 +22,7 @@ export default function PaymentsFeeReport() {
       setLoading(true);
       const { data } = await supabase
         .from("applications")
-        .select("id, applicant_name, application_no, draft_code, rto_fee, pcc_fee, pcc_no, pcc_status, dealers(name, short_name)")
+        .select("id, applicant_name, application_no, draft_code, submitted_at, rto_fee, pcc_fee, pcc_no, pcc_status, dealers(name, short_name)")
         .order("submitted_at", { ascending: false })
         .limit(500);
       setRows(data || []);
@@ -67,6 +67,7 @@ export default function PaymentsFeeReport() {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500">
               <tr>
+                <th className="text-left font-medium px-3 py-2">Date</th>
                 <th className="text-left font-medium px-3 py-2">Applicant</th>
                 <th className="text-left font-medium px-3 py-2">Application No.</th>
                 <th className="text-left font-medium px-3 py-2">Dealer</th>
@@ -77,12 +78,13 @@ export default function PaymentsFeeReport() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="text-center text-slate-400 dark:text-slate-500 py-10">Loading…</td></tr>
+                <tr><td colSpan={7} className="text-center text-slate-400 dark:text-slate-500 py-10">Loading…</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={6} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search</td></tr>
+                <tr><td colSpan={7} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search</td></tr>
               ) : (
                 filtered.map((r) => (
                   <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                    <td className="px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}</td>
                     <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">{r.applicant_name || "—"}</td>
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{r.application_no || r.draft_code || "—"}</td>
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{r.dealers?.short_name || r.dealers?.name || "—"}</td>
@@ -99,7 +101,7 @@ export default function PaymentsFeeReport() {
             {filtered.length > 0 && (
               <tfoot>
                 <tr className="border-t-2 border-slate-200 dark:border-slate-700 font-bold text-slate-800 dark:text-slate-100">
-                  <td className="px-3 py-2" colSpan={3}>Total</td>
+                  <td className="px-3 py-2" colSpan={4}>Total</td>
                   <td className="px-3 py-2 text-right">{money(totals.fee)}</td>
                   <td className="px-3 py-2 text-right">{money(totals.pccFee)}</td>
                   <td className="px-3 py-2"></td>

@@ -21,6 +21,9 @@ import { Sun, Moon, Fingerprint, Download, Phone } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import DealerPaymentsPanel from "../components/DealerPaymentsPanel";
+import ImageCropModal from "../components/ImageCropModal";
+import DealerBottomTabBar from "../components/DealerBottomTabBar";
+import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
 
 // Same file the Dashboard's "Download App" card points to (see
 // src/pages/Dashboard.jsx) — one APK, linked from every portal.
@@ -110,6 +113,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoInputRef = useRef(null);
+  const [profilePhotoCropFile, setProfilePhotoCropFile] = useState(null);
 
   // Load the current photo for whichever identity is logged in — the
   // dealer owner, or one of their sub-staff logins.
@@ -127,6 +131,14 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (file.type.startsWith("image/")) {
+      setProfilePhotoCropFile(file);
+      return;
+    }
+    await doUploadProfilePhoto(file);
+  };
+
+  const doUploadProfilePhoto = async (file) => {
     setUploadingPhoto(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
@@ -233,30 +245,38 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
       )}
 
-      <main className="max-w-5xl mx-auto p-6">
-        <div className="grid sm:grid-cols-3 gap-4 mb-6">
-          <Card title="Wallet Balance">
-            <div className="flex items-center justify-between">
-              <p className="text-2xl font-bold text-emerald-600">
+      <main className="max-w-5xl mx-auto p-6 pb-24 md:pb-6">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-5">
+          <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+            <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Wallet Balance</p>
+            <div className="flex items-center justify-between gap-1 mt-0.5">
+              <p className="text-base font-bold text-emerald-600 truncate">
                 ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
               </p>
-              <GhostButton onClick={() => setShowTopUp(true)}>Top Up</GhostButton>
+              <button
+                onClick={() => setShowTopUp(true)}
+                className="shrink-0 text-[11px] font-semibold text-blue-600 hover:underline"
+              >
+                Top Up
+              </button>
             </div>
-          </Card>
-          <Card title="Running Balance">
-            <p className={`text-2xl font-bold ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+          </div>
+          <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+            <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Running Balance</p>
+            <p className={`text-base font-bold mt-0.5 truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
               {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
             </p>
-          </Card>
-          <Card title="Credit Limit">
-            <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">
+          </div>
+          <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+            <p className="text-[11px] font-medium text-slate-500 dark:text-slate-500 truncate">Credit Limit</p>
+            <p className="text-base font-bold text-slate-800 dark:text-slate-100 mt-0.5 truncate">
               ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
             </p>
-          </Card>
+          </div>
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
-          <div className="flex flex-wrap gap-2">
+          <div className="hidden md:flex flex-wrap gap-2">
             {visibleTabs.map((t) => (
               <button
                 key={t}
@@ -331,9 +351,29 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
 
       {showTopUp && <TopUpModal dealer={dealer} onClose={() => setShowTopUp(false)} />}
 
+      {profilePhotoCropFile && (
+        <ImageCropModal
+          file={profilePhotoCropFile}
+          aspect={1}
+          allowBgRemove={false}
+          onCancel={() => setProfilePhotoCropFile(null)}
+          onCropped={(croppedFile) => {
+            setProfilePhotoCropFile(null);
+            doUploadProfilePhoto(croppedFile);
+          }}
+        />
+      )}
+
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
 
       <CommsWindow variant="dealer" dealerId={dealer.id} dealerName={dealer.name} identity={identity} call={call} />
+
+      <DealerBottomTabBar
+        tabs={visibleTabs}
+        active={tab}
+        onNavigate={(t) => { setTab(t); if (t === "Call/Chat") refreshUnreadChats(); }}
+        unreadChats={unreadChats}
+      />
     </div>
   );
 }
@@ -348,6 +388,9 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
   });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const selectedService = services.find((s) => s.id === f.service_id);
+  const qrInputRef = useRef(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState(null); // { text, isError } | null
 
   useEffect(() => {
     (async () => {
@@ -355,6 +398,36 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
       setServices(data || []);
     })();
   }, []);
+
+  // Reads the QR printed on an Aadhaar card/e-Aadhaar to prefill Name,
+  // Father/Husband Name, and Address instead of typing them by hand. See
+  // src/lib/aadhaarQr.js for the real limits (older-format QR only).
+  const handleAadhaarQrFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setScanning(true);
+    setScanMsg(null);
+    try {
+      const result = await scanAadhaarQr(file);
+      setF((s) => ({
+        ...s,
+        applicant_name: result.name ? result.name.toUpperCase() : s.applicant_name,
+        father_husband_name: result.fatherHusbandName ? result.fatherHusbandName.toUpperCase() : s.father_husband_name,
+        address: result.address ? result.address.toUpperCase() : s.address,
+      }));
+      setScanMsg({
+        text: result.yearOfBirth
+          ? `Filled from Aadhaar QR. Year of birth on the card is ${result.yearOfBirth} — please set the full Date of Birth below.`
+          : "Filled from Aadhaar QR — please double-check the details below.",
+        isError: false,
+      });
+    } catch (err) {
+      setScanMsg({ text: err.message, isError: true });
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const submit = async () => {
     if (!f.service_id || !f.applicant_name.trim()) {
@@ -431,6 +504,25 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
           placeholder="Search or select a service…"
         />
       </Field>
+
+      {isAadhaarQrScanSupported() && (
+        <div className="mb-4">
+          <input
+            type="file"
+            accept="image/*"
+            ref={qrInputRef}
+            className="hidden"
+            onChange={handleAadhaarQrFile}
+          />
+          <GhostButton type="button" onClick={() => qrInputRef.current?.click()} disabled={scanning}>
+            {scanning ? "Scanning…" : "📷 Scan Aadhaar QR to auto-fill"}
+          </GhostButton>
+          {scanMsg && (
+            <p className={`text-xs mt-1.5 ${scanMsg.isError ? "text-rose-500" : "text-blue-600 dark:text-blue-400"}`}>{scanMsg.text}</p>
+          )}
+        </div>
+      )}
+
       <Field label="Applicant Name" required><Input value={f.applicant_name} onChange={set("applicant_name")} /></Field>
       <Field label="Father / Husband Name"><Input value={f.father_husband_name} onChange={set("father_husband_name")} /></Field>
       <Field label="Date of Birth"><Input type="date" value={f.date_of_birth} onChange={set("date_of_birth")} /></Field>
@@ -644,12 +736,23 @@ const DOC_STATUS_STYLES = {
   Rejected: "bg-rose-50 text-rose-700",
 };
 
+// Photo/signature/Aadhaar uploads get an on-screen crop step first (see
+// ImageCropModal) instead of uploading the raw camera/gallery file as-is —
+// returns null for any other document type, which skips cropping entirely.
+function cropSettingsFor(docName) {
+  if (/sign/i.test(docName)) return { aspect: 3, allowBgRemove: true };
+  if (/photo/i.test(docName)) return { aspect: 1, allowBgRemove: false };
+  if (/aadhaar|aadhar/i.test(docName)) return { aspect: 1.6, allowBgRemove: false };
+  return null;
+}
+
 function ApplicationDocsModal({ application, onUploaded, onClose }) {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState("");
   const [pccCheckApp, setPccCheckApp] = useState(null);
+  const [cropTarget, setCropTarget] = useState(null); // { doc, file } | null
 
   const load = async () => {
     setLoading(true);
@@ -842,7 +945,17 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
                   type="file"
                   accept="image/*,.pdf"
                   disabled={busyId === d.id}
-                  onChange={(e) => upload(d, e.target.files?.[0])}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    const cropSettings = file.type.startsWith("image/") ? cropSettingsFor(d.name) : null;
+                    if (cropSettings) {
+                      setCropTarget({ doc: d, file, ...cropSettings });
+                    } else {
+                      upload(d, file);
+                    }
+                  }}
                   className="text-xs"
                 />
                 {busyId === d.id && <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">Uploading…</span>}
@@ -858,6 +971,19 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
     </Modal>
     {pccCheckApp && (
       <PCCStatusCheckModal row={pccCheckApp} onClose={() => setPccCheckApp(null)} />
+    )}
+    {cropTarget && (
+      <ImageCropModal
+        file={cropTarget.file}
+        aspect={cropTarget.aspect}
+        allowBgRemove={cropTarget.allowBgRemove}
+        onCancel={() => setCropTarget(null)}
+        onCropped={(croppedFile) => {
+          const doc = cropTarget.doc;
+          setCropTarget(null);
+          upload(doc, croppedFile);
+        }}
+      />
     )}
     </>
   );
