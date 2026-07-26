@@ -389,6 +389,29 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
+  const [recentImports, setRecentImports] = useState(null); // null = not loaded yet
+  const [undoing, setUndoing] = useState(false);
+
+  const loadRecentImports = async () => {
+    const { data } = await supabase
+      .from("payments")
+      .select("import_batch, amount, created_at, dealers(name), paid_at_agency:paid_at_agency_id(name)")
+      .not("import_batch", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    const byBatch = new Map();
+    for (const row of data || []) {
+      const b = byBatch.get(row.import_batch) || { batchId: row.import_batch, count: 0, total: 0, at: row.created_at, names: new Set() };
+      b.count += 1;
+      b.total += Number(row.amount || 0);
+      if (row.created_at > b.at) b.at = row.created_at;
+      if (row.dealers?.name || row.paid_at_agency?.name) b.names.add(row.dealers?.name || row.paid_at_agency?.name);
+      byBatch.set(row.import_batch, b);
+    }
+    setRecentImports([...byBatch.values()].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 10));
+  };
+
+  useEffect(() => { loadRecentImports(); }, []);
 
   const handleFile = (file) => {
     if (!file) return;
@@ -396,7 +419,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
     setResult(null);
     setError("");
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const parsed = parseCSV(String(e.target.result));
       const built = parsed.map((raw) => {
         const get = (...keys) => {
@@ -436,6 +459,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           dealerRaw, applicationRaw, agencyRaw,
           included: errors.length === 0,
           errors,
+          warnings: [],
           payload: {
             dealer_id: dealer?.id,
             dealer_name: dealer?.name,
@@ -450,6 +474,49 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           },
         };
       });
+
+      // Duplicate check — importing the same file (or an overlapping one)
+      // twice is the #1 way this table ends up with doubled payments.
+      // Flag anything that looks like it's already in the table: same
+      // payer + same reference no. (when given), or same payer + same
+      // amount + same date (when it isn't). This is a WARNING, not an
+      // error — the row stays untouched and toggleable, it's just
+      // unchecked by default so a re-import needs a deliberate opt-in
+      // per row instead of silently doubling everything.
+      const payerIds = [...new Set(built.flatMap((r) => [r.payload.dealer_id, r.payload.agency_id]).filter(Boolean))];
+      if (payerIds.length) {
+        const [{ data: existingByDealer }, { data: existingByAgency }] = await Promise.all([
+          supabase.from("payments").select("dealer_id, amount, reference_no, created_at").in("dealer_id", payerIds),
+          supabase.from("payments").select("paid_at_agency_id, amount, reference_no, created_at").in("paid_at_agency_id", payerIds),
+        ]);
+        const existing = [...(existingByDealer || []), ...(existingByAgency || [])];
+
+        for (const r of built) {
+          if (r.errors.length) continue;
+          const payerId = r.payload.dealer_id || r.payload.agency_id;
+          const rowDate = (r.payload.paid_on || new Date().toISOString()).slice(0, 10);
+          const refKey = r.payload.reference_no?.trim().toLowerCase();
+
+          const isDup = existing.some((p) => {
+            const sameDealer = r.payload.dealer_id && p.dealer_id === r.payload.dealer_id;
+            const sameAgency = r.payload.agency_id && p.paid_at_agency_id === r.payload.agency_id;
+            if (!sameDealer && !sameAgency) return false;
+            if (Number(p.amount) !== Number(r.payload.amount)) return false;
+            if (refKey) return (p.reference_no || "").trim().toLowerCase() === refKey;
+            return (p.created_at || "").slice(0, 10) === rowDate;
+          });
+
+          if (isDup) {
+            r.warnings.push(
+              refKey
+                ? `Possible duplicate — a payment with this reference no. already exists for ${r.payload.dealer_name || r.payload.agency_name}`
+                : `Possible duplicate — a payment of this amount on this date already exists for ${r.payload.dealer_name || r.payload.agency_name}`
+            );
+            r.included = false; // default OFF; staff can still tick it back on if it's genuinely a second, separate payment
+          }
+        }
+      }
+
       setPreview(built);
     };
     reader.readAsText(file);
@@ -463,6 +530,11 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
     if (!rowsToImport.length) return;
     setImporting(true);
     setError("");
+    // One id per import RUN (not per row) — tags every payment this run
+    // creates so the whole batch can be found and undone later in one
+    // shot, either right after import or from "Recent Imports" below.
+    const batchId = `imp_${Date.now()}`;
+    const importedIds = [];
     try {
       const { data: userData } = await supabase.auth.getUser();
       const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
@@ -498,6 +570,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             remarks: payload.remarks,
             paid_at_agency_id: payload.agency_id || null,
             received_by: staffRow?.id || null,
+            import_batch: batchId,
             ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
           })
           .select()
@@ -508,6 +581,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           setImporting(false);
           return;
         }
+        importedIds.push(paymentRow.id);
 
         const voucherNo = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
         const ledgerInserts = [];
@@ -543,13 +617,33 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         imported++;
       }
 
-      setResult({ imported, skipped: preview.length - rowsToImport.length });
+      setResult({ imported, skipped: preview.length - rowsToImport.length, batchId, importedIds });
       setImporting(false);
       onImported();
     } catch (err) {
       setError("Import failed: " + err.message);
       setImporting(false);
     }
+  };
+
+  // Deletes every payment from one import run — its ledger entries first
+  // (payments.id is what payment_id points at, so those have to go before
+  // the payments themselves), then the payments rows. Used both by "Undo
+  // this import" right after a run, and by deleting an older run from
+  // "Recent Imports" below.
+  const deleteImportBatch = async (batchId, paymentIds) => {
+    let ids = paymentIds;
+    if (!ids) {
+      const { data } = await supabase.from("payments").select("id").eq("import_batch", batchId);
+      ids = (data || []).map((p) => p.id);
+    }
+    if (!ids.length) return { error: null, count: 0 };
+    await Promise.all([
+      supabase.from("ledger_transactions").delete().in("payment_id", ids),
+      supabase.from("agency_ledger_transactions").delete().in("payment_id", ids),
+    ]);
+    const { error } = await supabase.from("payments").delete().in("id", ids);
+    return { error, count: ids.length };
   };
 
   return (
@@ -574,6 +668,34 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
               className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-slate-700 dark:file:text-slate-300 file:font-semibold file:text-sm"
             />
             {fileName && <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">{fileName}</span>}
+
+            {recentImports?.length > 0 && (
+              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">Recent Imports — imported by mistake? Delete the whole run here.</p>
+                <div className="space-y-1.5">
+                  {recentImports.map((b) => (
+                    <div key={b.batchId} className="flex items-center justify-between text-xs bg-slate-50 dark:bg-slate-800/50 rounded-lg px-3 py-2">
+                      <span className="text-slate-600 dark:text-slate-300">
+                        {new Date(b.at).toLocaleString()} · {b.count} payment{b.count !== 1 ? "s" : ""} · ₹{b.total.toLocaleString("en-IN")}
+                        {b.names.size > 0 && <span className="text-slate-400 dark:text-slate-500"> · {[...b.names].slice(0, 3).join(", ")}{b.names.size > 3 ? "…" : ""}</span>}
+                      </span>
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm(`Delete all ${b.count} payments from this import (₹${b.total.toLocaleString("en-IN")} total)? This also removes their ledger entries. Can't be undone.`)) return;
+                          const { error } = await deleteImportBatch(b.batchId, null);
+                          if (error) { setError("Failed to delete import: " + error.message); return; }
+                          loadRecentImports();
+                          onImported();
+                        }}
+                        className="text-rose-500 font-semibold hover:underline shrink-0 ml-3"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -591,12 +713,12 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
                     <th className="px-3 py-2 text-left">Mode</th>
                     <th className="px-3 py-2 text-left">Voucher No.</th>
                     <th className="px-3 py-2 text-left">Agency</th>
-                    <th className="px-3 py-2 text-left">Errors</th>
+                    <th className="px-3 py-2 text-left">Errors / Warnings</th>
                   </tr>
                 </thead>
                 <tbody>
                   {preview.map((r, i) => (
-                    <tr key={i} className={`border-t border-slate-100 dark:border-slate-800 ${r.errors.length ? "bg-rose-50 dark:bg-rose-500/10" : ""}`}>
+                    <tr key={i} className={`border-t border-slate-100 dark:border-slate-800 ${r.errors.length ? "bg-rose-50 dark:bg-rose-500/10" : r.warnings.length ? "bg-amber-50 dark:bg-amber-500/10" : ""}`}>
                       <td className="px-3 py-2">
                         <input type="checkbox" checked={r.included} disabled={r.errors.length > 0} onChange={() => toggleIncluded(i)} />
                       </td>
@@ -609,7 +731,9 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.payment_mode}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.reference_no || "—"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.agency_name || "—"}</td>
-                      <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
+                      <td className={r.errors.length ? "px-3 py-2 text-rose-600" : "px-3 py-2 text-amber-600"}>
+                        {r.errors.join("; ") || r.warnings.join("; ")}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -617,7 +741,10 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             </div>
             {error && <p className="text-rose-500 text-sm mb-3">{error}</p>}
             <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-500 dark:text-slate-400">{includedCount} of {preview.length} rows will be imported</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {includedCount} of {preview.length} rows will be imported
+                {preview.some((r) => r.warnings.length) && <span className="text-amber-600"> — possible duplicates are unchecked, review before importing</span>}
+              </p>
               <div className="flex gap-2">
                 <GhostButton onClick={() => { setPreview([]); setFileName(""); }}>Start Over</GhostButton>
                 <PrimaryButton disabled={importing || includedCount === 0} onClick={runImport}>
@@ -632,7 +759,25 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           <div className="text-center py-6">
             <p className="text-lg font-semibold text-emerald-600">Imported {result.imported} payment{result.imported !== 1 ? "s" : ""}</p>
             {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped</p>}
-            <PrimaryButton onClick={onClose} className="mt-4">Done</PrimaryButton>
+            <div className="flex items-center justify-center gap-3 mt-4">
+              {result.imported > 0 && (
+                <GhostButton
+                  disabled={undoing}
+                  onClick={async () => {
+                    if (!window.confirm(`Undo this import? Deletes all ${result.imported} payment(s) just created and their ledger entries.`)) return;
+                    setUndoing(true);
+                    const { error } = await deleteImportBatch(result.batchId, result.importedIds);
+                    setUndoing(false);
+                    if (error) { setError("Failed to undo: " + error.message); return; }
+                    onImported();
+                    onClose();
+                  }}
+                >
+                  {undoing ? "Undoing…" : "Undo this import"}
+                </GhostButton>
+              )}
+              <PrimaryButton onClick={onClose}>Done</PrimaryButton>
+            </div>
           </div>
         )}
       </div>
