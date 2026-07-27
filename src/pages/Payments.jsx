@@ -68,14 +68,34 @@ export default function Payments({ staff } = {}) {
   // Payments" table below. Capped at 2000 rows; if that's ever not enough,
   // the date-range filter should be pushed server-side instead of the
   // client-side filtering below.
+  // A single request is always capped server-side at Supabase's project
+  // "Max Rows" setting (1000 by default) no matter what .limit() we ask
+  // for here — that's why the list used to silently stop at exactly 1000.
+  // Paging with .range() in chunks under that cap, and looping until a
+  // partial page comes back, gets everything regardless of how large the
+  // table grows or what the server cap is set to. Ordered by created_at
+  // then id so ties don't shuffle rows between pages.
   const loadAllPayments = async () => {
     setAllLoading(true);
-    const { data } = await supabase
-      .from("payments")
-      .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
-      .order("created_at", { ascending: false })
-      .limit(2000);
-    setAllPayments(data || []);
+    const pageSize = 1000;
+    const maxPages = 50; // safety ceiling (50,000 rows) so a bug can't loop forever
+    let all = [];
+    for (let page = 0; page < maxPages; page++) {
+      const from = page * pageSize;
+      const { data, error } = await supabase
+        .from("payments")
+        .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        console.error("loadAllPayments:", error);
+        break;
+      }
+      all = all.concat(data || []);
+      if (!data || data.length < pageSize) break; // reached the end
+    }
+    setAllPayments(all);
     setAllLoading(false);
   };
 
