@@ -24,6 +24,7 @@ import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText } from "luc
 import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
+import DealerBottomTabBar from "../components/DealerBottomTabBar";
 
 // Same file the Dashboard's "Download App" card points to (see
 // src/pages/Dashboard.jsx) — one APK, linked from every portal.
@@ -236,7 +237,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
       )}
 
-      <main className="max-w-5xl mx-auto p-6">
+      <main className="max-w-5xl mx-auto p-6 pb-24 md:pb-6">
         <div className="grid sm:grid-cols-3 gap-4 mb-6">
           <Card title="Wallet Balance">
             <div className="flex items-center justify-between">
@@ -259,7 +260,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
-          <div className="flex flex-wrap gap-2">
+          <div className="hidden md:flex flex-wrap gap-2">
             {visibleTabs.map((t) => (
               <button
                 key={t}
@@ -336,6 +337,13 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
 
       <CommsWindow variant="dealer" dealerId={dealer.id} dealerName={dealer.name} identity={identity} call={call} />
+
+      <DealerBottomTabBar
+        tabs={visibleTabs}
+        active={tab}
+        onNavigate={(t) => { setTab(t); if (t === "Call/Chat") refreshUnreadChats(); }}
+        unreadChats={unreadChats}
+      />
     </div>
   );
 }
