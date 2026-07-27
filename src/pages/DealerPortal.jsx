@@ -1,1413 +1,998 @@
-// src/pages/DealerPortal.jsx
-// Restricted view shown to a Dealer login (as opposed to Staff, who get
-// the full admin app via App.jsx + Sidebar). A dealer can only ever see
-// their own applications and their own ledger — enforced both here
-// (queries always filter by dealer.id) and at the database level via
-// the RLS policies added in enable_dealer_login.sql.
-import React, { useCallback, useEffect, useState, useRef } from "react";
+// src/pages/Payments.jsx
+import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, StatusBadge, Modal, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "../components/UI";
-import CommsWindow from "../components/CommsWindow";
-import ChatPanel from "../components/ChatPanel";
-import ApplicationChatModal from "../components/ApplicationChatModal";
-import BookAppointmentModal from "../components/BookAppointmentModal";
-import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
-import { notify } from "../lib/notify";
-import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
-import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
-import { ageHighlightClass, validateAgeForService } from "../lib/age";
-import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
-import { scanAadhaarImage } from "../lib/aadhaarOcr";
-import { useDarkMode } from "../lib/theme";
-import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText } from "lucide-react";
-import SearchableSelect from "../components/SearchableSelect";
-import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
-import ImageCropModal from "../components/ImageCropModal";
+import { Card, Field, Input, Select, PrimaryButton, GhostButton, DangerButton, Modal, Toast } from "../components/UI";
+import { parseCSV, findByLabel, ddmmyyyyToISO } from "../lib/csv";
 
-// Same file the Dashboard's "Download App" card points to (see
-// src/pages/Dashboard.jsx) — one APK, linked from every portal.
-const APK_PATH = "/downloads/sjo-app.apk";
+function isoToDDMMYYYY(iso) {
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return iso;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
 
-const TABS = ["Applications", "Call/Chat", "Ledger"];
-
-// `identity` is { type: 'dealer' | 'dealer_staff', id, name } — resolved in
-// App.jsx from whichever login this is. It's what scopes chat messages to
-// "who sent this", while `dealer.id` (the parent dealer, same for both a
-// dealer's own login and any of their sub-staff) scopes *which* dealer's
-// data/threads this portal shows. `call` is the useDirectCall() controller,
-// mounted once in App.jsx, for ringing a specific named admin staff member
-// straight from the "Our Team" directory on the Call/Chat tab.
-export default function DealerPortal({ dealer, identity, call, onLogout }) {
-  const [tab, setTab] = useState("Applications");
-  const [showNew, setShowNew] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
+export default function Payments({ staff } = {}) {
+  const isAdmin = staff?.roles?.role_name === "Admin";
+  const [editingPayment, setEditingPayment] = useState(null); // payment row being edited, or null
+  const [dealers, setDealers] = useState([]);
+  const [agencies, setAgencies] = useState([]);
+  const [applications, setApplications] = useState([]);
+  const [form, setForm] = useState({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "", paid_on: "" });
+  const [recent, setRecent] = useState([]);
   const [toast, setToast] = useState(null);
-  const [docsForApp, setDocsForApp] = useState(null); // { id, applicant_name } | null
-  const [chatApp, setChatApp] = useState(null); // { id, label } | null
-  const [unreadChats, setUnreadChats] = useState(0);
-  const [showTopUp, setShowTopUp] = useState(false);
-  const [runningBalance, setRunningBalance] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [allPayments, setAllPayments] = useState([]);
+  const [allLoading, setAllLoading] = useState(true);
+  const [allQuery, setAllQuery] = useState("");
+  const [allDateFrom, setAllDateFrom] = useState("");
+  const [allDateTo, setAllDateTo] = useState("");
+  const [recentQuery, setRecentQuery] = useState("");
+  const [recentSortKey, setRecentSortKey] = useState("date");
+  const [recentSortDir, setRecentSortDir] = useState("desc");
 
-  // Running Balance shown beside Credit Limit in the summary cards — same
-  // computation as the "My Ledger" tab (DealerLedger below), just lifted up
-  // here too so it's visible without switching tabs.
+  const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.tagName === "SELECT" ? e.target.value : e.target.value.toUpperCase() }));
+
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("ledger_transactions").select("type, amount").eq("dealer_id", dealer.id);
-      const balance = (data || []).reduce((acc, t) => acc + (t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0)), 0);
-      setRunningBalance(balance);
+      const { data } = await supabase.from("dealers").select("id, name, code");
+      setDealers(data || []);
+      const { data: a } = await supabase.from("agencies").select("id, name, code");
+      setAgencies(a || []);
+      loadRecent();
+      loadAllPayments();
     })();
-  }, [dealer.id, refreshKey]);
-
-  const refreshUnreadChats = useCallback(async () => {
-    try {
-      setUnreadChats(await countDealerUnread(dealer.id));
-    } catch {
-      // Best-effort — a failed badge refresh just leaves the last-known count.
-    }
-  }, [dealer.id]);
+  }, []);
 
   useEffect(() => {
-    refreshUnreadChats();
-    const interval = setInterval(refreshUnreadChats, 30000);
-    const channel = supabase
-      .channel(`chat_messages:dealer-badge:${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, async (payload) => {
-        refreshUnreadChats();
-        const m = payload.new;
-        if (!m || m.sender_type !== "staff") return;
-        // chat_messages doesn't carry dealer_id directly — this fires for
-        // every dealer's messages, so confirm the thread is actually ours
-        // before notifying (refreshUnreadChats above is already dealer-
-        // scoped internally, this check is just for the toast).
-        const { data: thread } = await supabase.from("chat_threads").select("dealer_id").eq("id", m.thread_id).maybeSingle();
-        if (thread?.dealer_id !== dealer.id) return;
-        notify({
-          kind: "chat",
-          title: m.sender_name || "New message",
-          body: m.body || (m.attachment_url ? "Sent an image" : ""),
-          onClick: () => setTab("Call/Chat"),
-        });
+    (async () => {
+      if (!form.dealer_id) { setApplications([]); return; }
+      const { data } = await supabase
+        .from("applications")
+        .select("id, draft_code, applicant_name")
+        .eq("dealer_id", form.dealer_id)
+        .order("submitted_at", { ascending: false });
+      setApplications(data || []);
+    })();
+  }, [form.dealer_id]);
+
+  const loadRecent = async () => {
+    const { data } = await supabase
+      .from("payments")
+      .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    setRecent(data || []);
+  };
+
+  // Full history, not just the last 20 — powers the "All Receipts &
+  // Payments" table below. Capped at 2000 rows; if that's ever not enough,
+  // the date-range filter should be pushed server-side instead of the
+  // client-side filtering below.
+  const loadAllPayments = async () => {
+    setAllLoading(true);
+    const { data } = await supabase
+      .from("payments")
+      .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
+      .order("created_at", { ascending: false })
+      .limit(2000);
+    setAllPayments(data || []);
+    setAllLoading(false);
+  };
+
+  const submit = async () => {
+    const isAgencyOnly = form.payment_type === "agency";
+    if (isAgencyOnly ? !form.paid_at_agency_id : !form.dealer_id) {
+      setToast(isAgencyOnly ? "Agency and amount are required" : "Dealer and amount are required");
+      return;
+    }
+    if (!form.amount) {
+      setToast("Amount is required");
+      return;
+    }
+    if (form.reference_no?.trim()) {
+      const { data: dupe } = await supabase
+        .from("payments")
+        .select("id")
+        .eq("reference_no", form.reference_no.trim())
+        .limit(1)
+        .maybeSingle();
+      if (dupe) {
+        setToast(`A payment with reference "${form.reference_no.trim()}" already exists — check it isn't already recorded before saving again.`);
+        return;
+      }
+    }
+    setSaving(true);
+    const { data: userData } = await supabase.auth.getUser();
+    const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
+
+    const { data: paymentRow, error } = await supabase
+      .from("payments")
+      .insert({
+        dealer_id: isAgencyOnly ? null : form.dealer_id,
+        application_id: isAgencyOnly ? null : (form.application_id || null),
+        amount: parseFloat(form.amount),
+        payment_mode: form.payment_mode,
+        reference_no: form.reference_no || null,
+        remarks: form.remarks || null,
+        paid_at_agency_id: form.paid_at_agency_id || null,
+        received_by: staffRow?.id || null,
+        ...(form.paid_on ? { created_at: form.paid_on } : {}),
       })
-      .subscribe();
-    return () => {
-      clearInterval(interval);
-      supabase.removeChannel(channel);
+      .select()
+      .single();
+
+    if (error) {
+      setSaving(false);
+      setToast(error.code === "23505" ? "This reference number was just used by another payment — please check before saving again." : "Failed: " + error.message);
+      return;
+    }
+
+    // Post this payment to the dealer ledger (a payment received reduces
+    // what the dealer owes, so it's posted as a credit) and, if a "Paid At"
+    // agency was chosen, mirror the same amount as a credit on that
+    // agency's ledger too. For a pure Agency payment (no dealer at all),
+    // only the agency side is posted. Voucher no. is the payment's own
+    // reference no. (or a generated fallback) so this stays a distinct,
+    // traceable line.
+    const dealerName = dealers.find((d) => d.id === form.dealer_id)?.name;
+    const agencyName = agencies.find((a) => a.id === form.paid_at_agency_id)?.name;
+    const voucherNo = form.reference_no?.trim() || `PMT-${paymentRow.id}`;
+    const amount = parseFloat(form.amount);
+
+    const ledgerInserts = [];
+    if (!isAgencyOnly) {
+      ledgerInserts.push(
+        supabase.from("ledger_transactions").insert({
+          dealer_id: form.dealer_id,
+          voucher_no: voucherNo,
+          payment_id: paymentRow.id,
+          type: "credit",
+          amount,
+          description: `Payment received — ${form.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${form.remarks ? ` · ${form.remarks}` : ""}`,
+          ...(form.paid_on ? { created_at: form.paid_on } : {}),
+        })
+      );
+    }
+
+    if (form.paid_at_agency_id) {
+      ledgerInserts.push(
+        supabase.from("agency_ledger_transactions").insert({
+          agency_id: form.paid_at_agency_id,
+          voucher_no: voucherNo,
+          payment_id: paymentRow.id,
+          type: "credit",
+          amount,
+          description: isAgencyOnly
+            ? `Payment received — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`
+            : `Payment collected on behalf of ${dealerName || "dealer"} — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`,
+          ...(form.paid_on ? { created_at: form.paid_on } : {}),
+        })
+      );
+    }
+
+    const ledgerResults = await Promise.all(ledgerInserts);
+    const ledgerError = ledgerResults.find((r) => r.error)?.error;
+
+    setSaving(false);
+    if (ledgerError) {
+      setToast("Payment saved, but ledger sync failed: " + ledgerError.message);
+    } else if (isAgencyOnly) {
+      setToast(`Payment recorded — ${agencyName || "agency"} ledger updated`);
+    } else {
+      setToast(`Payment recorded — ledger entry & receipt generated${agencyName ? ` (dealer & ${agencyName} ledgers updated)` : ""}`);
+    }
+    setForm({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "", paid_on: "" });
+    loadRecent();
+    loadAllPayments();
+  };
+
+  // Admin-only: deleting a payment also removes the ledger entries it
+  // posted. Matches by payment_id (set on every payment going forward) and
+  // falls back to voucher_no (the payment's reference no., or a PMT-<id>
+  // fallback) for payments recorded before payment_id existed. Unlike the
+  // previous version, this checks what actually got deleted — a delete
+  // that matches zero rows doesn't error, so silently trusting it is how
+  // a payment could disappear while its ledger entry stayed behind.
+  // Core delete logic, shared between the single "Delete" button and the
+  // "All Receipts & Payments" bulk-select delete below. Returns a plain
+  // {ok, message} instead of touching setToast directly, so the bulk path
+  // can collect per-row results into one summary instead of firing a toast
+  // per payment.
+  const deletePaymentAndLedger = async (p) => {
+    const voucherNo = p.reference_no?.trim() || `PMT-${p.id}`;
+
+    const deleteLedgerRows = async (table, entityCol, entityId) => {
+      let { data, error } = await supabase.from(table).delete().eq("payment_id", p.id).select("id");
+      if (!error && (!data || data.length === 0)) {
+        // Pre-payment_id row — fall back to the old voucher_no match.
+        ({ data, error } = await supabase.from(table).delete().eq(entityCol, entityId).eq("voucher_no", voucherNo).select("id"));
+      }
+      return { data, error };
     };
-  }, [refreshUnreadChats]);
 
-  const postSystemMessage = async (text, applicationId = null) => {
-    try {
-      const thread = await getOrCreateThread({ dealerId: dealer.id, applicationId });
-      await sendMessage({ threadId: thread.id, sender: { ...identity, body: text } });
-      sendPush({ targetType: "all_staff", title: identity?.name || "New message", body: text, data: { kind: "chat" } });
-    } catch {
-      // Best-effort — a missed system note shouldn't block the flow that triggered it.
+    // Only the side(s) this payment actually posted to are required to
+    // match — a pure Agency payment (p.dealer_id null) never had a dealer
+    // ledger row to begin with, so there's nothing to find there.
+    const dealerResult = p.dealer_id
+      ? await deleteLedgerRows("ledger_transactions", "dealer_id", p.dealer_id)
+      : { data: [], error: null, skipped: true };
+    const agencyResult = p.paid_at_agency_id
+      ? await deleteLedgerRows("agency_ledger_transactions", "agency_id", p.paid_at_agency_id)
+      : { data: [], error: null, skipped: true };
+
+    if (dealerResult.error || agencyResult.error) {
+      return { ok: false, message: "Failed to remove ledger entries: " + (dealerResult.error || agencyResult.error).message + " — payment was NOT deleted." };
     }
-  };
-
-  const visibleTabs = identity?.type === "dealer" ? [...TABS, "Staff"] : TABS;
-  const [dark, toggleDark] = useDarkMode();
-  const [passkeyMsg, setPasskeyMsg] = useState("");
-  const [photoUrl, setPhotoUrl] = useState(null);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const photoInputRef = useRef(null);
-
-  // Load the current photo for whichever identity is logged in — the
-  // dealer owner, or one of their sub-staff logins.
-  useEffect(() => {
-    (async () => {
-      const table = identity?.type === "dealer_staff" ? "dealer_staff" : "dealers";
-      const id = identity?.type === "dealer_staff" ? identity.id : dealer.id;
-      if (!id) return;
-      const { data } = await supabase.from(table).select("photo_url").eq("id", id).maybeSingle();
-      setPhotoUrl(data?.photo_url || null);
-    })();
-  }, [identity, dealer.id]);
-
-  const uploadProfilePhoto = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setUploadingPhoto(true);
-    try {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData?.user?.id;
-      if (!uid) return;
-      const table = identity?.type === "dealer_staff" ? "dealer_staff" : "dealers";
-      const id = identity?.type === "dealer_staff" ? identity.id : dealer.id;
-      const ext = file.name.split(".").pop();
-      const path = `${uid}/dealer-${id}-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from("profile-photos").upload(path, file, { upsert: true });
-      if (upErr) throw upErr;
-      const { data: pub } = supabase.storage.from("profile-photos").getPublicUrl(path);
-      await supabase.from(table).update({ photo_url: pub.publicUrl }).eq("id", id);
-      setPhotoUrl(pub.publicUrl);
-    } catch (err) {
-      setToast("Couldn't upload photo: " + err.message);
-    } finally {
-      setUploadingPhoto(false);
+    const dealerOk = dealerResult.skipped || (dealerResult.data && dealerResult.data.length > 0);
+    const agencyOk = agencyResult.skipped || (agencyResult.data && agencyResult.data.length > 0);
+    if (!dealerOk || !agencyOk) {
+      return { ok: false, message: "Couldn't find this payment's ledger entry to remove — payment was NOT deleted." };
     }
+
+    const { error } = await supabase.from("payments").delete().eq("id", p.id);
+    if (error) return { ok: false, message: "Failed to delete: " + error.message };
+    return { ok: true, message: "" };
   };
 
-  // Registers a passkey (fingerprint/Face ID/device PIN) for the currently
-  // signed-in account so they can use "Sign in with Fingerprint / Face ID"
-  // on the login screen afterward. Experimental Supabase API — see the note
-  // in lib/supabase.js. Needs Passkeys enabled + this domain set as the
-  // Relying Party in Supabase Dashboard first, or this will error out.
-  const setUpPasskey = async () => {
-    setPasskeyMsg("Follow your device's prompt…");
-    const { error } = await supabase.auth.registerPasskey();
-    setPasskeyMsg(error ? "Couldn't set up: " + error.message : "Fingerprint / Face ID login is set up on this device.");
+  const deletePayment = async (p) => {
+    const payerName = p.dealers?.name || p.paid_at_agency?.name || "this payer";
+    if (!window.confirm(`Delete this ₹${Number(p.amount).toLocaleString("en-IN")} payment from ${payerName}? This also removes its ledger entries.`)) return;
+    const result = await deletePaymentAndLedger(p);
+    setToast(result.ok ? "Payment deleted" : result.message);
+    loadRecent();
+    loadAllPayments();
   };
+
+  // Deletes every payment in `ids` (payment rows from allPayments) one at a
+  // time — sequential, not Promise.all, so one failure doesn't race with
+  // another payment's ledger cleanup on the same dealer/agency ledger.
+  const bulkDeletePayments = async (ids) => {
+    const rows = allPayments.filter((p) => ids.includes(p.id));
+    if (!rows.length) return;
+    if (!window.confirm(`Delete ${rows.length} selected payment${rows.length !== 1 ? "s" : ""}? This also removes their ledger entries. This cannot be undone.`)) return;
+    let succeeded = 0;
+    const failures = [];
+    for (const p of rows) {
+      const result = await deletePaymentAndLedger(p);
+      if (result.ok) succeeded++;
+      else failures.push(`₹${p.amount} (${p.dealers?.name || p.paid_at_agency?.name || "—"}): ${result.message}`);
+    }
+    setToast(
+      failures.length
+        ? `Deleted ${succeeded}/${rows.length}. Failed: ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`
+        : `Deleted ${succeeded} payment${succeeded !== 1 ? "s" : ""}`
+    );
+    loadRecent();
+    loadAllPayments();
+  };
+
+  // Admin-only: saves an edited amount/mode/reference/remarks and updates
+  // the matching ledger entry — payment_id first, voucher_no fallback for
+  // pre-payment_id rows (see deletePayment above for why the fallback
+  // exists and why zero-row results are treated as a failure, not success).
+  const savePaymentEdit = async (edited) => {
+    const original = editingPayment;
+    const oldVoucherNo = original.reference_no?.trim() || `PMT-${original.id}`;
+    const newVoucherNo = edited.reference_no?.trim() || `PMT-${original.id}`;
+    const { error } = await supabase
+      .from("payments")
+      .update({
+        amount: parseFloat(edited.amount),
+        payment_mode: edited.payment_mode,
+        reference_no: edited.reference_no || null,
+        remarks: edited.remarks || null,
+      })
+      .eq("id", original.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    const agencyName = agencies.find((a) => a.id === original.paid_at_agency_id)?.name;
+
+    const updateLedgerRow = async (table, entityCol, entityId, patch) => {
+      let { data, error } = await supabase.from(table).update(patch).eq("payment_id", original.id).select("id");
+      if (!error && (!data || data.length === 0)) {
+        ({ data, error } = await supabase.from(table).update(patch).eq(entityCol, entityId).eq("voucher_no", oldVoucherNo).select("id"));
+      }
+      return { data, error };
+    };
+
+    const dealerResult = original.dealer_id
+      ? await updateLedgerRow("ledger_transactions", "dealer_id", original.dealer_id, {
+          amount: parseFloat(edited.amount),
+          voucher_no: newVoucherNo,
+          description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
+        })
+      : { data: [], error: null, skipped: true };
+    let agencyResult = { data: [], error: null, skipped: true };
+    if (original.paid_at_agency_id) {
+      agencyResult = await updateLedgerRow("agency_ledger_transactions", "agency_id", original.paid_at_agency_id, {
+        amount: parseFloat(edited.amount),
+        voucher_no: newVoucherNo,
+      });
+    }
+
+    if (dealerResult.error || agencyResult.error) {
+      setToast("Payment updated, but its ledger entry failed to sync: " + (dealerResult.error || agencyResult.error).message);
+    } else if (!(dealerResult.skipped || (dealerResult.data && dealerResult.data.length > 0)) || !(agencyResult.skipped || (agencyResult.data && agencyResult.data.length > 0))) {
+      setToast("Payment updated, but couldn't find its ledger entry to update — please check the ledger manually.");
+    } else {
+      setToast("Payment updated");
+    }
+    setEditingPayment(null);
+    loadRecent();
+    loadAllPayments();
+  };
+
+  const payerNameOf = (p) => p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—");
+
+  const toggleRecentSort = (key) => {
+    if (recentSortKey === key) setRecentSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setRecentSortKey(key); setRecentSortDir(key === "amount" ? "desc" : "asc"); }
+  };
+
+  const visibleRecent = recent
+    .filter((p) => {
+      if (!recentQuery.trim()) return true;
+      const q = recentQuery.trim().toLowerCase();
+      const haystack = [payerNameOf(p), p.applications?.draft_code, p.reference_no, p.remarks, p.payment_mode].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q);
+    })
+    .sort((a, b) => {
+      let av, bv;
+      if (recentSortKey === "amount") { av = Number(a.amount) || 0; bv = Number(b.amount) || 0; }
+      else if (recentSortKey === "payer") { av = payerNameOf(a).toLowerCase(); bv = payerNameOf(b).toLowerCase(); }
+      else { av = a.created_at; bv = b.created_at; }
+      if (av < bv) return recentSortDir === "asc" ? -1 : 1;
+      if (av > bv) return recentSortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+
+  const RecentSortTh = ({ label, sortKeyName, align = "left" }) => (
+    <th
+      onClick={() => toggleRecentSort(sortKeyName)}
+      className={`px-3 py-2 text-${align} cursor-pointer select-none whitespace-nowrap`}
+    >
+      {label} {recentSortKey === sortKeyName && (recentSortDir === "asc" ? "↑" : "↓")}
+    </th>
+  );
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950">
-      <header className="bg-[#0f1b3d] text-white px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <input
-            type="file"
-            accept="image/*"
-            ref={photoInputRef}
-            className="hidden"
-            onChange={uploadProfilePhoto}
-          />
-          <button
-            type="button"
-            onClick={() => photoInputRef.current?.click()}
-            title="Change profile photo"
-            className="w-11 h-11 shrink-0 rounded-full bg-white/10 flex items-center justify-center text-sm font-semibold overflow-hidden relative group"
-          >
-            {photoUrl ? (
-              <img src={photoUrl} alt="" className="w-full h-full object-cover" />
-            ) : (
-              (identity?.name || dealer.name || "?").split(" ").map((s) => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()
-            )}
-            <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[9px]">
-              {uploadingPhoto ? "…" : "Edit"}
-            </span>
-          </button>
-          <div>
-            <p className="font-bold text-lg">{dealer.name}</p>
-            <p className="text-slate-300 text-xs">
-              Dealer Portal · Code {dealer.code}{identity?.type === "dealer_staff" ? ` · ${identity.name}` : ""}
-            </p>
+    <div className="flex flex-col gap-6">
+      <div className="flex justify-end">
+        <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
+      </div>
+
+      <Card title="Record New Payment">
+        <div className="grid gap-x-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Payment Type" required>
+            <Select value={form.payment_type} onChange={set("payment_type")}>
+              <option value="dealer">Dealer</option>
+              <option value="agency">Agency (no dealer involved)</option>
+            </Select>
+          </Field>
+          {form.payment_type === "dealer" ? (
+            <>
+              <Field label="Dealer" required>
+                <Select value={form.dealer_id} onChange={set("dealer_id")}>
+                  <option value="">Select Dealer</option>
+                  {dealers.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                </Select>
+              </Field>
+              <Field label="Application (optional)">
+                <Select value={form.application_id} onChange={set("application_id")} disabled={!form.dealer_id}>
+                  <option value="">— General payment, not tied to one application —</option>
+                  {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
+                </Select>
+              </Field>
+            </>
+          ) : (
+            <Field label="Agency" required>
+              <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
+                <option value="">Select Agency</option>
+                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+              </Select>
+            </Field>
+          )}
+          <Field label="Date">
+            <Input type="date" value={form.paid_on} onChange={set("paid_on")} />
+          </Field>
+          <Field label="Amount (₹)" required>
+            <Input type="number" value={form.amount} onChange={set("amount")} />
+          </Field>
+          <Field label="Payment Mode" required>
+            <Select value={form.payment_mode} onChange={set("payment_mode")}>
+              <option>Cash</option><option>UPI</option><option>Bank</option><option>Cheque</option>
+            </Select>
+          </Field>
+          <Field label="Reference No.">
+            <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
+          </Field>
+          {form.payment_type === "dealer" && (
+            <Field label="Paid At (Agency)">
+              <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
+                <option value="">— Not via an agency —</option>
+                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+              </Select>
+            </Field>
+          )}
+          <div className="sm:col-span-2 lg:col-span-4">
+            <Field label="Remarks">
+              <Input value={form.remarks} onChange={set("remarks")} />
+            </Field>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <a
-            href={APK_PATH}
-            download
-            title="Download Android App"
-            aria-label="Download Android App"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
-          >
-            <Download size={16} />
-          </a>
-          <button
-            onClick={setUpPasskey}
-            title="Set up Fingerprint / Face ID login on this device"
-            aria-label="Set up fingerprint login"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
-          >
-            <Fingerprint size={16} />
-          </button>
-          <button
-            onClick={toggleDark}
-            title={dark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-label="Toggle dark mode"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
-          >
-            {dark ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
-          <button
-            onClick={onLogout}
-            className="text-sm font-semibold bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg"
-          >
-            Logout
-          </button>
-        </div>
-      </header>
-      {passkeyMsg && (
-        <div className="bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 text-sm px-6 py-2 flex items-center justify-between">
-          <span>{passkeyMsg}</span>
-          <button onClick={() => setPasskeyMsg("")} className="text-blue-400 hover:text-blue-600">×</button>
-        </div>
-      )}
+        <PrimaryButton onClick={submit} disabled={saving}>
+          {saving ? "Saving..." : "Save Payment & Generate Receipt"}
+        </PrimaryButton>
+      </Card>
 
-      <main className="max-w-5xl mx-auto p-6">
-        <div className="grid sm:grid-cols-3 gap-4 mb-6">
-          <Card title="Wallet Balance">
-            <div className="flex items-center justify-between">
-              <p className="text-2xl font-bold text-emerald-600">
-                ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
-              </p>
-              <GhostButton onClick={() => setShowTopUp(true)}>Top Up</GhostButton>
-            </div>
-          </Card>
-          <Card title="Running Balance">
-            <p className={`text-2xl font-bold ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
-              {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
-            </p>
-          </Card>
-          <Card title="Credit Limit">
-            <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">
-              ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
-            </p>
-          </Card>
-        </div>
+      <AllPaymentsTable
+        payments={allPayments}
+        loading={allLoading}
+        query={allQuery}
+        setQuery={setAllQuery}
+        dateFrom={allDateFrom}
+        setDateFrom={setAllDateFrom}
+        dateTo={allDateTo}
+        setDateTo={setAllDateTo}
+        isAdmin={isAdmin}
+        onBulkDelete={bulkDeletePayments}
+        onEdit={setEditingPayment}
+        onDelete={deletePayment}
+      />
 
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
-          <div className="flex flex-wrap gap-2">
-            {visibleTabs.map((t) => (
-              <button
-                key={t}
-                onClick={() => { setTab(t); if (t === "Call/Chat") refreshUnreadChats(); }}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5 ${
-                  tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-                }`}
-              >
-                {t}
-                {t === "Call/Chat" && unreadChats > 0 && (
-                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                    {unreadChats}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-          <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center">+ New Application</PrimaryButton>
-        </div>
-
-        {tab === "Applications" && (
-          <DealerApplications
-            dealerId={dealer.id}
-            refreshKey={refreshKey}
-            onSelect={(app) => setDocsForApp(app)}
-            onChat={(app) => setChatApp({ id: app.id, label: `${app.draft_code} — ${app.applicant_name}` })}
-          />
-        )}
-        {tab === "Call/Chat" && (
-          <div className="space-y-5">
-            <StaffDirectory call={call} />
-            <DealerChats dealerId={dealer.id} identity={identity} onMessage={refreshUnreadChats} />
-          </div>
-        )}
-        {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
-        {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
-      </main>
-
-      {showNew && (
-        <NewApplicationModal
-          dealer={dealer}
-          onClose={() => setShowNew(false)}
-          onCreated={(draftCode, applicantName, applicationId, serviceId) => {
-            setShowNew(false);
-            setTab("Applications");
-            setRefreshKey((k) => k + 1);
-            setToast(`Application ${draftCode} submitted as draft`);
-            postSystemMessage(`New application submitted: ${draftCode} — ${applicantName}. It's now showing under Draft Submitted.`);
-            setDocsForApp({ id: applicationId, applicant_name: applicantName, draft_code: draftCode, service_id: serviceId });
-          }}
+      {editingPayment && (
+        <EditPaymentModal
+          payment={editingPayment}
+          onClose={() => setEditingPayment(null)}
+          onSave={savePaymentEdit}
         />
       )}
-
-      {docsForApp && (
-        <ApplicationDocsModal
-          application={docsForApp}
-          onUploaded={(docName) => postSystemMessage(`Document "${docName}" uploaded for ${docsForApp.draft_code} — ${docsForApp.applicant_name}.`, docsForApp.id)}
-          onClose={() => setDocsForApp(null)}
-        />
-      )}
-
-      {chatApp && (
-        <ApplicationChatModal
-          dealerId={dealer.id}
-          applicationId={chatApp.id}
-          applicationLabel={chatApp.label}
-          identity={identity}
-          onClose={() => setChatApp(null)}
-        />
-      )}
-
-      {showTopUp && <TopUpModal dealer={dealer} onClose={() => setShowTopUp(false)} />}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
 
-      <CommsWindow variant="dealer" dealerId={dealer.id} dealerName={dealer.name} identity={identity} call={call} />
+      {showImport && (
+        <PaymentsImportModal
+          dealers={dealers}
+          agencies={agencies}
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            setShowImport(false);
+            loadRecent();
+            loadAllPayments();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function NewApplicationModal({ dealer, onClose, onCreated }) {
-  const [services, setServices] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [scanning, setScanning] = useState(false); // QR
-  const [ocrScanning, setOcrScanning] = useState(false);
-  const [ocrProgress, setOcrProgress] = useState(0);
-  const [scanNote, setScanNote] = useState("");
-  const qrInputRef = useRef(null);
-  const ocrInputRef = useRef(null);
-  const [f, setF] = useState({
-    service_id: "", applicant_name: "", father_husband_name: "",
-    date_of_birth: "", mobile: "", address: "", police_station: "", stay_since: "",
-  });
-  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
-  const selectedService = services.find((s) => s.id === f.service_id);
+// Full history of every payment (receipt) recorded — search + date range,
+// entirely client-side over what Payments() already fetched via
+// loadAllPayments(). Separate from "Recent Payments" above, which is
+// intentionally just the last 20 for a quick glance.
+// Sortable column header for AllPaymentsTable — same click-to-sort,
+// click-again-to-flip pattern as RecentSortTh above, just a separate
+// component since it takes its sort state as props instead of closing
+// over local state (AllPaymentsTable owns its own sort state, independent
+// of the Recent Payments list's).
+function AllSortTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "left" }) {
+  return (
+    <th
+      onClick={() => onSort(sortKeyName)}
+      className={`px-3 py-2 text-${align} cursor-pointer select-none whitespace-nowrap`}
+    >
+      {label} {sortKey === sortKeyName && (sortDir === "asc" ? "↑" : "↓")}
+    </th>
+  );
+}
 
-  const scanAadhaar = async (file) => {
-    if (!file) return;
-    setScanning(true);
-    setScanNote("");
-    setError("");
-    try {
-      const result = await scanAadhaarQr(file);
-      setF((s) => ({
-        ...s,
-        applicant_name: result.name || s.applicant_name,
-        father_husband_name: result.fatherHusbandName || s.father_husband_name,
-        address: result.address || s.address,
-      }));
-      // The QR only carries a year of birth, not the full date — never
-      // silently fabricate a day/month onto official RTO paperwork, so we
-      // just tell the dealer what year to look for and leave the actual
-      // date field for them to set.
-      setScanNote(
-        result.yearOfBirth
-          ? `Filled from Aadhaar QR. Year of birth on the card: ${result.yearOfBirth} — please set the exact Date of Birth below.`
-          : "Filled from Aadhaar QR. Please double-check the details below."
-      );
-    } catch (e) {
-      setError(e.message || "Couldn't read the Aadhaar QR");
-    } finally {
-      setScanning(false);
-      if (qrInputRef.current) qrInputRef.current.value = "";
-    }
+function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDateFrom, dateTo, setDateTo, isAdmin, onBulkDelete, onEdit, onDelete }) {
+  const [selected, setSelected] = useState(new Set());
+  const [sortKey, setSortKey] = useState("date");
+  const [sortDir, setSortDir] = useState("desc");
+  const payerName = (p) => p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—");
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "amount" || key === "date" ? "desc" : "asc"); }
   };
 
-  const scanFromImage = async (file) => {
-    if (!file) return;
-    setOcrScanning(true);
-    setOcrProgress(0);
-    setScanNote("");
-    setError("");
-    try {
-      const result = await scanAadhaarImage(file, setOcrProgress);
-      setF((s) => ({
-        ...s,
-        applicant_name: result.name || s.applicant_name,
-        father_husband_name: result.fatherHusbandName || s.father_husband_name,
-        address: result.address || s.address,
-        date_of_birth: result.dateOfBirth || s.date_of_birth,
-      }));
-      const missing = [!result.name && "name", !result.dateOfBirth && "DOB", !result.address && "address"].filter(Boolean);
-      setScanNote(
-        missing.length
-          ? `Filled what could be read from the image. Couldn't find: ${missing.join(", ")} — please fill those in and double-check the rest.`
-          : "Filled from the image — please double-check everything before submitting."
-      );
-    } catch (e) {
-      setError(e.message || "Couldn't read this image");
-    } finally {
-      setOcrScanning(false);
-      setOcrProgress(0);
-      if (ocrInputRef.current) ocrInputRef.current.value = "";
-    }
-  };
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, age_limit_required, min_age").order("parent_service");
-      setServices(data || []);
-    })();
-  }, []);
-
-  const submit = async () => {
-    if (!f.service_id || !f.applicant_name.trim()) {
-      setError("Service and Applicant Name are required");
-      return;
-    }
-    const ageErr = validateAgeForService(f.date_of_birth, selectedService);
-    if (ageErr) {
-      setError(ageErr);
-      return;
-    }
-    setSaving(true);
-    setError("");
-    const { data: draftCode, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: dealer.id });
-    if (codeError) {
-      setSaving(false);
-      setError("Failed: " + codeError.message);
-      return;
-    }
-    const { data: newApp, error: insertError } = await supabase
-      .from("applications")
-      .insert({
-        draft_code: draftCode,
-        dealer_id: dealer.id,
-        service_id: f.service_id,
-        applicant_name: f.applicant_name.trim(),
-        father_husband_name: f.father_husband_name || null,
-        date_of_birth: f.date_of_birth || null,
-        mobile: f.mobile || null,
-        address: f.address || null,
-        police_station: f.police_station || null,
-        stay_since: f.stay_since || null,
-        status: "Draft Submitted",
-      })
-      .select()
-      .single();
-    if (insertError) {
-      setSaving(false);
-      setError("Failed: " + insertError.message);
-      return;
-    }
-
-    // Copy this service's required-document list onto the new application
-    // so the dealer immediately sees what needs to be uploaded.
-    const { data: reqDocs, error: reqDocsError } = await supabase
-      .from("service_documents")
-      .select("name, mandatory, post_approval")
-      .eq("service_id", f.service_id);
-    if (reqDocsError) {
-      setSaving(false);
-      setError("Application created, but couldn't load its required documents: " + reqDocsError.message);
-      onCreated(draftCode, f.applicant_name.trim(), newApp.id, f.service_id);
-      return;
-    }
-    if (reqDocs?.length) {
-      const { error: docsInsertError } = await supabase.from("application_documents").upsert(
-        reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
-        { onConflict: "application_id,name", ignoreDuplicates: true }
-      );
-      if (docsInsertError) {
-        setSaving(false);
-        setError("Application created, but couldn't set up its documents: " + docsInsertError.message);
-        onCreated(draftCode, f.applicant_name.trim(), newApp.id, f.service_id);
-        return;
+  const filtered = payments
+    .filter((p) => {
+      if (query.trim()) {
+        const q = query.trim().toLowerCase();
+        const haystack = [payerName(p), p.applications?.draft_code, p.reference_no, p.remarks, p.payment_mode].filter(Boolean).join(" ").toLowerCase();
+        if (!haystack.includes(q)) return false;
       }
-    }
+      const paidDate = p.created_at?.slice(0, 10);
+      if (dateFrom && paidDate < dateFrom) return false;
+      if (dateTo && paidDate > dateTo) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      let av, bv;
+      if (sortKey === "amount") { av = Number(a.amount) || 0; bv = Number(b.amount) || 0; }
+      else if (sortKey === "payer") { av = payerName(a).toLowerCase(); bv = payerName(b).toLowerCase(); }
+      else if (sortKey === "application") { av = (a.applications?.draft_code || "").toLowerCase(); bv = (b.applications?.draft_code || "").toLowerCase(); }
+      else if (sortKey === "mode") { av = (a.payment_mode || "").toLowerCase(); bv = (b.payment_mode || "").toLowerCase(); }
+      else if (sortKey === "reference") { av = (a.reference_no || "").toLowerCase(); bv = (b.reference_no || "").toLowerCase(); }
+      else { av = a.created_at || ""; bv = b.created_at || ""; }
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
 
-    setSaving(false);
-    onCreated(draftCode, f.applicant_name.trim(), newApp.id, f.service_id);
+  // Selection is cleared whenever the visible set changes (new search/date
+  // filter) so it can never silently hold onto an id that's since scrolled
+  // out of view — "select all" always means "all of what you're looking at
+  // right now", not some stale set from before you changed the filter.
+  useEffect(() => { setSelected(new Set()); }, [query, dateFrom, dateTo]);
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.id));
+  const toggleSelectAll = () => {
+    setSelected(allVisibleSelected ? new Set() : new Set(filtered.map((p) => p.id)));
+  };
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const total = filtered.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+  const exportCSV = () => {
+    const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = ["Date", "Payer", "Type", "Application", "Amount", "Mode", "Reference No", "Paid At Agency", "Remarks"];
+    const lines = [header.join(",")];
+    filtered.forEach((p) => {
+      lines.push([
+        escapeCsv(new Date(p.created_at).toLocaleDateString()),
+        escapeCsv(p.dealers?.name || p.paid_at_agency?.name || ""),
+        escapeCsv(p.dealer_id ? "Dealer" : "Agency"),
+        escapeCsv(p.applications?.draft_code || ""),
+        escapeCsv(p.amount),
+        escapeCsv(p.payment_mode),
+        escapeCsv(p.reference_no || ""),
+        escapeCsv(p.dealer_id ? (p.paid_at_agency?.name || "") : ""),
+        escapeCsv(p.remarks || ""),
+      ].join(","));
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "all-payments.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <Modal title="New Application" onClose={onClose}>
-      <div className="mb-4">
-        <p className="text-xs font-semibold text-slate-500 mb-1.5">Fill from Aadhaar (optional)</p>
-        <div className="grid grid-cols-2 gap-2">
-          {isAadhaarQrScanSupported() && (
-            <>
-              <input ref={qrInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => scanAadhaar(e.target.files?.[0])} />
-              <button
-                type="button"
-                onClick={() => qrInputRef.current?.click()}
-                disabled={scanning || ocrScanning}
-                className="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-blue-300 hover:bg-blue-50 text-blue-700 font-semibold py-3 rounded-xl disabled:opacity-50 text-sm"
-              >
-                <ScanLine size={18} />
-                {scanning ? "Reading QR…" : "Scan QR"}
-              </button>
-            </>
-          )}
-          <input ref={ocrInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => scanFromImage(e.target.files?.[0])} />
+    <Card title="All Receipts & Payments">
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <Field label="Search">
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Dealer, agency, application, reference…" />
+        </Field>
+        <Field label="From">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        </Field>
+        <Field label="To">
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </Field>
+        <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
+        {isAdmin && selected.size > 0 && (
           <button
-            type="button"
-            onClick={() => ocrInputRef.current?.click()}
-            disabled={scanning || ocrScanning}
-            className={`flex flex-col items-center justify-center gap-1 border-2 border-dashed border-purple-300 hover:bg-purple-50 text-purple-700 font-semibold py-3 rounded-xl disabled:opacity-50 text-sm ${!isAadhaarQrScanSupported() ? "col-span-2" : ""}`}
+            onClick={() => onBulkDelete(Array.from(selected))}
+            className="px-3 py-2 rounded-lg text-sm font-semibold bg-rose-600 hover:bg-rose-700 text-white"
           >
-            <ScanText size={18} />
-            {ocrScanning ? `Reading image… ${ocrProgress}%` : "Fill from Image"}
+            Delete Selected ({selected.size})
           </button>
-        </div>
-        {scanNote && <p className="text-xs text-emerald-600 mt-1.5">{scanNote}</p>}
+        )}
       </div>
-      <Field label="Service" required>
-        <SearchableSelect
-          value={f.service_id}
-          options={services.map((s) => ({ id: s.id, name: `${s.parent_service}${s.short_name ? ` (${s.short_name})` : ""}` }))}
-          onChange={(id) => setF((s) => ({ ...s, service_id: id }))}
-          placeholder="Search or select a service…"
-        />
-      </Field>
-      <Field label="Applicant Name" required><Input value={f.applicant_name} onChange={set("applicant_name")} /></Field>
-      <Field label="Father / Husband Name"><Input value={f.father_husband_name} onChange={set("father_husband_name")} /></Field>
-      <Field label="Date of Birth">
-        <Input type="date" value={f.date_of_birth} onChange={set("date_of_birth")}
-          className={ageHighlightClass(f.date_of_birth) ? "border-amber-400" : ""} />
-      </Field>
-      <Field label="Mobile"><Input value={f.mobile} onChange={set("mobile")} /></Field>
-      <Field label="Address"><Input value={f.address} onChange={set("address")} /></Field>
-      {selectedService?.pcc_required && (
-        <div className="grid sm:grid-cols-2 gap-x-4 -mt-1 mb-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30">
-          <p className="sm:col-span-2 text-xs text-blue-700 dark:text-blue-300 mb-1">
-            This service requires a PCC — fill these in now and they'll auto-fill the PCC request letter later.
+
+      {loading ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-6 text-center">Loading…</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-6 text-center">No payments match this filter.</p>
+      ) : (
+        <>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mb-2">
+            {filtered.length} payment{filtered.length !== 1 ? "s" : ""} · ₹{total.toLocaleString("en-IN")} total
           </p>
-          <Field label="Police Station">
-            <SearchableSelect
-              value={f.police_station}
-              options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
-              onChange={(name) => setF((s) => ({ ...s, police_station: name }))}
-              placeholder="Search police station…"
-            />
-          </Field>
-          <Field label="Staying at Address Since"><Input type="date" value={f.stay_since} onChange={set("stay_since")} /></Field>
-        </div>
+          <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-lg max-h-[480px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500 sticky top-0">
+                <tr>
+                  {isAdmin && (
+                    <th className="px-3 py-2 text-left w-8">
+                      <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} />
+                    </th>
+                  )}
+                  <AllSortTh label="Date" sortKeyName="date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Payer" sortKeyName="payer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Application" sortKeyName="application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Mode" sortKeyName="mode" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Reference" sortKeyName="reference" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Amount" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                  {isAdmin && <th className="px-3 py-2 text-left">Actions</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((p) => (
+                  <tr key={p.id} className="border-t border-slate-100 dark:border-slate-800">
+                    {isAdmin && (
+                      <td className="px-3 py-2">
+                        <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleOne(p.id)} />
+                      </td>
+                    )}
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{new Date(p.created_at).toLocaleDateString()}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-700 dark:text-slate-300">{payerName(p)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.applications?.draft_code || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.payment_mode}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.reference_no || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right font-semibold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</td>
+                    {isAdmin && (
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <button onClick={() => onEdit(p)} className="text-xs font-semibold text-blue-600 hover:underline mr-3">Edit</button>
+                        <button onClick={() => onDelete(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
-      {error && <p className="text-rose-500 text-xs mb-3">{error}</p>}
+    </Card>
+  );
+}
+
+// Bulk CSV import for Payments — mirrors the Applications import feature:
+// parse, resolve names to IDs, preview with per-row validation, then insert
+// only the valid+included rows. Each imported payment gets the exact same
+// ledger postings (dealer credit, + agency credit if "Paid At Agency" is
+// filled in) as a normal single payment via the form above, so bulk-
+// imported payments show up in Ledger identically to manually entered ones.
+//
+// Expected CSV headers (case-insensitive, flexible spacing): Dealer,
+// Application (optional — draft code), Amount, Payment Mode (optional,
+// defaults to Cash), Reference No (optional), Paid At Agency (optional),
+// Remarks (optional).
+function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
+  const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+
+  // A ready-to-fill CSV with the exact headers this importer looks for,
+  // plus two example rows — one normal Dealer payment, one pure Agency
+  // payment (Dealer left blank) — so both patterns are obvious at a glance
+  // rather than only explained in the paragraph above.
+  const downloadTemplate = () => {
+    const header = ["Dealer", "Amount", "Application", "Payment Mode", "Reference No", "Date", "Paid At Agency", "Remarks"];
+    const sampleDealer = [dealers[0]?.name || "ABC Motors", "1900", "", "UPI", "UPI-REF-123", "", "", "LL fee"];
+    const sampleAgency = ["", "5000", "", "Cash", "", "", agencies[0]?.name || "Agency Name", "Cash collected at counter"];
+    const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [header, sampleDealer, sampleAgency].map((row) => row.map(escapeCsv).join(","));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "payments-import-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleFile = (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    setError("");
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const parsed = parseCSV(String(e.target.result));
+
+      // Fetch every existing non-empty reference_no once, so each row can
+      // be checked against real duplicates without a query per row.
+      const { data: existingRefs } = await supabase.from("payments").select("reference_no").not("reference_no", "is", null);
+      const existingRefSet = new Set((existingRefs || []).map((r) => r.reference_no));
+      const seenInThisFile = new Set(); // catches two rows in the SAME csv reusing one reference no.
+
+      const built = parsed.map((raw) => {
+        const get = (...keys) => {
+          for (const k of keys) {
+            const hit = Object.keys(raw).find((h) => h.toLowerCase().replace(/[^a-z0-9]/g, "") === k);
+            if (hit && raw[hit]) return raw[hit];
+          }
+          return "";
+        };
+        const dealerRaw = get("dealer", "dealername", "dealercode");
+        const applicationRaw = get("application", "draftcode", "draftid");
+        const amountRaw = get("amount");
+        const modeRaw = get("paymentmode", "mode") || "Cash";
+        const referenceRaw = get("referenceno", "reference", "utr", "voucherno", "vouchernumber", "voucher");
+        const agencyRaw = get("paidatagency", "agency");
+        const remarksRaw = get("remarks", "remark", "narration", "description");
+        const dateRaw = get("date", "paymentdate", "paidon", "paiddate");
+        const paidOn = dateRaw ? ddmmyyyyToISO(dateRaw) : null;
+
+        const dealer = findByLabel(dealers, dealerRaw, ["name", "code", "short_name"]);
+        const agency = agencyRaw ? findByLabel(agencies, agencyRaw, ["name", "code"]) : null;
+        const amount = parseFloat(amountRaw);
+
+        const errors = [];
+        // A row is valid if it has a payer — either a Dealer, or (when
+        // Dealer is left blank on purpose) an Agency standing in as a pure
+        // Agency payment. Only actually error if dealerRaw was given but
+        // didn't match anything, or if BOTH are missing entirely.
+        if (dealerRaw && !dealer) errors.push(`Dealer "${dealerRaw}" not found`);
+        if (!dealerRaw && !agencyRaw) errors.push("Either Dealer or Agency is required");
+        if (agencyRaw && !agency) errors.push(`Agency "${agencyRaw}" not found`);
+        if (!amountRaw || Number.isNaN(amount) || amount <= 0) errors.push("Amount is missing or invalid");
+
+        if (dateRaw && !paidOn) errors.push(`Date "${dateRaw}" not recognized (use DD-MM-YYYY)`);
+
+        if (referenceRaw) {
+          if (existingRefSet.has(referenceRaw)) errors.push(`Reference "${referenceRaw}" is already recorded — looks like a duplicate`);
+          else if (seenInThisFile.has(referenceRaw)) errors.push(`Reference "${referenceRaw}" appears more than once in this file`);
+          else seenInThisFile.add(referenceRaw);
+        }
+
+        return {
+          dealerRaw, applicationRaw, agencyRaw,
+          included: errors.length === 0,
+          errors,
+          payload: {
+            dealer_id: dealer?.id,
+            dealer_name: dealer?.name,
+            agency_id: agency?.id,
+            agency_name: agency?.name,
+            application_draft_code: applicationRaw || null,
+            amount,
+            payment_mode: modeRaw,
+            reference_no: referenceRaw || null,
+            remarks: remarksRaw || null,
+            paid_on: paidOn,
+          },
+        };
+      });
+      setPreview(built);
+    };
+    reader.readAsText(file);
+  };
+
+  const toggleIncluded = (i) => setPreview((p) => p.map((r, idx) => (idx === i ? { ...r, included: !r.included } : r)));
+  const includedCount = preview.filter((r) => r.included && r.errors.length === 0).length;
+
+  const runImport = async () => {
+    const rowsToImport = preview.filter((r) => r.included && r.errors.length === 0);
+    if (!rowsToImport.length) return;
+    setImporting(true);
+    setError("");
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
+
+      let imported = 0;
+      for (const r of rowsToImport) {
+        const { payload } = r;
+
+        // Resolve an application draft code to its id, if one was given —
+        // best-effort: an unmatched code just leaves the payment untied to
+        // a specific application rather than failing the whole row.
+        // Doesn't apply at all to a pure Agency row (no dealer_id) since
+        // applications are always dealer-scoped.
+        let applicationId = null;
+        if (payload.application_draft_code && payload.dealer_id) {
+          const { data: appRow } = await supabase
+            .from("applications")
+            .select("id")
+            .eq("dealer_id", payload.dealer_id)
+            .eq("draft_code", payload.application_draft_code)
+            .maybeSingle();
+          applicationId = appRow?.id || null;
+        }
+
+        const { data: paymentRow, error: insertError } = await supabase
+          .from("payments")
+          .insert({
+            dealer_id: payload.dealer_id || null,
+            application_id: applicationId,
+            amount: payload.amount,
+            payment_mode: payload.payment_mode,
+            reference_no: payload.reference_no,
+            remarks: payload.remarks,
+            paid_at_agency_id: payload.agency_id || null,
+            received_by: staffRow?.id || null,
+            ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          setError(
+            insertError.code === "23505"
+              ? `Import stopped: reference "${payload.reference_no}" is already used by another payment.`
+              : `Import stopped at "${payload.dealer_name || payload.agency_name}" (₹${payload.amount}): ` + insertError.message
+          );
+          setImporting(false);
+          return;
+        }
+
+        const voucherNo = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
+        const ledgerInserts = [];
+        if (payload.dealer_id) {
+          ledgerInserts.push(
+            supabase.from("ledger_transactions").insert({
+              dealer_id: payload.dealer_id,
+              voucher_no: voucherNo,
+              payment_id: paymentRow.id,
+              type: "credit",
+              amount: payload.amount,
+              description: `Payment received — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+              ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
+            })
+          );
+        }
+        if (payload.agency_id) {
+          ledgerInserts.push(
+            supabase.from("agency_ledger_transactions").insert({
+              agency_id: payload.agency_id,
+              voucher_no: voucherNo,
+              payment_id: paymentRow.id,
+              type: "credit",
+              amount: payload.amount,
+              description: payload.dealer_id
+                ? `Payment collected on behalf of ${payload.dealer_name || "dealer"} — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`
+                : `Payment received — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
+              ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
+            })
+          );
+        }
+        await Promise.all(ledgerInserts);
+        imported++;
+      }
+
+      setResult({ imported, skipped: preview.length - rowsToImport.length });
+      setImporting(false);
+      onImported();
+    } catch (err) {
+      setError("Import failed: " + err.message);
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-slate-900 rounded-xl w-full max-w-4xl max-h-[85vh] overflow-y-auto p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-slate-800 dark:text-slate-100">Import Payments</h3>
+          <button onClick={onClose} className="text-slate-400 text-xl leading-none">×</button>
+        </div>
+
+        {!preview.length && (
+          <div>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+              CSV columns: <b>Dealer</b> (name or code) and <b>Amount</b> (required). Leave Dealer blank and fill in <b>Paid At Agency</b> instead
+              for a pure Agency payment (no dealer involved) — otherwise Dealer is required. Also: Application (optional — draft code),
+              Payment Mode (optional, defaults to Cash), Reference No, Date (optional, DD-MM-YYYY — defaults to today if left blank), Remarks.
+            </p>
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              className="text-xs font-semibold text-blue-600 hover:underline mb-3 block"
+            >
+              ⬇ Download CSV template
+            </button>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => handleFile(e.target.files?.[0])}
+              className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-slate-700 dark:file:text-slate-300 file:font-semibold file:text-sm"
+            />
+            {fileName && <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">{fileName}</span>}
+          </div>
+        )}
+
+        {preview.length > 0 && !result && (
+          <div>
+            <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-lg mb-4">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Import?</th>
+                    <th className="px-3 py-2 text-left">Dealer</th>
+                    <th className="px-3 py-2 text-left">Application</th>
+                    <th className="px-3 py-2 text-left">Date</th>
+                    <th className="px-3 py-2 text-left">Amount</th>
+                    <th className="px-3 py-2 text-left">Mode</th>
+                    <th className="px-3 py-2 text-left">Voucher No.</th>
+                    <th className="px-3 py-2 text-left">Agency</th>
+                    <th className="px-3 py-2 text-left">Errors</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.map((r, i) => (
+                    <tr key={i} className={`border-t border-slate-100 dark:border-slate-800 ${r.errors.length ? "bg-rose-50 dark:bg-rose-500/10" : ""}`}>
+                      <td className="px-3 py-2">
+                        <input type="checkbox" checked={r.included} disabled={r.errors.length > 0} onChange={() => toggleIncluded(i)} />
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {r.payload.dealer_name || r.dealerRaw || (r.payload.agency_name ? `${r.payload.agency_name} (Agency)` : "—")}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.applicationRaw || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.paid_on ? isoToDDMMYYYY(r.payload.paid_on) : "— (today)"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">₹{r.payload.amount || 0}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.payment_mode}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.reference_no || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.payload.agency_name || "—"}</td>
+                      <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {error && <p className="text-rose-500 text-sm mb-3">{error}</p>}
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-500 dark:text-slate-400">{includedCount} of {preview.length} rows will be imported</p>
+              <div className="flex gap-2">
+                <GhostButton onClick={() => { setPreview([]); setFileName(""); }}>Start Over</GhostButton>
+                <PrimaryButton disabled={importing || includedCount === 0} onClick={runImport}>
+                  {importing ? "Importing…" : `Import ${includedCount} Row${includedCount !== 1 ? "s" : ""}`}
+                </PrimaryButton>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {result && (
+          <div className="text-center py-6">
+            <p className="text-lg font-semibold text-emerald-600">Imported {result.imported} payment{result.imported !== 1 ? "s" : ""}</p>
+            {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped</p>}
+            <PrimaryButton onClick={onClose} className="mt-4">Done</PrimaryButton>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Admin-only quick edit for a payment row — amount/mode/reference/remarks
+// only (dealer, application, and Paid-At-Agency stay fixed to avoid the
+// ledger-reversal complexity of re-pointing a payment to a different
+// dealer or agency after the fact).
+function EditPaymentModal({ payment, onClose, onSave }) {
+  const [f, setF] = useState({
+    amount: payment.amount,
+    payment_mode: payment.payment_mode,
+    reference_no: payment.reference_no || "",
+    remarks: payment.remarks || "",
+  });
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
+
+  return (
+    <Modal title={`Edit Payment — ${payment.dealers?.name || ""}`} onClose={onClose}>
+      <Field label="Amount" required><Input type="number" value={f.amount} onChange={set("amount")} /></Field>
+      <Field label="Payment Mode">
+        <Select value={f.payment_mode} onChange={set("payment_mode")}>
+          {["Cash", "UPI", "Bank Transfer", "Cheque", "Card"].map((m) => <option key={m} value={m}>{m}</option>)}
+        </Select>
+      </Field>
+      <Field label="Reference No."><Input value={f.reference_no} onChange={set("reference_no")} /></Field>
+      <Field label="Remarks"><Input value={f.remarks} onChange={set("remarks")} /></Field>
       <div className="flex gap-2">
-        <PrimaryButton onClick={submit} disabled={saving}>{saving ? "Submitting…" : "Submit Application"}</PrimaryButton>
+        <PrimaryButton onClick={() => onSave(f)}>Save Changes</PrimaryButton>
         <GhostButton onClick={onClose}>Cancel</GhostButton>
       </div>
     </Modal>
-  );
-}
-
-const DEALER_STATUS_GROUPS = {
-  Draft: (s) => s === "Draft Submitted",
-  Process: (s) => s === "Under Review" || s === "On Hold",
-  Approved: (s) => s === "Accepted",
-};
-
-function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [search, setSearch] = useState("");
-  const [serviceList, setServiceList] = useState([]);
-  const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null
-  const [toast, setToast] = useState(null);
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("services").select("id, parent_service, short_name").order("parent_service");
-      setServiceList(data || []);
-    })();
-  }, []);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("applications")
-      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, pcc_status, pcc_stage, pcc_timeline, pcc_certificate_path, pcc_last_synced_at, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days)")
-      .eq("dealer_id", dealerId)
-      .order("submitted_at", { ascending: false });
-    if (error) {
-      setToast("Couldn't load applications: " + error.message);
-      setRows([]);
-      setLoading(false);
-      return;
-    }
-    setRows(data || []);
-    setLoading(false);
-  }, [dealerId]);
-
-  useEffect(() => { load(); }, [load, refreshKey]);
-
-  const draftCount = rows.filter((r) => DEALER_STATUS_GROUPS.Draft(r.status)).length;
-  const statusFiltered = statusFilter === "All" ? rows : rows.filter((r) => DEALER_STATUS_GROUPS[statusFilter](r.status));
-  const q = search.trim().toLowerCase();
-  const visibleRows = !q ? statusFiltered : statusFiltered.filter((r) =>
-    [r.applicant_name, r.mobile, r.draft_code, r.application_no].some((v) => (v || "").toLowerCase().includes(q))
-  );
-  const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
-
-  const bookAppointment = async (payload) => {
-    const { data: newApp, error } = await supabase.from("applications").insert(payload).select().single();
-    if (error) throw new Error(error.message);
-    if (payload.service_id) {
-      const { data: reqDocs } = await supabase.from("service_documents").select("name, mandatory, post_approval").eq("service_id", payload.service_id);
-      if (reqDocs?.length) {
-        await supabase.from("application_documents").insert(
-          reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" }))
-        );
-      }
-    }
-    await copyForwardDocuments(bookingApp.sourceApp.id, newApp.id);
-    setToast(`Created ${payload.draft_code} from ${bookingApp.sourceApp.draft_code}`);
-    setBookingApp(null);
-    load();
-  };
-
-  return (
-    <Card title="My Applications">
-      <div className="flex items-center gap-2 -mt-1 mb-3 flex-wrap">
-        {["All", "Draft", "Process", "Approved"].map((f) => (
-          <button
-            key={f}
-            onClick={() => setStatusFilter(f)}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
-              statusFilter === f ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-            }`}
-          >
-            {f === "Process" ? "Under Process" : f}
-            {f === "Draft" && draftCount > 0 && (
-              <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                {draftCount}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-      <div className="relative mb-3 max-w-sm">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search name, mobile, draft ID, application no…"
-          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
-        />
-      </div>
-      <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">Click an applicant's name to upload or view required documents.</p>
-      {loading ? (
-        <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
-              <tr>
-                <th className="text-left font-medium px-3 py-2">Ref No.</th>
-                <th className="text-left font-medium px-3 py-2">Applicant</th>
-                <th className="text-left font-medium px-3 py-2">Service</th>
-                <th className="text-left font-medium px-3 py-2">Submitted</th>
-                <th className="text-left font-medium px-3 py-2">Status</th>
-                <th className="text-left font-medium px-3 py-2">Chat</th>
-                <th className="text-left font-medium px-3 py-2">Appointment</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((r) => (
-                <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60">
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                    {r.application_no || r.draft_code}
-                  </td>
-                  <td className="px-3 py-2">
-                    <button
-                      onClick={() => onSelect?.({ id: r.id, applicant_name: r.applicant_name, draft_code: r.application_no || r.draft_code, service_id: r.service_id })}
-                      className="text-blue-600 font-semibold hover:underline text-left"
-                    >
-                      {r.applicant_name}
-                    </button>
-                  </td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                    {r.services?.short_name || r.services?.parent_service || "—"}
-                  </td>
-                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}</td>
-                  <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
-                  <td className="px-3 py-2">
-                    {r.services?.chat_in_app ? (
-                      <button
-                        onClick={() => onChat?.({ id: r.id, draft_code: r.application_no || r.draft_code, applicant_name: r.applicant_name })}
-                        className="text-blue-600 text-xs font-semibold hover:underline"
-                      >
-                        Chat
-                      </button>
-                    ) : (
-                      <span className="text-slate-300 text-xs">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    {isEligibleForAppointment(r, convertedSourceIds) ? (
-                      <button
-                        onClick={() => setBookingApp({ sourceApp: r, nextService: serviceList.find((s) => s.id === r.services.next_service_id) })}
-                        className="text-blue-600 text-xs font-semibold hover:underline"
-                      >
-                        Book Appointment
-                      </button>
-                    ) : (
-                      <span className="text-slate-300 text-xs">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {visibleRows.length === 0 && (
-                <tr><td colSpan={7} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {bookingApp && (
-        <BookAppointmentModal
-          sourceApp={bookingApp.sourceApp}
-          nextService={bookingApp.nextService}
-          onClose={() => setBookingApp(null)}
-          onBooked={bookAppointment}
-        />
-      )}
-      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
-    </Card>
-  );
-}
-
-const DOC_STATUS_STYLES = {
-  Pending: "bg-amber-50 text-amber-700",
-  Verified: "bg-emerald-50 text-emerald-700",
-  Rejected: "bg-rose-50 text-rose-700",
-};
-
-function ApplicationDocsModal({ application, onUploaded, onClose }) {
-  const [docs, setDocs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState(null);
-  const [error, setError] = useState("");
-  const [pccCheckApp, setPccCheckApp] = useState(null);
-  const [cropTarget, setCropTarget] = useState(null); // { doc, file } while the crop modal is open
-
-  const load = async () => {
-    setLoading(true);
-    setError("");
-    const { data, error: fetchError } = await supabase
-      .from("application_documents")
-      .select("*")
-      .eq("application_id", application.id)
-      .order("name");
-    if (fetchError) {
-      setError("Couldn't load documents: " + fetchError.message);
-      setLoading(false);
-      return;
-    }
-
-    // Safety net: older drafts (created before this feature, or hit a
-    // transient error) may have zero document rows even though their
-    // service does require some. Backfill them here instead of just
-    // telling the dealer "none required".
-    if ((!data || data.length === 0) && application.service_id) {
-      const { data: reqDocs, error: reqDocsError } = await supabase
-        .from("service_documents")
-        .select("name, mandatory, post_approval")
-        .eq("service_id", application.service_id);
-      if (reqDocsError) {
-        // Don't silently show "no documents required" when the lookup itself
-        // failed (e.g. an RLS policy blocking this role from reading
-        // service_documents) — that's a permissions bug, not an empty list.
-        setError("Couldn't load required documents: " + reqDocsError.message);
-        setDocs(data || []);
-        setLoading(false);
-        return;
-      }
-      if (reqDocs?.length) {
-        const { error: backfillInsertError } = await supabase.from("application_documents").upsert(
-          reqDocs.map((d) => ({ application_id: application.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
-          { onConflict: "application_id,name", ignoreDuplicates: true }
-        );
-        if (backfillInsertError) {
-          setError("Found required documents but couldn't set them up: " + backfillInsertError.message);
-          setDocs(data || []);
-          setLoading(false);
-          return;
-        }
-        const { data: refetched } = await supabase
-          .from("application_documents")
-          .select("*")
-          .eq("application_id", application.id)
-          .order("name");
-        setDocs(refetched || []);
-        setLoading(false);
-        return;
-      }
-    }
-
-    setDocs(data || []);
-    setLoading(false);
-  };
-  useEffect(() => { load(); }, [application.id]);
-
-  const upload = async (doc, file) => {
-    if (!file) return;
-    setBusyId(doc.id);
-    setError("");
-    const path = `${application.id}/${doc.id}-${file.name}`;
-    const { error: uploadError } = await supabase
-      .storage
-      .from("application-documents")
-      .upload(path, file, { upsert: true });
-    if (uploadError) {
-      setBusyId(null);
-      setError("Upload failed: " + uploadError.message);
-      return;
-    }
-    const { data: urlData } = supabase.storage.from("application-documents").getPublicUrl(path);
-    const { error: updateError } = await supabase
-      .from("application_documents")
-      .update({ file_url: urlData.publicUrl, status: "Pending", reject_reason: null })
-      .eq("id", doc.id);
-    setBusyId(null);
-    if (updateError) {
-      setError("Saved file but failed to update record: " + updateError.message);
-      return;
-    }
-    onUploaded?.(doc.name);
-    load();
-  };
-
-  // Photo / Signature / Aadhaar are the document types worth cropping —
-  // Signature additionally gets the background-removal option. Anything
-  // else (a PDF, or a document name that isn't one of these) skips
-  // straight to upload() unchanged, same as before this feature existed.
-  const CROPPABLE = /photo|sign|aadhaar/i;
-  const onFilePicked = (doc, file) => {
-    if (!file) return;
-    if (file.type.startsWith("image/") && CROPPABLE.test(doc.name)) {
-      setCropTarget({ doc, file });
-    } else {
-      upload(doc, file);
-    }
-  };
-
-  const isApproved = application.status === "Accepted";
-  // Post-approval documents (e.g. a PCC Certificate or Learner Licence PDF
-  // that literally doesn't exist until approval) stay hidden until the
-  // application actually reaches that stage — showing them earlier would
-  // just read as "missing document" for something the dealer can't get yet.
-  const visibleDocs = docs.filter((d) => !d.post_approval || isApproved);
-
-  // Opens the official Sarathi "Print Learner's Licence" page in a popup,
-  // pre-filled with this application's Application No. via the query
-  // param Parivahan's own redirect link supports. OTP + captcha + the
-  // final submit on Sarathi's page still have to be done manually — that
-  // page is a government portal with its own captcha specifically to
-  // block this kind of automation, so this only gets the dealer to the
-  // right pre-filled page, not all the way through it. Once they've
-  // downloaded the PDF from Sarathi, they upload it below like any other
-  // document.
-  const openSarathiPopup = () => {
-    if (!application.application_no) {
-      setError("Enter the Application No. on this application first (Applications tab), then try again.");
-      return;
-    }
-    const url = `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(application.application_no)}`;
-    window.open(url, "sarathi_popup", "width=900,height=700,noopener,noreferrer");
-  };
-
-  // Same idea as the Sarathi shortcut above, for UIDAI's "Download Aadhaar"
-  // page. UIDAI's OTP + captcha still have to be done manually there, and
-  // no website — including this one — is allowed to reach into the
-  // browser's download and grab a file that came from a different site, so
-  // this can only get the dealer to the right page, not the finished PDF.
-  // Once the e-Aadhaar is downloaded from UIDAI, upload it below like any
-  // other document.
-  const openUidaiPortal = () => {
-    window.open("https://myaadhaar.uidai.gov.in", "uidai_popup", "width=900,height=700,noopener,noreferrer");
-  };
-
-  return (
-    <>
-    <Modal title={`Documents — ${application.draft_code}`} onClose={onClose}>
-      <p className="text-xs text-slate-500 dark:text-slate-500 mb-4">{application.applicant_name}</p>
-      {loading ? (
-        <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
-      ) : visibleDocs.length === 0 ? (
-        <p className="text-sm text-slate-400 dark:text-slate-500">No documents are required for this application{!isApproved && docs.length > 0 ? " yet" : ""}.</p>
-      ) : (
-        <div className="space-y-3">
-          {visibleDocs.map((d) => (
-            <div key={d.id} className="border border-slate-200 dark:border-slate-800 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  {d.name} {d.mandatory && <span className="text-rose-500">*</span>}
-                </span>
-                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${DOC_STATUS_STYLES[d.status] || DOC_STATUS_STYLES.Pending}`}>
-                  {d.status || "Pending"}
-                </span>
-              </div>
-              {/learn/i.test(d.name) && (
-                <button
-                  onClick={openSarathiPopup}
-                  className="text-xs font-semibold text-blue-600 hover:underline mb-1.5 block"
-                >
-                  ↗ Download Learning (opens Sarathi)
-                </button>
-              )}
-              {/aadhaar/i.test(d.name) && (
-                <button
-                  onClick={openUidaiPortal}
-                  className="text-xs font-semibold text-blue-600 hover:underline mb-1.5 block"
-                >
-                  ↗ Download Aadhaar (opens UIDAI)
-                </button>
-              )}
-              {/pcc/i.test(d.name) && application.pcc_no && (
-                <button
-                  onClick={() => setPccCheckApp(application)}
-                  className="text-xs font-semibold text-blue-600 hover:underline mb-1.5 block"
-                >
-                  ↗ Download PCC Certificate
-                </button>
-              )}
-              {d.file_url && (
-                <a href={d.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-2 mb-1">
-                  {/\.(png|jpe?g|gif|webp|bmp)$/i.test(d.file_url) ? (
-                    <img
-                      src={d.file_url}
-                      alt={d.name}
-                      className="w-14 h-14 rounded border border-slate-200 dark:border-slate-800 object-cover shrink-0"
-                    />
-                  ) : (
-                    <span className="w-14 h-14 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-center text-[10px] font-semibold text-slate-400 dark:text-slate-500 shrink-0">
-                      FILE
-                    </span>
-                  )}
-                  <span className="text-blue-600 text-xs font-semibold">View uploaded file</span>
-                </a>
-              )}
-              {d.status === "Rejected" && d.reject_reason && (
-                <p className="text-xs text-rose-500 mt-1">Reason: {d.reject_reason}</p>
-              )}
-              <div className="mt-2">
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  disabled={busyId === d.id}
-                  onChange={(e) => onFilePicked(d, e.target.files?.[0])}
-                  className="text-xs"
-                />
-                {busyId === d.id && <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">Uploading…</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {error && <p className="text-rose-500 text-xs mt-3">{error}</p>}
-      <div className="mt-4">
-        <GhostButton onClick={onClose}>Close</GhostButton>
-      </div>
-    </Modal>
-    {pccCheckApp && (
-      <PCCStatusCheckModal row={pccCheckApp} onClose={() => setPccCheckApp(null)} />
-    )}
-    {cropTarget && (
-      <ImageCropModal
-        file={cropTarget.file}
-        allowBackgroundRemoval={/sign/i.test(cropTarget.doc.name)}
-        onClose={() => setCropTarget(null)}
-        onDone={(croppedFile) => {
-          const doc = cropTarget.doc;
-          setCropTarget(null);
-          upload(doc, croppedFile);
-        }}
-      />
-    )}
-    </>
-  );
-}
-
-function DealerStaffTab({ dealerId }) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [f, setF] = useState({ fullName: "", email: "", password: "" });
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data } = await supabase.from("dealer_staff").select("*").eq("dealer_id", dealerId).order("full_name");
-    setRows(data || []);
-    setLoading(false);
-  }, [dealerId]);
-  useEffect(() => { load(); }, [load]);
-
-  const add = async () => {
-    if (!f.fullName || !f.email || !f.password) return;
-    setSaving(true);
-    setMsg("");
-    try {
-      await createDealerStaffLogin({ dealerId, fullName: f.fullName, email: f.email, password: f.password });
-      setF({ fullName: "", email: "", password: "" });
-      setShowAdd(false);
-      load();
-    } catch (e) {
-      setMsg("Failed: " + e.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const toggleActive = async (row) => {
-    await supabase.from("dealer_staff").update({ active: !row.active }).eq("id", row.id);
-    load();
-  };
-
-  return (
-    <Card title="My Staff">
-      <p className="text-xs text-slate-400 dark:text-slate-500 -mt-2 mb-3">
-        Give your own team their own logins to this portal — they'll see the same applications and chats as you.
-      </p>
-      {loading ? (
-        <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
-      ) : rows.length === 0 ? (
-        <p className="text-sm text-slate-400 dark:text-slate-500 mb-3">No staff added yet.</p>
-      ) : (
-        <div className="space-y-1.5 mb-3">
-          {rows.map((r) => (
-            <div key={r.id} className="flex items-center justify-between text-sm bg-slate-50 dark:bg-slate-800/60 rounded-lg px-3 py-2">
-              <div>
-                <span className="font-medium text-slate-700 dark:text-slate-300">{r.full_name}</span>
-                <span className="text-slate-400 dark:text-slate-500 text-xs ml-2">{r.email}</span>
-              </div>
-              <button
-                onClick={() => toggleActive(r)}
-                className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
-                  r.active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
-                }`}
-              >
-                {r.active ? "Active" : "Disabled"}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showAdd ? (
-        <div className="bg-slate-50 dark:bg-slate-800/60 rounded-lg p-3">
-          <div className="grid sm:grid-cols-3 gap-2 mb-2">
-            <Input placeholder="Full name" value={f.fullName} onChange={(e) => setF((s) => ({ ...s, fullName: e.target.value }))} />
-            <Input type="email" placeholder="Email" value={f.email} onChange={(e) => setF((s) => ({ ...s, email: e.target.value }))} />
-            <Input type="password" placeholder="Password" value={f.password} onChange={(e) => setF((s) => ({ ...s, password: e.target.value }))} />
-          </div>
-          <div className="flex gap-2">
-            <PrimaryButton onClick={add} disabled={saving}>{saving ? "Creating…" : "Create Login"}</PrimaryButton>
-            <GhostButton onClick={() => setShowAdd(false)}>Cancel</GhostButton>
-          </div>
-          {msg && <p className="text-xs text-rose-500 mt-2">{msg}</p>}
-        </div>
-      ) : (
-        <GhostButton onClick={() => setShowAdd(true)}>+ Add Staff</GhostButton>
-      )}
-    </Card>
-  );
-}
-
-// Shows every admin staff member by name so a dealer (or their sub-staff)
-// can pick exactly who to call, instead of ringing an anonymous "General"
-// line and hoping someone happens to be watching it. Calling here rings
-// that person's personal channel directly (see lib/directCall.js) — it
-// works even if that staff member isn't currently looking at this dealer's
-// chat thread, since useDirectCall() listens globally for as long as
-// they're signed in.
-function StaffDirectory({ call }) {
-  const [staffList, setStaffList] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data } = await supabase.from("staff").select("id, full_name, role").order("full_name");
-      setStaffList(data || []);
-      setLoading(false);
-    })();
-  }, []);
-
-  if (loading || staffList.length === 0) return null;
-
-  return (
-    <Card title="Our Team">
-      <p className="text-xs text-slate-400 dark:text-slate-500 -mt-2 mb-3">Tap Call to ring someone on our team directly.</p>
-      <div className="grid sm:grid-cols-2 gap-2">
-        {staffList.map((s) => (
-          <div key={s.id} className="flex items-center justify-between text-sm bg-slate-50 dark:bg-slate-800/60 rounded-lg px-3 py-2">
-            <div className="min-w-0">
-              <p className="font-medium text-slate-700 dark:text-slate-300 truncate">{s.full_name}</p>
-              {s.role && <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{s.role}</p>}
-            </div>
-            <button
-              onClick={() => call?.startCall({ type: "staff", id: s.id, name: s.full_name }, "audio")}
-              disabled={!call || call.status !== "idle"}
-              title={`Call ${s.full_name}`}
-              className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-30"
-            >
-              <Phone size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function DealerChats({ dealerId, identity, onMessage }) {
-  const [threads, setThreads] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [selectedThreadId, setSelectedThreadId] = useState(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const { data: threadRows, error: threadsError } = await supabase
-        .from("chat_threads")
-        .select("id, application_id, applications(draft_code, application_no, applicant_name)")
-        .eq("dealer_id", dealerId);
-      if (threadsError) throw threadsError;
-
-      const threadIds = (threadRows || []).map((t) => t.id);
-      let latestByThread = {};
-      if (threadIds.length) {
-        const { data: messages, error: messagesError } = await supabase
-          .from("chat_messages")
-          .select("thread_id, sender_type, body, created_at")
-          .in("thread_id", threadIds)
-          .order("created_at", { ascending: false });
-        if (messagesError) throw messagesError;
-        for (const m of messages || []) {
-          if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
-        }
-      }
-
-      const enriched = (threadRows || [])
-        .map((t) => {
-          const latest = latestByThread[t.id];
-          return {
-            threadId: t.id,
-            applicationId: t.application_id,
-            label: t.application_id
-              ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
-              : "General",
-            lastMessage: latest?.body || null,
-            lastAt: latest?.created_at || null,
-            awaitingReply: latest ? latest.sender_type === "staff" : false,
-          };
-        })
-        .sort((a, b) => {
-          // General thread first, then most recently active.
-          if (!a.applicationId !== !b.applicationId) return a.applicationId ? 1 : -1;
-          return new Date(b.lastAt || 0) - new Date(a.lastAt || 0);
-        });
-
-      setThreads(enriched);
-    } catch (e) {
-      setError(e.message || "Couldn't load chats");
-    } finally {
-      setLoading(false);
-    }
-  }, [dealerId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const selected = threads.find((t) => t.threadId === selectedThreadId) || null;
-
-  const handleMessage = () => {
-    load();
-    onMessage?.();
-  };
-
-  return (
-    <Card title="Chats">
-      <div className="grid md:grid-cols-[260px_1fr] gap-4" style={{ height: "60vh" }}>
-        <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-            {loading ? (
-              <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8">Loading…</p>
-            ) : error ? (
-              <p className="text-sm text-rose-500 text-center py-8 px-4">{error}</p>
-            ) : threads.length === 0 ? (
-              <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-8 px-4">No conversations yet.</p>
-            ) : (
-              threads.map((t) => (
-                <button
-                  key={t.threadId}
-                  onClick={() => setSelectedThreadId(t.threadId)}
-                  className={`w-full text-left px-4 py-3 hover:bg-white dark:bg-slate-900 ${selectedThreadId === t.threadId ? "bg-white dark:bg-slate-900" : ""}`}
-                >
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 truncate">{t.label}</span>
-                    {t.awaitingReply && <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 ml-2" />}
-                  </div>
-                  {t.lastMessage && <p className="text-xs text-slate-500 dark:text-slate-500 truncate">{t.lastMessage}</p>}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
-          {selected ? (
-            <ChatPanel
-              dealerId={dealerId}
-              applicationId={selected.applicationId}
-              identity={identity}
-              emptyLabel="No messages yet — say hello."
-              onMessage={handleMessage}
-            />
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-sm text-slate-400 dark:text-slate-500">
-              Pick a conversation on the left.
-            </div>
-          )}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-const TOPUP_AMOUNTS = [10000, 20000];
-
-// Your UPI ID + display name — set these as Vite env vars
-// (VITE_UPI_ID / VITE_UPI_PAYEE_NAME) so they aren't hardcoded here.
-const UPI_ID = import.meta.env.VITE_UPI_ID || "your-upi-id@bank";
-const UPI_PAYEE_NAME = import.meta.env.VITE_UPI_PAYEE_NAME || "SJO Services";
-
-function TopUpModal({ dealer, onClose }) {
-  const [amount, setAmount] = useState(TOPUP_AMOUNTS[0]);
-  const [customAmount, setCustomAmount] = useState("");
-  const [useCustom, setUseCustom] = useState(false);
-
-  const finalAmount = useCustom ? parseFloat(customAmount) || 0 : amount;
-  const note = `Wallet top-up — ${dealer.code}`;
-  const upiLink = finalAmount > 0
-    ? `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_PAYEE_NAME)}&am=${finalAmount}&cu=INR&tn=${encodeURIComponent(note)}`
-    : null;
-  const qrSrc = upiLink
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(upiLink)}`
-    : null;
-
-  return (
-    <Modal title="Top Up Wallet" onClose={onClose}>
-      <Field label="Amount">
-        <div className="grid grid-cols-3 gap-2 mb-2">
-          {TOPUP_AMOUNTS.map((a) => (
-            <button
-              key={a}
-              onClick={() => { setAmount(a); setUseCustom(false); }}
-              className={`py-2 rounded-lg text-sm font-semibold border ${
-                !useCustom && amount === a ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-              }`}
-            >
-              ₹{a.toLocaleString("en-IN")}
-            </button>
-          ))}
-          <button
-            onClick={() => setUseCustom(true)}
-            className={`py-2 rounded-lg text-sm font-semibold border ${
-              useCustom ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-            }`}
-          >
-            Other
-          </button>
-        </div>
-        {useCustom && (
-          <Input type="number" placeholder="Enter amount (₹)" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)} />
-        )}
-      </Field>
-
-      {finalAmount > 0 ? (
-        <div className="text-center py-2">
-          <img src={qrSrc} alt="UPI QR code" className="mx-auto rounded-lg border border-slate-200 dark:border-slate-800" width={220} height={220} />
-          <p className="text-sm text-slate-500 dark:text-slate-500 mt-3">Scan with any UPI app, or tap below on your phone</p>
-          <a
-            href={upiLink}
-            className="inline-block mt-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg"
-          >
-            Pay ₹{finalAmount.toLocaleString("en-IN")} via UPI App
-          </a>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">
-            After paying, your wallet balance will be updated once our team confirms the payment.
-          </p>
-        </div>
-      ) : (
-        <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-4">Enter an amount to generate a payment QR.</p>
-      )}
-    </Modal>
-  );
-}
-
-function DealerLedger({ dealerId }) {
-  const [txns, setTxns] = useState([]);
-  const [appsByCode, setAppsByCode] = useState({}); // draft/application_no -> { applicant_name, services }
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data } = await supabase
-        .from("ledger_transactions")
-        .select("*")
-        .eq("dealer_id", dealerId)
-        .order("created_at", { ascending: false });
-      const rows = data || [];
-      setTxns(rows);
-
-      // Ledger entries reference the application via voucher_no (== draft_code
-      // at the time it was accepted). Resolve those back to a service +
-      // applicant name to display, instead of parsing the free-text description.
-      const codes = [...new Set(rows.map((t) => t.voucher_no).filter(Boolean))];
-      if (codes.length) {
-        const { data: apps } = await supabase
-          .from("applications")
-          .select("draft_code, application_no, applicant_name, services(parent_service, short_name)")
-          .eq("dealer_id", dealerId)
-          .or(codes.map((c) => `draft_code.eq.${c},application_no.eq.${c}`).join(","));
-        const map = {};
-        (apps || []).forEach((a) => {
-          const label = a.services ? (a.services.short_name || a.services.parent_service) : null;
-          if (a.draft_code) map[a.draft_code] = { applicant_name: a.applicant_name, service: label };
-          if (a.application_no) map[a.application_no] = { applicant_name: a.applicant_name, service: label };
-        });
-        setAppsByCode(map);
-      } else {
-        setAppsByCode({});
-      }
-      setLoading(false);
-    })();
-  }, [dealerId]);
-
-  // Running balance shown per-row, computed chronologically (oldest first)
-  // even though the table itself displays newest-first.
-  const balanceById = {};
-  let running = 0;
-  [...txns].reverse().forEach((t) => {
-    running += t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0);
-    balanceById[t.id] = running;
-  });
-  const currentBalance = running;
-
-  return (
-    <Card title="My Ledger">
-      <p className="text-sm text-slate-500 dark:text-slate-500 mb-4">
-        Running balance: <span className="font-bold text-slate-800 dark:text-slate-100">₹{currentBalance.toLocaleString("en-IN")}</span>
-      </p>
-      {loading ? (
-        <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
-              <tr>
-                <th className="text-left font-medium px-3 py-2">Date</th>
-                <th className="text-left font-medium px-3 py-2">Service</th>
-                <th className="text-left font-medium px-3 py-2">Applicant Name</th>
-                <th className="text-right font-medium px-3 py-2">Amount</th>
-                <th className="text-right font-medium px-3 py-2">Running Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {txns.map((t) => {
-                const matched = appsByCode[t.voucher_no];
-                return (
-                  <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toLocaleDateString("en-IN") : "—"}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{matched?.service || t.description || t.remarks || "—"}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{matched?.applicant_name || "—"}</td>
-                    <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.type === "credit" ? "text-emerald-600" : "text-rose-600"}`}>
-                      {t.type === "credit" ? "+" : "-"}₹{Number(t.amount || 0).toLocaleString("en-IN")}
-                    </td>
-                    <td className="px-3 py-2 text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">₹{balanceById[t.id].toLocaleString("en-IN")}</td>
-                  </tr>
-                );
-              })}
-              {txns.length === 0 && (
-                <tr><td colSpan={5} className="text-center text-slate-400 dark:text-slate-500 py-8">No ledger entries yet</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Card>
   );
 }
