@@ -28,8 +28,8 @@ import { resolveCaller } from "./_lib/adminAuth.js";
 
 const { RtcTokenBuilder, RtcRole } = agoraToken;
 
-const AGORA_APP_ID = process.env.AGORA_APP_ID;
-const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE;
+const AGORA_APP_ID = (process.env.AGORA_APP_ID || "").trim();
+const AGORA_APP_CERTIFICATE = (process.env.AGORA_APP_CERTIFICATE || "").trim();
 const TOKEN_TTL_SECONDS = 3600; // 1 hour — plenty for any single call
 
 export default async function handler(req, res) {
@@ -49,22 +49,33 @@ export default async function handler(req, res) {
     // join time rather than this token being locked to one. Standard pattern
     // when the server doesn't need to track a stable per-user Agora uid.
     const uid = 0;
-    const privilegeExpiredTs = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
 
+    // IMPORTANT: this build of `agora-token` (2.0.5, backed internally by
+    // RtcTokenBuilder2) takes 7 arguments, and the LAST TWO are DURATIONS
+    // in seconds (e.g. 3600), not an absolute Unix timestamp. Passing an
+    // absolute epoch value here (~1.7 billion) — which is what an earlier
+    // version of this file did — doesn't throw an error, it just silently
+    // produces a corrupted token. That token then fails on the CLIENT side
+    // with a confusing, seemingly-unrelated "AgoraRTCError
+    // CAN_NOT_GET_GATEWAY_SERVER: invalid vendor key, can not find appid"
+    // the moment it tries to join a channel — even though the App ID
+    // itself is completely fine. Confirmed via Agora's own Web Demo +
+    // Console-generated temp token, which worked with the exact same App
+    // ID, proving this endpoint's generated token was the actual problem.
     const token = RtcTokenBuilder.buildTokenWithUid(
       AGORA_APP_ID,
       AGORA_APP_CERTIFICATE,
       String(channel),
       uid,
       RtcRole.PUBLISHER,
-      privilegeExpiredTs
+      TOKEN_TTL_SECONDS, // tokenExpire
+      TOKEN_TTL_SECONDS  // privilegeExpire
     );
 
     res.json({ token, appId: AGORA_APP_ID, uid });
   } catch (e) {
     // Whatever this is, surface it as a normal JSON 500 instead of letting
-    // it crash the function — an opaque "FUNCTION_INVOCATION_FAILED" with
-    // no message was the actual bug being fixed here.
+    // it crash the function opaquely.
     console.error("agora-token failed:", e);
     res.status(500).json({ error: e.message || "Unexpected server error" });
   }
