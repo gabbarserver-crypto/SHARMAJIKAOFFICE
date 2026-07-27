@@ -16,18 +16,37 @@ export default function GlobalCallOverlay({ call }) {
   return (
     <>
       {call.status === "ringing-incoming" && (
-        <div className="fixed inset-x-0 top-0 z-[999] bg-slate-900 text-white px-4 py-3 flex items-center justify-between shadow-lg">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold truncate">{call.remoteName}</p>
-            <p className="text-xs text-slate-300">Incoming {call.callType} call…</p>
+        <div className="fixed inset-0 z-[999] bg-slate-900 text-white flex flex-col">
+          <div className="flex-1 flex flex-col items-center justify-center px-6">
+            <div className="w-28 h-28 rounded-full bg-white/10 flex items-center justify-center mb-6 text-4xl font-semibold">
+              {(call.remoteName || "?").split(" ").map((s) => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
+            </div>
+            <p className="text-2xl font-semibold mb-2 text-center">{call.remoteName}</p>
+            <p className="text-base text-slate-300">Incoming {call.callType} call…</p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button onClick={call.declineCall} className="w-9 h-9 rounded-full bg-rose-600 hover:bg-rose-700 flex items-center justify-center">
-              <PhoneOff size={16} />
-            </button>
-            <button onClick={call.acceptCall} className="w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center">
-              <Phone size={16} />
-            </button>
+          {/* Buttons sized to WhatsApp/Android's own call-UI scale (~80px
+              circles, well past the 48dp minimum touch target) — the
+              previous top-banner version used 36px buttons crammed into a
+              thin strip, which was genuinely hard to hit reliably. */}
+          <div className="flex items-center justify-around px-10 pb-12 pt-4 shrink-0">
+            <div className="flex flex-col items-center gap-2">
+              <button
+                onClick={call.declineCall}
+                className="w-20 h-20 rounded-full bg-rose-600 active:bg-rose-700 flex items-center justify-center shadow-lg"
+              >
+                <PhoneOff size={32} />
+              </button>
+              <span className="text-sm text-slate-300">Decline</span>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <button
+                onClick={call.acceptCall}
+                className="w-20 h-20 rounded-full bg-emerald-600 active:bg-emerald-700 flex items-center justify-center shadow-lg animate-pulse"
+              >
+                <Phone size={32} />
+              </button>
+              <span className="text-sm text-slate-300">Accept</span>
+            </div>
           </div>
         </div>
       )}
@@ -86,7 +105,10 @@ export default function GlobalCallOverlay({ call }) {
       )}
 
       {call.callError && call.status === "idle" && (
-        <div className="fixed inset-x-0 top-0 z-[999] bg-amber-50 border-b border-amber-200 text-amber-800 text-xs px-4 py-2 flex items-center justify-between shadow">
+        <div
+          className="fixed inset-x-0 top-0 z-[999] bg-amber-50 border-b border-amber-200 text-amber-800 text-xs px-4 py-2 flex items-center justify-between shadow"
+          style={{ paddingTop: "calc(0.5rem + env(safe-area-inset-top, 0px))" }}
+        >
           <span>{call.callError}</span>
           <button onClick={call.dismissError} className="font-semibold px-2">✕</button>
         </div>
