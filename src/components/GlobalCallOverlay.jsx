@@ -109,8 +109,11 @@ export default function GlobalCallOverlay({ call }) {
           className="fixed inset-x-0 top-0 z-[999] bg-amber-50 border-b border-amber-200 text-amber-800 text-xs px-4 py-2 flex items-center justify-between shadow"
           style={{ paddingTop: "calc(0.5rem + env(safe-area-inset-top, 0px))" }}
         >
-          <span>{call.callError}</span>
-          <button onClick={call.dismissError} className="font-semibold px-2">✕</button>
+          <span>
+            {call.callError.friendly}
+            {call.callError.raw && <span className="block text-[10px] text-amber-600/70 mt-0.5">Details: {call.callError.raw}</span>}
+          </span>
+          <button onClick={call.dismissError} className="font-semibold px-2 shrink-0">✕</button>
         </div>
       )}
     </>

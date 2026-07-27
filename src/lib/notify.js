@@ -16,6 +16,33 @@
 
 const hasBrowserNotifications = typeof window !== "undefined" && "Notification" in window;
 
+// Browsers (and the Android WebView especially) refuse to let an
+// AudioContext actually produce sound until it's been started/resumed as
+// part of a real user gesture — a tap, click, or keypress. On the web app
+// that requirement is usually satisfied incidentally (someone's already
+// clicked into a page before any notification fires), but in the native
+// app it's easy to receive a first notification before tapping anything
+// at all, and the ping silently does nothing. This primes/resumes the
+// context on the very first tap anywhere in the app, once, so it's ready
+// by the time a real notification needs it.
+let primed = false;
+export function primeAudioOnFirstInteraction() {
+  if (primed || typeof window === "undefined") return;
+  primed = true;
+  const unlock = () => {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+    } catch {
+      // best-effort
+    }
+    window.removeEventListener("touchstart", unlock);
+    window.removeEventListener("click", unlock);
+  };
+  window.addEventListener("touchstart", unlock, { once: true, passive: true });
+  window.addEventListener("click", unlock, { once: true });
+}
+
 export async function requestNotificationPermission() {
   if (!hasBrowserNotifications) return "unsupported";
   if (Notification.permission === "default") {
