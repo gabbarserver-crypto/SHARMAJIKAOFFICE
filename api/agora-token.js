@@ -15,8 +15,18 @@
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY   (already set for the login endpoints)
 //   AGORA_APP_ID                              (Agora Console → your project → App ID, public)
 //   AGORA_APP_CERTIFICATE                     (Agora Console → your project → enable a Certificate — keep secret)
-import { RtcTokenBuilder, RtcRole } from "agora-token";
+//
+// NOTE: "agora-token" ships as a CommonJS module (module.exports = {...}),
+// and Node's ESM loader can't always statically detect every named export
+// from a CJS module built that way — `import { RtcTokenBuilder, RtcRole }
+// from "agora-token"` throws "Named export 'RtcRole' not found" at MODULE
+// LOAD TIME (before this handler even runs), which crashed every single
+// request here with FUNCTION_INVOCATION_FAILED. Importing the default
+// export and destructuring from it avoids that.
+import agoraToken from "agora-token";
 import { resolveCaller } from "./_lib/adminAuth.js";
+
+const { RtcTokenBuilder, RtcRole } = agoraToken;
 
 const AGORA_APP_ID = process.env.AGORA_APP_ID;
 const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE;
