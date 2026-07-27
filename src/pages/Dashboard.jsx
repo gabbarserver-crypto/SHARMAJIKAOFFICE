@@ -1,7 +1,7 @@
 // src/pages/Dashboard.jsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone, CreditCard, BarChart2, Settings as SettingsIcon, LayoutGrid } from "lucide-react";
+import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone, CreditCard, BarChart2, Settings as SettingsIcon, LayoutGrid, Wallet, Landmark } from "lucide-react";
 import { BOTTOM_TAB_KEYS } from "../components/BottomTabBar";
 
 // Icons for whichever nav items land in the mobile-only overflow row below
@@ -100,33 +100,37 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
         </div>
       )}
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {tiles.map((t) => {
           const style = TILE_STYLES[t.key] || { icon: FileText, classes: "bg-slate-600" };
           const Icon = style.icon;
           return (
-            <div key={t.key} className={`${style.classes} rounded-2xl p-5 text-white shadow-sm relative overflow-hidden`}>
-              <Icon size={22} className="opacity-80 mb-3" />
-              <p className="text-3xl font-bold leading-none">{t.value ?? "—"}</p>
-              <p className="text-sm opacity-90 mt-2">{t.label}</p>
-              <Icon size={90} className="absolute -right-4 -bottom-4 opacity-10" />
+            <div key={t.key} className={`${style.classes} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden`}>
+              <Icon size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
+              <p className="text-xl sm:text-3xl font-bold leading-none">{t.value ?? "—"}</p>
+              <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">{t.label}</p>
+              <Icon size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
             </div>
           );
         })}
       </div>
 
-      <div className="grid sm:grid-cols-2 gap-4 mt-4">
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
-          <p className="text-xs text-slate-400 dark:text-slate-500">Total Dealer Balance</p>
-          <p className={`text-2xl font-bold mt-1 ${Number(balances.dealer_total) < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 mt-4">
+        <div className={`${Number(balances.dealer_total) < 0 ? "bg-rose-600" : "bg-violet-600"} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden`}>
+          <Wallet size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
+          <p className="text-lg sm:text-2xl font-bold leading-none">
             {balances.dealer_total === null ? "—" : `₹${balances.dealer_total.toLocaleString("en-IN")}`}
           </p>
+          <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">Total Dealer Balance</p>
+          <Wallet size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
         </div>
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
-          <p className="text-xs text-slate-400 dark:text-slate-500">Total Agency Balance</p>
-          <p className={`text-2xl font-bold mt-1 ${Number(balances.agency_total) < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+        <div className={`${Number(balances.agency_total) < 0 ? "bg-rose-600" : "bg-cyan-700"} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden`}>
+          <Landmark size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
+          <p className="text-lg sm:text-2xl font-bold leading-none">
             {balances.agency_total === null ? "—" : `₹${balances.agency_total.toLocaleString("en-IN")}`}
           </p>
+          <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">Total Agency Balance</p>
+          <Landmark size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
         </div>
       </div>
 

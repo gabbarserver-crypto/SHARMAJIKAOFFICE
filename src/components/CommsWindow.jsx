@@ -29,6 +29,7 @@ import { supabase } from "../lib/supabase";
 import ChatPanel from "./ChatPanel";
 import PastelAvatar from "./PastelAvatar";
 import { listRecentThreadsForStaff, listRecentThreadsForDealer } from "../lib/chat";
+import { loadSeenMap, saveSeenMap, isThreadSeen } from "../lib/threadSeen";
 import { fetchAllCallLogs, fetchCallLogs } from "../lib/callLog";
 
 function timeAgo(iso) {
@@ -69,7 +70,7 @@ function threadLabelFromRow(row) {
   const appLabel = t.application_id
     ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
     : "General";
-  return { dealerId: t.dealer_id, applicationId: t.application_id, dealerName, appLabel };
+  return { threadId: t.id, dealerId: t.dealer_id, applicationId: t.application_id, dealerName, appLabel };
 }
 
 // Small pill-style search input reused across tabs, matching the
@@ -103,9 +104,25 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("chats");
   const [selectedThread, setSelectedThread] = useState(null); // { dealerId, applicationId, label } | null
+  const [seenMap, setSeenMap] = useState(() => loadSeenMap(identity));
 
   const openWindow = () => setOpen(true);
   const closeWindow = () => { setOpen(false); setSelectedThread(null); };
+
+  // Marks a thread as viewed right now, so its unread badge clears — this
+  // is what fixes "I opened it, but it still shows as a new message": the
+  // badge used to be driven purely by "has staff/dealer replied yet", with
+  // nothing tracking whether you'd actually looked. See lib/threadSeen.js.
+  const openThread = (thread) => {
+    setSelectedThread(thread);
+    if (thread?.threadId) {
+      setSeenMap((prev) => {
+        const next = { ...prev, [thread.threadId]: new Date().toISOString() };
+        saveSeenMap(identity, next);
+        return next;
+      });
+    }
+  };
 
   if (variant === "staff" && !staff) return null;
   if (variant === "dealer" && !dealerId) return null;
@@ -113,94 +130,133 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
   const headerTitle = selectedThread ? selectedThread.label : TAB_TITLE[tab];
   const headerSubtitle = selectedThread ? (variant === "staff" ? selectedThread.dealerName : null) : null;
 
-  return (
-    <div
-      className="no-print fixed z-50 flex flex-col items-end gap-3"
-      style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
-    >
-      {open && (
-        <div className="w-80 sm:w-96 h-[560px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-          {/* Header — white, matches the reference design; green is reserved for the active tab/accents below. */}
-          <div className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 px-4 py-3 flex items-center gap-2.5 shrink-0">
-            {selectedThread ? (
-              <button onClick={() => setSelectedThread(null)} className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 shrink-0 mr-1">
-                ← Back
-              </button>
-            ) : null}
-            <div className="min-w-0 flex-1">
-              <p className="text-lg font-bold leading-tight truncate text-slate-900 dark:text-slate-100">{headerTitle}</p>
-              {headerSubtitle && <p className="text-xs text-slate-400 leading-tight truncate mt-0.5">{headerSubtitle}</p>}
-            </div>
-            {!selectedThread && tab === "chats" && (
-              <button onClick={() => setTab("new")} title="Start something new" className="w-8 h-8 shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center">
-                <Plus size={16} />
-              </button>
-            )}
-            {onExpand && !selectedThread && (
-              <button onClick={onExpand} title="Open full Chats inbox" className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 shrink-0">
-                Expand
-              </button>
-            )}
-            <button onClick={closeWindow} title="Close" className="w-7 h-7 shrink-0 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500">
-              <X size={16} />
+  // Shared between the mobile (full-screen) and desktop (small popup)
+  // renderings below — same header/body/bottom-nav either way, just a
+  // different-sized box around it. `closeLabel` lets the header read
+  // "← Back" on the mobile full-screen takeover (where it's the obvious,
+  // thumb-reachable way out) vs a plain ✕ on the small desktop popup
+  // (where "Back" would be a confusing thing to say about a floating
+  // widget).
+  const PanelContent = ({ mobile }) => (
+    <>
+      <div className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 px-4 py-3 flex items-center gap-2.5 shrink-0">
+        {mobile && !selectedThread ? (
+          <button onClick={closeWindow} className="text-sm font-semibold text-emerald-600 hover:text-emerald-700 shrink-0 mr-1 flex items-center gap-1">
+            ← Back
+          </button>
+        ) : selectedThread ? (
+          <button onClick={() => setSelectedThread(null)} className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 shrink-0 mr-1">
+            ← Back
+          </button>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <p className="text-lg font-bold leading-tight truncate text-slate-900 dark:text-slate-100">{headerTitle}</p>
+          {headerSubtitle && <p className="text-xs text-slate-400 leading-tight truncate mt-0.5">{headerSubtitle}</p>}
+        </div>
+        {!selectedThread && tab === "chats" && (
+          <button onClick={() => setTab("new")} title="Start something new" className="w-8 h-8 shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center">
+            <Plus size={16} />
+          </button>
+        )}
+        {onExpand && !selectedThread && (
+          <button onClick={onExpand} title="Open full Chats inbox" className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 shrink-0">
+            Expand
+          </button>
+        )}
+        {!(mobile && !selectedThread) && (
+          <button onClick={closeWindow} title="Close" className="w-7 h-7 shrink-0 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500">
+            <X size={16} />
+          </button>
+        )}
+      </div>
+
+      <div className="flex-1 min-h-0 flex flex-col">
+        {selectedThread ? (
+          <ChatPanel
+            dealerId={selectedThread.dealerId}
+            applicationId={selectedThread.applicationId}
+            identity={identity}
+            emptyLabel="No messages here yet."
+          />
+        ) : tab === "chats" ? (
+          <ThreadsTab variant={variant} dealerId={dealerId} scope="general" seenMap={seenMap} onOpenThread={openThread} />
+        ) : tab === "customer" ? (
+          <ThreadsTab variant={variant} dealerId={dealerId} scope="application" seenMap={seenMap} onOpenThread={openThread} />
+        ) : tab === "calls" ? (
+          <CallsTab variant={variant} dealerId={dealerId} identity={identity} call={call} seenMap={seenMap} onOpenThread={openThread} />
+        ) : (
+          <NewCallTab variant={variant} identity={identity} call={call} />
+        )}
+      </div>
+
+      {/* Bottom nav — hidden while a thread is open, same as a phone's tab
+          bar disappearing inside a conversation. This is the ONLY bottom
+          nav visible while the chat window is open on mobile: it's a
+          full-screen overlay (see below), so it sits on top of and fully
+          hides the app's main BottomTabBar underneath — no more of the
+          two navs stacking on each other. */}
+      {!selectedThread && (
+        <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 flex" style={mobile ? { paddingBottom: "env(safe-area-inset-bottom)" } : undefined}>
+          {TABS.map(({ key, label, Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[10px] leading-tight text-center px-0.5 ${
+                tab === key ? "text-emerald-600 dark:text-emerald-400 font-bold" : "text-slate-400 dark:text-slate-500 font-medium"
+              }`}
+            >
+              <Icon size={18} />
+              {label}
             </button>
-          </div>
-
-          {/* Body */}
-          <div className="flex-1 min-h-0 flex flex-col">
-            {selectedThread ? (
-              <ChatPanel
-                dealerId={selectedThread.dealerId}
-                applicationId={selectedThread.applicationId}
-                identity={identity}
-                emptyLabel="No messages here yet."
-              />
-            ) : tab === "chats" ? (
-              <ThreadsTab variant={variant} dealerId={dealerId} scope="general" onOpenThread={setSelectedThread} />
-            ) : tab === "customer" ? (
-              <ThreadsTab variant={variant} dealerId={dealerId} scope="application" onOpenThread={setSelectedThread} />
-            ) : tab === "calls" ? (
-              <CallsTab variant={variant} dealerId={dealerId} identity={identity} call={call} onOpenThread={setSelectedThread} />
-            ) : (
-              <NewCallTab variant={variant} identity={identity} call={call} />
-            )}
-          </div>
-
-          {/* Bottom nav — hidden while a thread is open, same as a phone's
-              tab bar disappearing inside a conversation. Green accent for
-              the active tab, matching the reference design. */}
-          {!selectedThread && (
-            <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 flex">
-              {TABS.map(({ key, label, Icon }) => (
-                <button
-                  key={key}
-                  onClick={() => setTab(key)}
-                  className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[10px] leading-tight text-center px-0.5 ${
-                    tab === key ? "text-emerald-600 dark:text-emerald-400 font-bold" : "text-slate-400 dark:text-slate-500 font-medium"
-                  }`}
-                >
-                  <Icon size={18} />
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+          ))}
         </div>
       )}
+    </>
+  );
 
-      <button
-        onClick={() => (open ? closeWindow() : openWindow())}
-        aria-label={open ? "Close chat" : "Open chat"}
-        className="relative w-14 h-14 rounded-full bg-emerald-600 text-white shadow-lg flex items-center justify-center hover:bg-emerald-700 transition-colors"
+  return (
+    <>
+      {open && (
+        <>
+          {/* Mobile: full-screen takeover — avoids the popup's small
+              bottom nav sitting on top of the app's own BottomTabBar. */}
+          <div className="no-print md:hidden fixed inset-0 z-50 bg-white dark:bg-slate-900 flex flex-col">
+            <PanelContent mobile />
+          </div>
+
+          {/* Desktop/tablet: small floating popup above the FAB, unchanged. */}
+          <div
+            className="no-print hidden md:flex fixed z-50 flex-col items-end"
+            style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
+          >
+            <div className="w-96 h-[560px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden mb-3">
+              <PanelContent mobile={false} />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* FAB — hidden on mobile while the full-screen panel is open (its
+          own Back button replaces it); always visible on desktop, where it
+          doubles as the popup's close button. */}
+      <div
+        className={`no-print fixed z-50 flex-col items-end ${open ? "hidden md:flex" : "flex"}`}
+        style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
       >
-        {open ? <X size={24} /> : <MessageCircle size={24} />}
-        {!open && pendingCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center">
-            {pendingCount}
-          </span>
-        )}
-      </button>
-    </div>
+        <button
+          onClick={() => (open ? closeWindow() : openWindow())}
+          aria-label={open ? "Close chat" : "Open chat"}
+          className="relative w-14 h-14 rounded-full bg-emerald-600 text-white shadow-lg flex items-center justify-center hover:bg-emerald-700 transition-colors"
+        >
+          {open ? <X size={24} /> : <MessageCircle size={24} />}
+          {!open && pendingCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center">
+              {pendingCount}
+            </span>
+          )}
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -212,7 +268,7 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
 // fits each: dealer name + last message for general, applicant name +
 // service for per-application.
 // ============================================================
-function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
+function ThreadsTab({ variant, dealerId, scope, seenMap, onOpenThread }) {
   const [threads, setThreads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -267,7 +323,7 @@ function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
             return (
               <button
                 key={t.threadId}
-                onClick={() => onOpenThread({ dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: scope === "application" ? t.label : title, dealerName: t.dealerLabel })}
+                onClick={() => onOpenThread({ threadId: t.threadId, dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: scope === "application" ? t.label : title, dealerName: t.dealerLabel })}
                 className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3"
               >
                 <PastelAvatar name={title} size={40} />
@@ -278,7 +334,7 @@ function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">{subtitle}</p>
                 </div>
-                {t.unreadCount > 0 && (
+                {t.unreadCount > 0 && !isThreadSeen(seenMap, t.threadId, t.lastAt) && (
                   <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">
                     {t.unreadCount}
                   </span>
@@ -378,7 +434,7 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
                   </button>
                 ) : threadInfo ? (
                   <button
-                    onClick={() => onOpenThread({ dealerId: variant === "staff" ? threadInfo.dealerId : dealerId, applicationId: threadInfo.applicationId, label: threadInfo.appLabel, dealerName: threadInfo.dealerName })}
+                    onClick={() => onOpenThread({ threadId: threadInfo.threadId, dealerId: variant === "staff" ? threadInfo.dealerId : dealerId, applicationId: threadInfo.applicationId, label: threadInfo.appLabel, dealerName: threadInfo.dealerName })}
                     title="Open this chat"
                     className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100"
                   >
