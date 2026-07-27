@@ -40,7 +40,7 @@ export function useDirectCall({ identity }) {
   const [remoteIdentity, setRemoteIdentity] = useState(null); // { type, id }
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
-  const [callError, setCallError] = useState("");
+  const [callError, setCallError] = useState(null);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   // Mirrors answeredAtRef below, purely so the UI (the live call-duration
   // timer) can react to it — the ref stays the source of truth for logic
@@ -153,7 +153,7 @@ export function useDirectCall({ identity }) {
       })
       .on("broadcast", { event: "decline" }, ({ payload }) => {
         if (payload.sessionId !== sessionIdRef.current) return;
-        setCallError("Call declined");
+        setCallError({ friendly: "Call declined", raw: "" });
         reset("declined");
       })
       .on("broadcast", { event: "end" }, ({ payload }) => {
@@ -239,7 +239,7 @@ export function useDirectCall({ identity }) {
     if (status !== "ringing-outgoing") { clearRingTimer(); return undefined; }
     ringTimerRef.current = setTimeout(() => {
       sendTo(remoteIdentityRef.current, "end");
-      setCallError("No answer");
+      setCallError({ friendly: "No answer", raw: "" });
       reset("timeout");
     }, RING_TIMEOUT_MS);
     return clearRingTimer;
@@ -249,7 +249,7 @@ export function useDirectCall({ identity }) {
   // dealer_staff row, or an admin staff row.
   const startCall = useCallback((target, type = "audio") => {
     if (!identityRef.current || status !== "idle" || !target?.id || !target?.type) return;
-    setCallError("");
+    setCallError(null);
     // This doubles as the actual Agora channel name (see the `channelName =
     // sessionIdRef.current` a bit further down), and Agora channel names
     // are capped at 64 characters. It used to be built by concatenating
@@ -320,6 +320,6 @@ export function useDirectCall({ identity }) {
     status, callType, remoteName, remoteIdentity, muted, cameraOff, callError, hasRemoteVideo, answeredAt,
     localVideoElRef, remoteVideoElRef,
     startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
-    dismissError: () => setCallError(""),
+    dismissError: () => setCallError(null),
   };
 }

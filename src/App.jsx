@@ -21,7 +21,7 @@ import CommsWindow from "./components/CommsWindow";
 import GlobalCallOverlay from "./components/GlobalCallOverlay";
 import NotificationToaster from "./components/NotificationToaster";
 import { useDirectCall } from "./lib/directCall";
-import { notify, requestNotificationPermission } from "./lib/notify";
+import { notify, requestNotificationPermission, primeAudioOnFirstInteraction } from "./lib/notify";
 import { registerForPush, unregisterForPush } from "./lib/push";
 import { identityFor, countOpenThreads } from "./lib/chat";
 import PinUnlock from "./pages/PinUnlock";
@@ -192,6 +192,14 @@ export default function App() {
   useEffect(() => {
     if (staff || dealer || dealerStaff) requestNotificationPermission();
   }, [staff, dealer, dealerStaff]);
+
+  // Arms the notification-ping AudioContext as soon as the person taps
+  // anything — see primeAudioOnFirstInteraction in lib/notify.js for why
+  // this matters specifically on the native app (a notification can
+  // otherwise arrive silently before any tap has happened).
+  useEffect(() => {
+    primeAudioOnFirstInteraction();
+  }, []);
 
   // The single source of truth for "are we actually allowed in" —
   // this only ever runs to completion BEFORE we show the Dashboard,

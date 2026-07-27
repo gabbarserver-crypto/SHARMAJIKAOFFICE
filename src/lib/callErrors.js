@@ -25,6 +25,7 @@ export function friendlyCallError(e) {
   const msg = e?.message || "";
   const name = e?.name || "";
   const code = e?.code || "";
+  const raw = [name, code, msg].filter(Boolean).join(" · ") || "no error details available";
 
   // Agora SDK's own permission-related error codes/messages, plus the raw
   // browser DOMException names getUserMedia throws when mic/camera access
@@ -34,18 +35,19 @@ export function friendlyCallError(e) {
     /NotAllowedError|Permission denied|permission dismissed/i.test(msg) ||
     name === "NotAllowedError"
   ) {
-    return "Couldn't access the microphone/camera. Check that this app has Microphone (and Camera, for video calls) permission — Android Settings → Apps → SJO ERP → Permissions — then try the call again.";
+    return { friendly: "Couldn't access the microphone/camera. Check that this app has Microphone (and Camera, for video calls) permission — Android Settings → Apps → SJO ERP → Permissions — then try the call again.", raw };
   }
 
   if (/NotFoundError|DEVICE_NOT_FOUND/i.test(msg) || name === "NotFoundError") {
-    return "No microphone was found on this device.";
+    return { friendly: "No microphone was found on this device.", raw };
   }
 
   // A bare internal exception (from the SDK or a WebView quirk) rather than
-  // a real, readable error message — don't show the stack-trace fragment.
+  // a real, readable error message — don't show the stack-trace fragment
+  // as the primary message, but keep it available as `raw` for debugging.
   if (!msg || RAW_JS_ERROR_PATTERNS.some((p) => p.test(msg))) {
-    return "Couldn't connect the call. Check your internet connection and that Microphone permission is allowed for this app, then try again.";
+    return { friendly: "Couldn't connect the call. Check your internet connection and that Microphone permission is allowed for this app, then try again.", raw };
   }
 
-  return msg;
+  return { friendly: msg, raw };
 }

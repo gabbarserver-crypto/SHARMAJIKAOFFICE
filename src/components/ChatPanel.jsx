@@ -269,8 +269,11 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
 
       {call.callError && (
         <div className="absolute inset-x-0 top-0 z-20 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs px-3 py-1.5 flex items-center justify-between">
-          <span>{call.callError}</span>
-          <button onClick={call.dismissError} className="font-semibold">✕</button>
+          <span>
+            {call.callError.friendly}
+            {call.callError.raw && <span className="block text-[10px] text-amber-600/70 mt-0.5">Details: {call.callError.raw}</span>}
+          </span>
+          <button onClick={call.dismissError} className="font-semibold shrink-0">✕</button>
         </div>
       )}
 

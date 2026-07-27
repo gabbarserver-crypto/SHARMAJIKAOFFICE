@@ -34,7 +34,7 @@ export function useCall({ threadId, identity }) {
   const [remoteName, setRemoteName] = useState("");
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
-  const [callError, setCallError] = useState("");
+  const [callError, setCallError] = useState(null);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   // Mirrors answeredAtRef below, purely so the UI (live call-duration timer)
   // can react to it — the ref stays the source of truth for logic inside
@@ -146,7 +146,7 @@ export function useCall({ threadId, identity }) {
       })
       .on("broadcast", { event: "decline" }, ({ payload }) => {
         if (isFromMe(payload)) return;
-        setCallError("Call declined");
+        setCallError({ friendly: "Call declined", raw: "" });
         reset("declined");
       })
       .on("broadcast", { event: "end" }, ({ payload }) => {
@@ -231,7 +231,7 @@ export function useCall({ threadId, identity }) {
     if (status !== "ringing-outgoing") { clearRingTimer(); return undefined; }
     ringTimerRef.current = setTimeout(() => {
       send("end");
-      setCallError("No answer");
+      setCallError({ friendly: "No answer", raw: "" });
       reset("timeout");
     }, RING_TIMEOUT_MS);
     return clearRingTimer;
@@ -239,7 +239,7 @@ export function useCall({ threadId, identity }) {
 
   const startCall = useCallback((type = "audio") => {
     if (!threadId || !identityRef.current || status !== "idle") return;
-    setCallError("");
+    setCallError(null);
     setCallType(type);
     setStatus("ringing-outgoing");
     isCallerRef.current = true;
@@ -291,6 +291,6 @@ export function useCall({ threadId, identity }) {
     status, callType, remoteName, muted, cameraOff, callError, hasRemoteVideo, answeredAt,
     localVideoElRef, remoteVideoElRef,
     startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
-    dismissError: () => setCallError(""),
+    dismissError: () => setCallError(null),
   };
 }
