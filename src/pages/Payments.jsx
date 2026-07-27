@@ -16,7 +16,7 @@ export default function Payments({ staff } = {}) {
   const [dealers, setDealers] = useState([]);
   const [agencies, setAgencies] = useState([]);
   const [applications, setApplications] = useState([]);
-  const [form, setForm] = useState({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
+  const [form, setForm] = useState({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "", paid_on: "" });
   const [recent, setRecent] = useState([]);
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -116,6 +116,7 @@ export default function Payments({ staff } = {}) {
         remarks: form.remarks || null,
         paid_at_agency_id: form.paid_at_agency_id || null,
         received_by: staffRow?.id || null,
+        ...(form.paid_on ? { created_at: form.paid_on } : {}),
       })
       .select()
       .single();
@@ -148,6 +149,7 @@ export default function Payments({ staff } = {}) {
           type: "credit",
           amount,
           description: `Payment received — ${form.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${form.remarks ? ` · ${form.remarks}` : ""}`,
+          ...(form.paid_on ? { created_at: form.paid_on } : {}),
         })
       );
     }
@@ -163,6 +165,7 @@ export default function Payments({ staff } = {}) {
           description: isAgencyOnly
             ? `Payment received — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`
             : `Payment collected on behalf of ${dealerName || "dealer"} — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`,
+          ...(form.paid_on ? { created_at: form.paid_on } : {}),
         })
       );
     }
@@ -178,7 +181,7 @@ export default function Payments({ staff } = {}) {
     } else {
       setToast(`Payment recorded — ledger entry & receipt generated${agencyName ? ` (dealer & ${agencyName} ledgers updated)` : ""}`);
     }
-    setForm({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
+    setForm({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "", paid_on: "" });
     loadRecent();
     loadAllPayments();
   };
@@ -361,36 +364,39 @@ export default function Payments({ staff } = {}) {
       </div>
 
       <Card title="Record New Payment">
-        <Field label="Payment Type" required>
-          <Select value={form.payment_type} onChange={set("payment_type")}>
-            <option value="dealer">Dealer</option>
-            <option value="agency">Agency (no dealer involved)</option>
-          </Select>
-        </Field>
-        {form.payment_type === "dealer" ? (
-          <>
-            <Field label="Dealer" required>
-              <Select value={form.dealer_id} onChange={set("dealer_id")}>
-                <option value="">Select Dealer</option>
-                {dealers.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
-              </Select>
-            </Field>
-            <Field label="Application (optional)">
-              <Select value={form.application_id} onChange={set("application_id")} disabled={!form.dealer_id}>
-                <option value="">— General payment, not tied to one application —</option>
-                {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
-              </Select>
-            </Field>
-          </>
-        ) : (
-          <Field label="Agency" required>
-            <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
-              <option value="">Select Agency</option>
-              {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+        <div className="grid gap-x-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Payment Type" required>
+            <Select value={form.payment_type} onChange={set("payment_type")}>
+              <option value="dealer">Dealer</option>
+              <option value="agency">Agency (no dealer involved)</option>
             </Select>
           </Field>
-        )}
-        <div className="grid sm:grid-cols-2 gap-x-4">
+          {form.payment_type === "dealer" ? (
+            <>
+              <Field label="Dealer" required>
+                <Select value={form.dealer_id} onChange={set("dealer_id")}>
+                  <option value="">Select Dealer</option>
+                  {dealers.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                </Select>
+              </Field>
+              <Field label="Application (optional)">
+                <Select value={form.application_id} onChange={set("application_id")} disabled={!form.dealer_id}>
+                  <option value="">— General payment, not tied to one application —</option>
+                  {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
+                </Select>
+              </Field>
+            </>
+          ) : (
+            <Field label="Agency" required>
+              <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
+                <option value="">Select Agency</option>
+                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+              </Select>
+            </Field>
+          )}
+          <Field label="Date">
+            <Input type="date" value={form.paid_on} onChange={set("paid_on")} />
+          </Field>
           <Field label="Amount (₹)" required>
             <Input type="number" value={form.amount} onChange={set("amount")} />
           </Field>
@@ -399,21 +405,23 @@ export default function Payments({ staff } = {}) {
               <option>Cash</option><option>UPI</option><option>Bank</option><option>Cheque</option>
             </Select>
           </Field>
-        </div>
-        <Field label="Reference No.">
-          <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
-        </Field>
-        {form.payment_type === "dealer" && (
-          <Field label="Paid At (Agency)">
-            <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
-              <option value="">— Not via an agency —</option>
-              {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
-            </Select>
+          <Field label="Reference No.">
+            <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
           </Field>
-        )}
-        <Field label="Remarks">
-          <Input value={form.remarks} onChange={set("remarks")} />
-        </Field>
+          {form.payment_type === "dealer" && (
+            <Field label="Paid At (Agency)">
+              <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
+                <option value="">— Not via an agency —</option>
+                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
+              </Select>
+            </Field>
+          )}
+          <div className="sm:col-span-2 lg:col-span-4">
+            <Field label="Remarks">
+              <Input value={form.remarks} onChange={set("remarks")} />
+            </Field>
+          </div>
+        </div>
         <PrimaryButton onClick={submit} disabled={saving}>
           {saving ? "Saving..." : "Save Payment & Generate Receipt"}
         </PrimaryButton>
