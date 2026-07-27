@@ -8,7 +8,7 @@ import { DealerForm, AgencyForm } from "./Masters";
 // just repeat it — the "Service: X" segment, and the "Payment received"
 // prefix — along with whatever separator (·, -, –, —) sat next to them, so
 // the remaining text doesn't have an orphaned separator left behind.
-function stripTypeFromDescription(description) {
+export function stripTypeFromDescription(description) {
   if (!description) return description;
   let d = description;
   d = d.replace(/\s*[·\-–—]?\s*Service:\s*[^·\-–—\n]+/i, "");
@@ -24,7 +24,7 @@ function stripTypeFromDescription(description) {
 // "MANOJ KUMAR · Service: LL RIC · App No: 3303448226" or
 // "Payment received — Cash · UPI 16-07-2026". This pulls a short label back
 // out of that text for display as its own column.
-function deriveTxnType(description) {
+export function deriveTxnType(description) {
   if (!description) return null;
   if (/payment received/i.test(description)) return "PAYMENT";
   const m = description.match(/Service:\s*([^·\n]+)/i);

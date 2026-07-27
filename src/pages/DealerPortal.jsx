@@ -25,6 +25,7 @@ import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
+import { stripTypeFromDescription, deriveTxnType } from "./Ledger";
 
 // Same file the Dashboard's "Download App" card points to (see
 // src/pages/Dashboard.jsx) — one APK, linked from every portal.
@@ -1404,11 +1405,14 @@ function DealerLedger({ dealerId }) {
             <tbody>
               {txns.map((t) => {
                 const matched = appsByCode[t.voucher_no];
+                const isPayment = !matched && deriveTxnType(t.description) === "PAYMENT";
+                const serviceCell = matched?.service || (isPayment ? "Payment" : (t.description || t.remarks || "—"));
+                const applicantCell = matched?.applicant_name || (isPayment ? (stripTypeFromDescription(t.description) || "—") : "—");
                 return (
                   <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toLocaleDateString("en-IN") : "—"}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{matched?.service || t.description || t.remarks || "—"}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{matched?.applicant_name || "—"}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{serviceCell}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{applicantCell}</td>
                     <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.type === "credit" ? "text-emerald-600" : "text-rose-600"}`}>
                       {t.type === "credit" ? "+" : "-"}₹{Number(t.amount || 0).toLocaleString("en-IN")}
                     </td>
