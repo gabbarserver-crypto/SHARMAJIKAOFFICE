@@ -286,10 +286,11 @@ export default function Payments({ staff } = {}) {
     loadAllPayments();
   };
 
-  // Admin-only: saves an edited amount/mode/reference/remarks and updates
-  // the matching ledger entry — payment_id first, voucher_no fallback for
-  // pre-payment_id rows (see deletePayment above for why the fallback
-  // exists and why zero-row results are treated as a failure, not success).
+  // Admin-only: saves an edited date/amount/mode/reference/remarks and
+  // updates the matching ledger entry — payment_id first, voucher_no
+  // fallback for pre-payment_id rows (see deletePayment above for why the
+  // fallback exists and why zero-row results are treated as a failure,
+  // not success).
   const savePaymentEdit = async (edited) => {
     const original = editingPayment;
     const oldVoucherNo = original.reference_no?.trim() || `PMT-${original.id}`;
@@ -301,6 +302,7 @@ export default function Payments({ staff } = {}) {
         payment_mode: edited.payment_mode,
         reference_no: edited.reference_no || null,
         remarks: edited.remarks || null,
+        ...(edited.paid_on ? { created_at: edited.paid_on } : {}),
       })
       .eq("id", original.id);
     if (error) {
@@ -322,6 +324,7 @@ export default function Payments({ staff } = {}) {
           amount: parseFloat(edited.amount),
           voucher_no: newVoucherNo,
           description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
+          ...(edited.paid_on ? { created_at: edited.paid_on } : {}),
         })
       : { data: [], error: null, skipped: true };
     let agencyResult = { data: [], error: null, skipped: true };
@@ -329,6 +332,7 @@ export default function Payments({ staff } = {}) {
       agencyResult = await updateLedgerRow("agency_ledger_transactions", "agency_id", original.paid_at_agency_id, {
         amount: parseFloat(edited.amount),
         voucher_no: newVoucherNo,
+        ...(edited.paid_on ? { created_at: edited.paid_on } : {}),
       });
     }
 
@@ -986,8 +990,8 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
   );
 }
 
-// Admin-only quick edit for a payment row — amount/mode/reference/remarks
-// only (dealer, application, and Paid-At-Agency stay fixed to avoid the
+// Admin-only quick edit for a payment row — date/amount/mode/reference/
+// remarks (dealer, application, and Paid-At-Agency stay fixed to avoid the
 // ledger-reversal complexity of re-pointing a payment to a different
 // dealer or agency after the fact).
 function EditPaymentModal({ payment, onClose, onSave }) {
@@ -996,11 +1000,13 @@ function EditPaymentModal({ payment, onClose, onSave }) {
     payment_mode: payment.payment_mode,
     reference_no: payment.reference_no || "",
     remarks: payment.remarks || "",
+    paid_on: payment.created_at ? payment.created_at.slice(0, 10) : "",
   });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
 
   return (
     <Modal title={`Edit Payment — ${payment.dealers?.name || ""}`} onClose={onClose}>
+      <Field label="Paid On" required><Input type="date" value={f.paid_on} onChange={set("paid_on")} /></Field>
       <Field label="Amount" required><Input type="number" value={f.amount} onChange={set("amount")} /></Field>
       <Field label="Payment Mode">
         <Select value={f.payment_mode} onChange={set("payment_mode")}>
