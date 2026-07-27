@@ -24,6 +24,7 @@ import { supabase } from "./supabase";
 import { fetchAgoraToken, sendPush } from "./serverApi";
 import { notify, startRingtone, stopRingtone } from "./notify";
 import { logCallStart, logCallOutcome } from "./callLog";
+import { friendlyCallError } from "./callErrors";
 
 const RING_TIMEOUT_MS = 30000;
 
@@ -211,7 +212,7 @@ export function useDirectCall({ identity }) {
         }
       } catch (e) {
         if (!cancelled) {
-          setCallError(e.message || "Couldn't connect the call");
+          setCallError(friendlyCallError(e));
           reset("ended");
         }
       }

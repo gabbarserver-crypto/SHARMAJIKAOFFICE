@@ -190,18 +190,27 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
       )}
 
       {call.status === "ringing-incoming" && (
-        <div className="absolute inset-x-0 top-0 z-20 bg-slate-900 text-white px-4 py-3 flex items-center justify-between shadow-lg">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold truncate">{call.remoteName}</p>
-            <p className="text-xs text-slate-300">Incoming {call.callType} call…</p>
+        <div className="absolute inset-0 z-20 bg-slate-900 text-white flex flex-col">
+          <div className="flex-1 flex flex-col items-center justify-center px-6">
+            <div className="w-24 h-24 rounded-full bg-white/10 flex items-center justify-center mb-5 text-3xl font-semibold">
+              {(call.remoteName || "?").split(" ").map((s) => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
+            </div>
+            <p className="text-xl font-semibold mb-1 text-center">{call.remoteName}</p>
+            <p className="text-sm text-slate-300">Incoming {call.callType} call…</p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button onClick={call.declineCall} className="w-9 h-9 rounded-full bg-rose-600 hover:bg-rose-700 flex items-center justify-center">
-              <PhoneOff size={16} />
-            </button>
-            <button onClick={call.acceptCall} className="w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center">
-              <Phone size={16} />
-            </button>
+          <div className="flex items-center justify-around px-8 pb-8 pt-3 shrink-0">
+            <div className="flex flex-col items-center gap-2">
+              <button onClick={call.declineCall} className="w-16 h-16 rounded-full bg-rose-600 active:bg-rose-700 flex items-center justify-center shadow-lg">
+                <PhoneOff size={26} />
+              </button>
+              <span className="text-xs text-slate-300">Decline</span>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <button onClick={call.acceptCall} className="w-16 h-16 rounded-full bg-emerald-600 active:bg-emerald-700 flex items-center justify-center shadow-lg animate-pulse">
+                <Phone size={26} />
+              </button>
+              <span className="text-xs text-slate-300">Accept</span>
+            </div>
           </div>
         </div>
       )}
