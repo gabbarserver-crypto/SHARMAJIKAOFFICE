@@ -8,6 +8,7 @@
 // one panel.
 import React from "react";
 import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
+import CallTimer from "./CallTimer";
 
 export default function GlobalCallOverlay({ call }) {
   if (!call) return null;
@@ -42,6 +43,9 @@ export default function GlobalCallOverlay({ call }) {
                     {call.status === "in-call" ? "Waiting for their video…" : `Calling ${call.remoteName}…`}
                   </p>
                 )}
+                {call.status === "in-call" && (
+                  <CallTimer answeredAt={call.answeredAt} className="absolute top-3 left-3 z-10 text-xs font-semibold bg-black/40 text-white px-2 py-1 rounded-full" />
+                )}
                 <div ref={call.localVideoElRef} className="absolute bottom-3 right-3 w-28 h-36 rounded-lg overflow-hidden bg-slate-700 border border-slate-600" />
               </>
             ) : (
@@ -52,6 +56,7 @@ export default function GlobalCallOverlay({ call }) {
                 <p className="text-base font-semibold mb-1">{call.remoteName}</p>
                 <p className="text-sm text-slate-300">
                   {call.status === "ringing-outgoing" ? "Calling…" : call.status === "connecting" ? "Connecting…" : "On call"}
+                  {call.status === "in-call" && <CallTimer answeredAt={call.answeredAt} className="ml-1.5" />}
                 </p>
               </div>
             )}
