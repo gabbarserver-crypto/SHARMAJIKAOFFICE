@@ -21,6 +21,14 @@ export default function Payments({ staff } = {}) {
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [allPayments, setAllPayments] = useState([]);
+  const [allLoading, setAllLoading] = useState(true);
+  const [allQuery, setAllQuery] = useState("");
+  const [allDateFrom, setAllDateFrom] = useState("");
+  const [allDateTo, setAllDateTo] = useState("");
+  const [recentQuery, setRecentQuery] = useState("");
+  const [recentSortKey, setRecentSortKey] = useState("date");
+  const [recentSortDir, setRecentSortDir] = useState("desc");
 
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.tagName === "SELECT" ? e.target.value : e.target.value.toUpperCase() }));
 
@@ -31,6 +39,7 @@ export default function Payments({ staff } = {}) {
       const { data: a } = await supabase.from("agencies").select("id, name, code");
       setAgencies(a || []);
       loadRecent();
+      loadAllPayments();
     })();
   }, []);
 
@@ -55,6 +64,21 @@ export default function Payments({ staff } = {}) {
     setRecent(data || []);
   };
 
+  // Full history, not just the last 20 — powers the "All Receipts &
+  // Payments" table below. Capped at 2000 rows; if that's ever not enough,
+  // the date-range filter should be pushed server-side instead of the
+  // client-side filtering below.
+  const loadAllPayments = async () => {
+    setAllLoading(true);
+    const { data } = await supabase
+      .from("payments")
+      .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
+      .order("created_at", { ascending: false })
+      .limit(2000);
+    setAllPayments(data || []);
+    setAllLoading(false);
+  };
+
   const submit = async () => {
     const isAgencyOnly = form.payment_type === "agency";
     if (isAgencyOnly ? !form.paid_at_agency_id : !form.dealer_id) {
@@ -64,6 +88,18 @@ export default function Payments({ staff } = {}) {
     if (!form.amount) {
       setToast("Amount is required");
       return;
+    }
+    if (form.reference_no?.trim()) {
+      const { data: dupe } = await supabase
+        .from("payments")
+        .select("id")
+        .eq("reference_no", form.reference_no.trim())
+        .limit(1)
+        .maybeSingle();
+      if (dupe) {
+        setToast(`A payment with reference "${form.reference_no.trim()}" already exists — check it isn't already recorded before saving again.`);
+        return;
+      }
     }
     setSaving(true);
     const { data: userData } = await supabase.auth.getUser();
@@ -86,7 +122,7 @@ export default function Payments({ staff } = {}) {
 
     if (error) {
       setSaving(false);
-      setToast("Failed: " + error.message);
+      setToast(error.code === "23505" ? "This reference number was just used by another payment — please check before saving again." : "Failed: " + error.message);
       return;
     }
 
@@ -144,6 +180,7 @@ export default function Payments({ staff } = {}) {
     }
     setForm({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "" });
     loadRecent();
+    loadAllPayments();
   };
 
   // Admin-only: deleting a payment also removes the ledger entries it
@@ -153,9 +190,12 @@ export default function Payments({ staff } = {}) {
   // previous version, this checks what actually got deleted — a delete
   // that matches zero rows doesn't error, so silently trusting it is how
   // a payment could disappear while its ledger entry stayed behind.
-  const deletePayment = async (p) => {
-    const payerName = p.dealers?.name || p.paid_at_agency?.name || "this payer";
-    if (!window.confirm(`Delete this ₹${Number(p.amount).toLocaleString("en-IN")} payment from ${payerName}? This also removes its ledger entries.`)) return;
+  // Core delete logic, shared between the single "Delete" button and the
+  // "All Receipts & Payments" bulk-select delete below. Returns a plain
+  // {ok, message} instead of touching setToast directly, so the bulk path
+  // can collect per-row results into one summary instead of firing a toast
+  // per payment.
+  const deletePaymentAndLedger = async (p) => {
     const voucherNo = p.reference_no?.trim() || `PMT-${p.id}`;
 
     const deleteLedgerRows = async (table, entityCol, entityId) => {
@@ -178,23 +218,49 @@ export default function Payments({ staff } = {}) {
       : { data: [], error: null, skipped: true };
 
     if (dealerResult.error || agencyResult.error) {
-      setToast("Failed to remove ledger entries: " + (dealerResult.error || agencyResult.error).message + " — payment was NOT deleted.");
-      return;
+      return { ok: false, message: "Failed to remove ledger entries: " + (dealerResult.error || agencyResult.error).message + " — payment was NOT deleted." };
     }
     const dealerOk = dealerResult.skipped || (dealerResult.data && dealerResult.data.length > 0);
     const agencyOk = agencyResult.skipped || (agencyResult.data && agencyResult.data.length > 0);
     if (!dealerOk || !agencyOk) {
-      setToast("Couldn't find this payment's ledger entry to remove — payment was NOT deleted. Please check the ledger manually.");
-      return;
+      return { ok: false, message: "Couldn't find this payment's ledger entry to remove — payment was NOT deleted." };
     }
 
     const { error } = await supabase.from("payments").delete().eq("id", p.id);
-    if (error) {
-      setToast("Failed to delete: " + error.message);
-      return;
-    }
-    setToast("Payment deleted");
+    if (error) return { ok: false, message: "Failed to delete: " + error.message };
+    return { ok: true, message: "" };
+  };
+
+  const deletePayment = async (p) => {
+    const payerName = p.dealers?.name || p.paid_at_agency?.name || "this payer";
+    if (!window.confirm(`Delete this ₹${Number(p.amount).toLocaleString("en-IN")} payment from ${payerName}? This also removes its ledger entries.`)) return;
+    const result = await deletePaymentAndLedger(p);
+    setToast(result.ok ? "Payment deleted" : result.message);
     loadRecent();
+    loadAllPayments();
+  };
+
+  // Deletes every payment in `ids` (payment rows from allPayments) one at a
+  // time — sequential, not Promise.all, so one failure doesn't race with
+  // another payment's ledger cleanup on the same dealer/agency ledger.
+  const bulkDeletePayments = async (ids) => {
+    const rows = allPayments.filter((p) => ids.includes(p.id));
+    if (!rows.length) return;
+    if (!window.confirm(`Delete ${rows.length} selected payment${rows.length !== 1 ? "s" : ""}? This also removes their ledger entries. This cannot be undone.`)) return;
+    let succeeded = 0;
+    const failures = [];
+    for (const p of rows) {
+      const result = await deletePaymentAndLedger(p);
+      if (result.ok) succeeded++;
+      else failures.push(`₹${p.amount} (${p.dealers?.name || p.paid_at_agency?.name || "—"}): ${result.message}`);
+    }
+    setToast(
+      failures.length
+        ? `Deleted ${succeeded}/${rows.length}. Failed: ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`
+        : `Deleted ${succeeded} payment${succeeded !== 1 ? "s" : ""}`
+    );
+    loadRecent();
+    loadAllPayments();
   };
 
   // Admin-only: saves an edited amount/mode/reference/remarks and updates
@@ -252,11 +318,45 @@ export default function Payments({ staff } = {}) {
     }
     setEditingPayment(null);
     loadRecent();
+    loadAllPayments();
   };
 
+  const payerNameOf = (p) => p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—");
+
+  const toggleRecentSort = (key) => {
+    if (recentSortKey === key) setRecentSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setRecentSortKey(key); setRecentSortDir(key === "amount" ? "desc" : "asc"); }
+  };
+
+  const visibleRecent = recent
+    .filter((p) => {
+      if (!recentQuery.trim()) return true;
+      const q = recentQuery.trim().toLowerCase();
+      const haystack = [payerNameOf(p), p.applications?.draft_code, p.reference_no, p.remarks, p.payment_mode].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q);
+    })
+    .sort((a, b) => {
+      let av, bv;
+      if (recentSortKey === "amount") { av = Number(a.amount) || 0; bv = Number(b.amount) || 0; }
+      else if (recentSortKey === "payer") { av = payerNameOf(a).toLowerCase(); bv = payerNameOf(b).toLowerCase(); }
+      else { av = a.created_at; bv = b.created_at; }
+      if (av < bv) return recentSortDir === "asc" ? -1 : 1;
+      if (av > bv) return recentSortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+
+  const RecentSortTh = ({ label, sortKeyName, align = "left" }) => (
+    <th
+      onClick={() => toggleRecentSort(sortKeyName)}
+      className={`px-3 py-2 text-${align} cursor-pointer select-none whitespace-nowrap`}
+    >
+      {label} {recentSortKey === sortKeyName && (recentSortDir === "asc" ? "↑" : "↓")}
+    </th>
+  );
+
   return (
-    <div className="grid lg:grid-cols-2 gap-6">
-      <div className="lg:col-span-2 flex justify-end">
+    <div className="flex flex-col gap-6">
+      <div className="flex justify-end">
         <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
       </div>
 
@@ -320,32 +420,56 @@ export default function Payments({ staff } = {}) {
       </Card>
 
       <Card title="Recent Payments">
-        <div className="space-y-2 max-h-[520px] overflow-y-auto">
-          {recent.map((p) => (
-            <div key={p.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
-              <div>
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  {p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—")}
-                </p>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {p.applications?.draft_code ? `${p.applications.draft_code} · ` : ""}{p.payment_mode} · {new Date(p.created_at).toLocaleString()}
-                  {p.dealer_id && p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <p className="text-sm font-bold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</p>
-                {isAdmin && (
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setEditingPayment(p)} className="text-xs font-semibold text-blue-600 hover:underline">Edit</button>
-                    <button onClick={() => deletePayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-          {recent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No payments yet</p>}
+        <div className="mb-3">
+          <Input value={recentQuery} onChange={(e) => setRecentQuery(e.target.value)} placeholder="Search dealer, agency, application, reference…" />
+        </div>
+        <div className="overflow-x-auto max-h-[520px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-lg">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500 sticky top-0">
+              <tr>
+                <RecentSortTh label="Date" sortKeyName="date" />
+                <RecentSortTh label="Payer" sortKeyName="payer" />
+                <th className="px-3 py-2 text-left">Details</th>
+                <RecentSortTh label="Amount" sortKeyName="amount" align="right" />
+                {isAdmin && <th className="px-3 py-2 text-left">Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRecent.map((p) => (
+                <tr key={p.id} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{new Date(p.created_at).toLocaleString()}</td>
+                  <td className="px-3 py-2 whitespace-nowrap font-semibold text-slate-700 dark:text-slate-300">{payerNameOf(p)}</td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500">
+                    {p.applications?.draft_code ? `${p.applications.draft_code} · ` : ""}{p.payment_mode}
+                    {p.dealer_id && p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-right font-bold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</td>
+                  {isAdmin && (
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <button onClick={() => setEditingPayment(p)} className="text-xs font-semibold text-blue-600 hover:underline mr-3">Edit</button>
+                      <button onClick={() => deletePayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {visibleRecent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-6">No payments match.</p>}
         </div>
       </Card>
+
+      <AllPaymentsTable
+        payments={allPayments}
+        loading={allLoading}
+        query={allQuery}
+        setQuery={setAllQuery}
+        dateFrom={allDateFrom}
+        setDateFrom={setAllDateFrom}
+        dateTo={allDateTo}
+        setDateTo={setAllDateTo}
+        isAdmin={isAdmin}
+        onBulkDelete={bulkDeletePayments}
+      />
 
       {editingPayment && (
         <EditPaymentModal
@@ -365,10 +489,153 @@ export default function Payments({ staff } = {}) {
           onImported={() => {
             setShowImport(false);
             loadRecent();
+            loadAllPayments();
           }}
         />
       )}
     </div>
+  );
+}
+
+// Full history of every payment (receipt) recorded — search + date range,
+// entirely client-side over what Payments() already fetched via
+// loadAllPayments(). Separate from "Recent Payments" above, which is
+// intentionally just the last 20 for a quick glance.
+function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDateFrom, dateTo, setDateTo, isAdmin, onBulkDelete }) {
+  const [selected, setSelected] = useState(new Set());
+  const payerName = (p) => p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—");
+
+  const filtered = payments.filter((p) => {
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      const haystack = [payerName(p), p.applications?.draft_code, p.reference_no, p.remarks, p.payment_mode].filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    const paidDate = p.created_at?.slice(0, 10);
+    if (dateFrom && paidDate < dateFrom) return false;
+    if (dateTo && paidDate > dateTo) return false;
+    return true;
+  });
+
+  // Selection is cleared whenever the visible set changes (new search/date
+  // filter) so it can never silently hold onto an id that's since scrolled
+  // out of view — "select all" always means "all of what you're looking at
+  // right now", not some stale set from before you changed the filter.
+  useEffect(() => { setSelected(new Set()); }, [query, dateFrom, dateTo]);
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.id));
+  const toggleSelectAll = () => {
+    setSelected(allVisibleSelected ? new Set() : new Set(filtered.map((p) => p.id)));
+  };
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const total = filtered.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+  const exportCSV = () => {
+    const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = ["Date", "Payer", "Type", "Application", "Amount", "Mode", "Reference No", "Paid At Agency", "Remarks"];
+    const lines = [header.join(",")];
+    filtered.forEach((p) => {
+      lines.push([
+        escapeCsv(new Date(p.created_at).toLocaleDateString()),
+        escapeCsv(p.dealers?.name || p.paid_at_agency?.name || ""),
+        escapeCsv(p.dealer_id ? "Dealer" : "Agency"),
+        escapeCsv(p.applications?.draft_code || ""),
+        escapeCsv(p.amount),
+        escapeCsv(p.payment_mode),
+        escapeCsv(p.reference_no || ""),
+        escapeCsv(p.dealer_id ? (p.paid_at_agency?.name || "") : ""),
+        escapeCsv(p.remarks || ""),
+      ].join(","));
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "all-payments.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Card title="All Receipts & Payments">
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <Field label="Search">
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Dealer, agency, application, reference…" />
+        </Field>
+        <Field label="From">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        </Field>
+        <Field label="To">
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </Field>
+        <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
+        {isAdmin && selected.size > 0 && (
+          <button
+            onClick={() => onBulkDelete(Array.from(selected))}
+            className="px-3 py-2 rounded-lg text-sm font-semibold bg-rose-600 hover:bg-rose-700 text-white"
+          >
+            Delete Selected ({selected.size})
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-6 text-center">Loading…</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-6 text-center">No payments match this filter.</p>
+      ) : (
+        <>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mb-2">
+            {filtered.length} payment{filtered.length !== 1 ? "s" : ""} · ₹{total.toLocaleString("en-IN")} total
+          </p>
+          <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-lg max-h-[480px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500 sticky top-0">
+                <tr>
+                  {isAdmin && (
+                    <th className="px-3 py-2 text-left w-8">
+                      <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} />
+                    </th>
+                  )}
+                  <th className="px-3 py-2 text-left">Date</th>
+                  <th className="px-3 py-2 text-left">Payer</th>
+                  <th className="px-3 py-2 text-left">Application</th>
+                  <th className="px-3 py-2 text-left">Mode</th>
+                  <th className="px-3 py-2 text-left">Reference</th>
+                  <th className="px-3 py-2 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((p) => (
+                  <tr key={p.id} className="border-t border-slate-100 dark:border-slate-800">
+                    {isAdmin && (
+                      <td className="px-3 py-2">
+                        <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleOne(p.id)} />
+                      </td>
+                    )}
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{new Date(p.created_at).toLocaleDateString()}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-700 dark:text-slate-300">{payerName(p)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.applications?.draft_code || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.payment_mode}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.reference_no || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right font-semibold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -389,29 +656,27 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
-  const [recentImports, setRecentImports] = useState(null); // null = not loaded yet
-  const [undoing, setUndoing] = useState(false);
 
-  const loadRecentImports = async () => {
-    const { data } = await supabase
-      .from("payments")
-      .select("import_batch, amount, created_at, dealers(name), paid_at_agency:paid_at_agency_id(name)")
-      .not("import_batch", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(500);
-    const byBatch = new Map();
-    for (const row of data || []) {
-      const b = byBatch.get(row.import_batch) || { batchId: row.import_batch, count: 0, total: 0, at: row.created_at, names: new Set() };
-      b.count += 1;
-      b.total += Number(row.amount || 0);
-      if (row.created_at > b.at) b.at = row.created_at;
-      if (row.dealers?.name || row.paid_at_agency?.name) b.names.add(row.dealers?.name || row.paid_at_agency?.name);
-      byBatch.set(row.import_batch, b);
-    }
-    setRecentImports([...byBatch.values()].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 10));
+  // A ready-to-fill CSV with the exact headers this importer looks for,
+  // plus two example rows — one normal Dealer payment, one pure Agency
+  // payment (Dealer left blank) — so both patterns are obvious at a glance
+  // rather than only explained in the paragraph above.
+  const downloadTemplate = () => {
+    const header = ["Dealer", "Amount", "Application", "Payment Mode", "Reference No", "Date", "Paid At Agency", "Remarks"];
+    const sampleDealer = [dealers[0]?.name || "ABC Motors", "1900", "", "UPI", "UPI-REF-123", "", "", "LL fee"];
+    const sampleAgency = ["", "5000", "", "Cash", "", "", agencies[0]?.name || "Agency Name", "Cash collected at counter"];
+    const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [header, sampleDealer, sampleAgency].map((row) => row.map(escapeCsv).join(","));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "payments-import-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
-
-  useEffect(() => { loadRecentImports(); }, []);
 
   const handleFile = (file) => {
     if (!file) return;
@@ -421,6 +686,13 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
     const reader = new FileReader();
     reader.onload = async (e) => {
       const parsed = parseCSV(String(e.target.result));
+
+      // Fetch every existing non-empty reference_no once, so each row can
+      // be checked against real duplicates without a query per row.
+      const { data: existingRefs } = await supabase.from("payments").select("reference_no").not("reference_no", "is", null);
+      const existingRefSet = new Set((existingRefs || []).map((r) => r.reference_no));
+      const seenInThisFile = new Set(); // catches two rows in the SAME csv reusing one reference no.
+
       const built = parsed.map((raw) => {
         const get = (...keys) => {
           for (const k of keys) {
@@ -455,11 +727,16 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
 
         if (dateRaw && !paidOn) errors.push(`Date "${dateRaw}" not recognized (use DD-MM-YYYY)`);
 
+        if (referenceRaw) {
+          if (existingRefSet.has(referenceRaw)) errors.push(`Reference "${referenceRaw}" is already recorded — looks like a duplicate`);
+          else if (seenInThisFile.has(referenceRaw)) errors.push(`Reference "${referenceRaw}" appears more than once in this file`);
+          else seenInThisFile.add(referenceRaw);
+        }
+
         return {
           dealerRaw, applicationRaw, agencyRaw,
           included: errors.length === 0,
           errors,
-          warnings: [],
           payload: {
             dealer_id: dealer?.id,
             dealer_name: dealer?.name,
@@ -474,49 +751,6 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           },
         };
       });
-
-      // Duplicate check — importing the same file (or an overlapping one)
-      // twice is the #1 way this table ends up with doubled payments.
-      // Flag anything that looks like it's already in the table: same
-      // payer + same reference no. (when given), or same payer + same
-      // amount + same date (when it isn't). This is a WARNING, not an
-      // error — the row stays untouched and toggleable, it's just
-      // unchecked by default so a re-import needs a deliberate opt-in
-      // per row instead of silently doubling everything.
-      const payerIds = [...new Set(built.flatMap((r) => [r.payload.dealer_id, r.payload.agency_id]).filter(Boolean))];
-      if (payerIds.length) {
-        const [{ data: existingByDealer }, { data: existingByAgency }] = await Promise.all([
-          supabase.from("payments").select("dealer_id, amount, reference_no, created_at").in("dealer_id", payerIds),
-          supabase.from("payments").select("paid_at_agency_id, amount, reference_no, created_at").in("paid_at_agency_id", payerIds),
-        ]);
-        const existing = [...(existingByDealer || []), ...(existingByAgency || [])];
-
-        for (const r of built) {
-          if (r.errors.length) continue;
-          const payerId = r.payload.dealer_id || r.payload.agency_id;
-          const rowDate = (r.payload.paid_on || new Date().toISOString()).slice(0, 10);
-          const refKey = r.payload.reference_no?.trim().toLowerCase();
-
-          const isDup = existing.some((p) => {
-            const sameDealer = r.payload.dealer_id && p.dealer_id === r.payload.dealer_id;
-            const sameAgency = r.payload.agency_id && p.paid_at_agency_id === r.payload.agency_id;
-            if (!sameDealer && !sameAgency) return false;
-            if (Number(p.amount) !== Number(r.payload.amount)) return false;
-            if (refKey) return (p.reference_no || "").trim().toLowerCase() === refKey;
-            return (p.created_at || "").slice(0, 10) === rowDate;
-          });
-
-          if (isDup) {
-            r.warnings.push(
-              refKey
-                ? `Possible duplicate — a payment with this reference no. already exists for ${r.payload.dealer_name || r.payload.agency_name}`
-                : `Possible duplicate — a payment of this amount on this date already exists for ${r.payload.dealer_name || r.payload.agency_name}`
-            );
-            r.included = false; // default OFF; staff can still tick it back on if it's genuinely a second, separate payment
-          }
-        }
-      }
-
       setPreview(built);
     };
     reader.readAsText(file);
@@ -530,11 +764,6 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
     if (!rowsToImport.length) return;
     setImporting(true);
     setError("");
-    // One id per import RUN (not per row) — tags every payment this run
-    // creates so the whole batch can be found and undone later in one
-    // shot, either right after import or from "Recent Imports" below.
-    const batchId = `imp_${Date.now()}`;
-    const importedIds = [];
     try {
       const { data: userData } = await supabase.auth.getUser();
       const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
@@ -570,18 +799,20 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             remarks: payload.remarks,
             paid_at_agency_id: payload.agency_id || null,
             received_by: staffRow?.id || null,
-            import_batch: batchId,
             ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
           })
           .select()
           .single();
 
         if (insertError) {
-          setError(`Import stopped at "${payload.dealer_name || payload.agency_name}" (₹${payload.amount}): ` + insertError.message);
+          setError(
+            insertError.code === "23505"
+              ? `Import stopped: reference "${payload.reference_no}" is already used by another payment.`
+              : `Import stopped at "${payload.dealer_name || payload.agency_name}" (₹${payload.amount}): ` + insertError.message
+          );
           setImporting(false);
           return;
         }
-        importedIds.push(paymentRow.id);
 
         const voucherNo = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
         const ledgerInserts = [];
@@ -617,33 +848,13 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
         imported++;
       }
 
-      setResult({ imported, skipped: preview.length - rowsToImport.length, batchId, importedIds });
+      setResult({ imported, skipped: preview.length - rowsToImport.length });
       setImporting(false);
       onImported();
     } catch (err) {
       setError("Import failed: " + err.message);
       setImporting(false);
     }
-  };
-
-  // Deletes every payment from one import run — its ledger entries first
-  // (payments.id is what payment_id points at, so those have to go before
-  // the payments themselves), then the payments rows. Used both by "Undo
-  // this import" right after a run, and by deleting an older run from
-  // "Recent Imports" below.
-  const deleteImportBatch = async (batchId, paymentIds) => {
-    let ids = paymentIds;
-    if (!ids) {
-      const { data } = await supabase.from("payments").select("id").eq("import_batch", batchId);
-      ids = (data || []).map((p) => p.id);
-    }
-    if (!ids.length) return { error: null, count: 0 };
-    await Promise.all([
-      supabase.from("ledger_transactions").delete().in("payment_id", ids),
-      supabase.from("agency_ledger_transactions").delete().in("payment_id", ids),
-    ]);
-    const { error } = await supabase.from("payments").delete().in("id", ids);
-    return { error, count: ids.length };
   };
 
   return (
@@ -661,6 +872,13 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
               for a pure Agency payment (no dealer involved) — otherwise Dealer is required. Also: Application (optional — draft code),
               Payment Mode (optional, defaults to Cash), Reference No, Date (optional, DD-MM-YYYY — defaults to today if left blank), Remarks.
             </p>
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              className="text-xs font-semibold text-blue-600 hover:underline mb-3 block"
+            >
+              ⬇ Download CSV template
+            </button>
             <input
               type="file"
               accept=".csv,text/csv"
@@ -668,34 +886,6 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
               className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-slate-700 dark:file:text-slate-300 file:font-semibold file:text-sm"
             />
             {fileName && <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">{fileName}</span>}
-
-            {recentImports?.length > 0 && (
-              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
-                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">Recent Imports — imported by mistake? Delete the whole run here.</p>
-                <div className="space-y-1.5">
-                  {recentImports.map((b) => (
-                    <div key={b.batchId} className="flex items-center justify-between text-xs bg-slate-50 dark:bg-slate-800/50 rounded-lg px-3 py-2">
-                      <span className="text-slate-600 dark:text-slate-300">
-                        {new Date(b.at).toLocaleString()} · {b.count} payment{b.count !== 1 ? "s" : ""} · ₹{b.total.toLocaleString("en-IN")}
-                        {b.names.size > 0 && <span className="text-slate-400 dark:text-slate-500"> · {[...b.names].slice(0, 3).join(", ")}{b.names.size > 3 ? "…" : ""}</span>}
-                      </span>
-                      <button
-                        onClick={async () => {
-                          if (!window.confirm(`Delete all ${b.count} payments from this import (₹${b.total.toLocaleString("en-IN")} total)? This also removes their ledger entries. Can't be undone.`)) return;
-                          const { error } = await deleteImportBatch(b.batchId, null);
-                          if (error) { setError("Failed to delete import: " + error.message); return; }
-                          loadRecentImports();
-                          onImported();
-                        }}
-                        className="text-rose-500 font-semibold hover:underline shrink-0 ml-3"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -713,12 +903,12 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
                     <th className="px-3 py-2 text-left">Mode</th>
                     <th className="px-3 py-2 text-left">Voucher No.</th>
                     <th className="px-3 py-2 text-left">Agency</th>
-                    <th className="px-3 py-2 text-left">Errors / Warnings</th>
+                    <th className="px-3 py-2 text-left">Errors</th>
                   </tr>
                 </thead>
                 <tbody>
                   {preview.map((r, i) => (
-                    <tr key={i} className={`border-t border-slate-100 dark:border-slate-800 ${r.errors.length ? "bg-rose-50 dark:bg-rose-500/10" : r.warnings.length ? "bg-amber-50 dark:bg-amber-500/10" : ""}`}>
+                    <tr key={i} className={`border-t border-slate-100 dark:border-slate-800 ${r.errors.length ? "bg-rose-50 dark:bg-rose-500/10" : ""}`}>
                       <td className="px-3 py-2">
                         <input type="checkbox" checked={r.included} disabled={r.errors.length > 0} onChange={() => toggleIncluded(i)} />
                       </td>
@@ -731,9 +921,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.payment_mode}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.reference_no || "—"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{r.payload.agency_name || "—"}</td>
-                      <td className={r.errors.length ? "px-3 py-2 text-rose-600" : "px-3 py-2 text-amber-600"}>
-                        {r.errors.join("; ") || r.warnings.join("; ")}
-                      </td>
+                      <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -741,10 +929,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             </div>
             {error && <p className="text-rose-500 text-sm mb-3">{error}</p>}
             <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                {includedCount} of {preview.length} rows will be imported
-                {preview.some((r) => r.warnings.length) && <span className="text-amber-600"> — possible duplicates are unchecked, review before importing</span>}
-              </p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{includedCount} of {preview.length} rows will be imported</p>
               <div className="flex gap-2">
                 <GhostButton onClick={() => { setPreview([]); setFileName(""); }}>Start Over</GhostButton>
                 <PrimaryButton disabled={importing || includedCount === 0} onClick={runImport}>
@@ -759,25 +944,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           <div className="text-center py-6">
             <p className="text-lg font-semibold text-emerald-600">Imported {result.imported} payment{result.imported !== 1 ? "s" : ""}</p>
             {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped</p>}
-            <div className="flex items-center justify-center gap-3 mt-4">
-              {result.imported > 0 && (
-                <GhostButton
-                  disabled={undoing}
-                  onClick={async () => {
-                    if (!window.confirm(`Undo this import? Deletes all ${result.imported} payment(s) just created and their ledger entries.`)) return;
-                    setUndoing(true);
-                    const { error } = await deleteImportBatch(result.batchId, result.importedIds);
-                    setUndoing(false);
-                    if (error) { setError("Failed to undo: " + error.message); return; }
-                    onImported();
-                    onClose();
-                  }}
-                >
-                  {undoing ? "Undoing…" : "Undo this import"}
-                </GhostButton>
-              )}
-              <PrimaryButton onClick={onClose}>Done</PrimaryButton>
-            </div>
+            <PrimaryButton onClick={onClose} className="mt-4">Done</PrimaryButton>
           </div>
         )}
       </div>

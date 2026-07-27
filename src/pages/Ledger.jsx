@@ -206,7 +206,28 @@ export default function Ledger({ only, initialEntityId } = {}) {
 
   return (
     <div>
-      {only !== "agency" && (
+      {!only && (
+        <div className="no-print flex gap-2 mb-4">
+          <button
+            onClick={() => setEntityMode("dealer")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+              entityMode === "dealer" ? "bg-blue-600 text-white" : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            Dealer
+          </button>
+          <button
+            onClick={() => setEntityMode("agency")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+              entityMode === "agency" ? "bg-blue-600 text-white" : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            Agency
+          </button>
+        </div>
+      )}
+
+      {(only === "dealer" || (!only && entityMode === "dealer")) && (
         <SundryHead
           title="Dealer"
           subtitle="Dealers — amounts owed to us"
@@ -221,7 +242,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
         />
       )}
 
-      {only !== "dealer" && (
+      {(only === "agency" || (!only && entityMode === "agency")) && (
         <SundryHead
           title="Agency"
           subtitle="Agencies — amounts we owe / settle with them"
@@ -232,7 +253,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
           Form={AgencyForm}
           selectedId={entityMode === "agency" ? entityId : null}
           onOpenLedger={(id, name) => openLedger("agency", id, name)}
-          className={`no-print ${only === "dealer" ? "" : "mt-6"}`}
+          className="no-print"
         />
       )}
 
