@@ -52,7 +52,20 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Required for in-app voice/video calling (Agora, via the WebView's
+         getUserMedia). Capacitor's BridgeWebChromeClient already maps a
+         WebView audio/video capture request to these at runtime — without
+         them declared here, that runtime request silently fails, and the
+         call SDK throws an opaque internal error ("Cannot read properties
+         of undefined (reading 'replace')") instead of a normal permission
+         error. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Neither is actually required to install the app — plenty of
+         phones without a camera should still be able to use voice calls. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>
