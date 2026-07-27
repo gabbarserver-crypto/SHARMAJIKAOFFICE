@@ -243,7 +243,15 @@ export function useDirectCall({ identity }) {
   const startCall = useCallback((target, type = "audio") => {
     if (!identityRef.current || status !== "idle" || !target?.id || !target?.type) return;
     setCallError("");
-    sessionIdRef.current = `${identityRef.current.type}-${identityRef.current.id}-${target.type}-${target.id}-${Date.now()}`;
+    // This doubles as the actual Agora channel name (see the `channelName =
+    // sessionIdRef.current` a bit further down), and Agora channel names
+    // are capped at 64 characters. It used to be built by concatenating
+    // both people's full UUIDs + a timestamp, which is well over 90
+    // characters and made every direct call fail immediately with
+    // AgoraRTCError INVALID_PARAMS. It doesn't need to encode who's on the
+    // call at all — it only needs to be a value both sides agree matches
+    // *this* call attempt, which a plain random UUID (36 chars) already is.
+    sessionIdRef.current = crypto.randomUUID();
     remoteIdentityRef.current = { type: target.type, id: target.id };
     setCallType(type);
     setRemoteName(target.name || "");
