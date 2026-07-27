@@ -472,21 +472,57 @@ export default function Payments({ staff } = {}) {
 // entirely client-side over what Payments() already fetched via
 // loadAllPayments(). Separate from "Recent Payments" above, which is
 // intentionally just the last 20 for a quick glance.
+// Sortable column header for AllPaymentsTable — same click-to-sort,
+// click-again-to-flip pattern as RecentSortTh above, just a separate
+// component since it takes its sort state as props instead of closing
+// over local state (AllPaymentsTable owns its own sort state, independent
+// of the Recent Payments list's).
+function AllSortTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "left" }) {
+  return (
+    <th
+      onClick={() => onSort(sortKeyName)}
+      className={`px-3 py-2 text-${align} cursor-pointer select-none whitespace-nowrap`}
+    >
+      {label} {sortKey === sortKeyName && (sortDir === "asc" ? "↑" : "↓")}
+    </th>
+  );
+}
+
 function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDateFrom, dateTo, setDateTo, isAdmin, onBulkDelete, onEdit, onDelete }) {
   const [selected, setSelected] = useState(new Set());
+  const [sortKey, setSortKey] = useState("date");
+  const [sortDir, setSortDir] = useState("desc");
   const payerName = (p) => p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—");
 
-  const filtered = payments.filter((p) => {
-    if (query.trim()) {
-      const q = query.trim().toLowerCase();
-      const haystack = [payerName(p), p.applications?.draft_code, p.reference_no, p.remarks, p.payment_mode].filter(Boolean).join(" ").toLowerCase();
-      if (!haystack.includes(q)) return false;
-    }
-    const paidDate = p.created_at?.slice(0, 10);
-    if (dateFrom && paidDate < dateFrom) return false;
-    if (dateTo && paidDate > dateTo) return false;
-    return true;
-  });
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "amount" || key === "date" ? "desc" : "asc"); }
+  };
+
+  const filtered = payments
+    .filter((p) => {
+      if (query.trim()) {
+        const q = query.trim().toLowerCase();
+        const haystack = [payerName(p), p.applications?.draft_code, p.reference_no, p.remarks, p.payment_mode].filter(Boolean).join(" ").toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      const paidDate = p.created_at?.slice(0, 10);
+      if (dateFrom && paidDate < dateFrom) return false;
+      if (dateTo && paidDate > dateTo) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      let av, bv;
+      if (sortKey === "amount") { av = Number(a.amount) || 0; bv = Number(b.amount) || 0; }
+      else if (sortKey === "payer") { av = payerName(a).toLowerCase(); bv = payerName(b).toLowerCase(); }
+      else if (sortKey === "application") { av = (a.applications?.draft_code || "").toLowerCase(); bv = (b.applications?.draft_code || "").toLowerCase(); }
+      else if (sortKey === "mode") { av = (a.payment_mode || "").toLowerCase(); bv = (b.payment_mode || "").toLowerCase(); }
+      else if (sortKey === "reference") { av = (a.reference_no || "").toLowerCase(); bv = (b.reference_no || "").toLowerCase(); }
+      else { av = a.created_at || ""; bv = b.created_at || ""; }
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
 
   // Selection is cleared whenever the visible set changes (new search/date
   // filter) so it can never silently hold onto an id that's since scrolled
@@ -577,12 +613,12 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                       <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} />
                     </th>
                   )}
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Payer</th>
-                  <th className="px-3 py-2 text-left">Application</th>
-                  <th className="px-3 py-2 text-left">Mode</th>
-                  <th className="px-3 py-2 text-left">Reference</th>
-                  <th className="px-3 py-2 text-right">Amount</th>
+                  <AllSortTh label="Date" sortKeyName="date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Payer" sortKeyName="payer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Application" sortKeyName="application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Mode" sortKeyName="mode" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Reference" sortKeyName="reference" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Amount" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   {isAdmin && <th className="px-3 py-2 text-left">Actions</th>}
                 </tr>
               </thead>
