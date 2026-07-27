@@ -3,6 +3,7 @@ import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, Ph
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
 import { sendPush } from "../lib/serverApi";
 import { useCall } from "../lib/call";
+import CallTimer from "./CallTimer";
 
 const SENDER_BUBBLE = {
   staff: "bg-slate-800 text-white",
@@ -216,6 +217,9 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                     {call.status === "in-call" ? "Waiting for their video…" : "Calling…"}
                   </p>
                 )}
+                {call.status === "in-call" && (
+                  <CallTimer answeredAt={call.answeredAt} className="absolute top-2 left-2 z-10 text-[11px] font-semibold bg-black/40 text-white px-1.5 py-0.5 rounded-full" />
+                )}
                 <div ref={call.localVideoElRef} className="absolute bottom-3 right-3 w-24 h-32 rounded-lg overflow-hidden bg-slate-700 border border-slate-600" />
               </>
             ) : (
@@ -225,6 +229,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                 </div>
                 <p className="text-sm font-semibold">
                   {call.status === "ringing-outgoing" ? "Calling…" : call.status === "connecting" ? "Connecting…" : "On call"}
+                  {call.status === "in-call" && <CallTimer answeredAt={call.answeredAt} className="ml-1.5 font-normal" />}
                 </p>
               </div>
             )}

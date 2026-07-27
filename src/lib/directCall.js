@@ -41,6 +41,10 @@ export function useDirectCall({ identity }) {
   const [cameraOff, setCameraOff] = useState(false);
   const [callError, setCallError] = useState("");
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
+  // Mirrors answeredAtRef below, purely so the UI (the live call-duration
+  // timer) can react to it — the ref stays the source of truth for logic
+  // inside closures/handlers, this state is read-only for display.
+  const [answeredAt, setAnsweredAt] = useState(null);
 
   const identityRef = useRef(identity);
   useEffect(() => { identityRef.current = identity; }, [identity]);
@@ -86,6 +90,7 @@ export function useDirectCall({ identity }) {
     isCallerRef.current = false;
     logIdRef.current = null;
     answeredAtRef.current = null;
+    setAnsweredAt(null);
     await cleanupMedia();
     sessionIdRef.current = null;
     remoteIdentityRef.current = null;
@@ -201,6 +206,7 @@ export function useDirectCall({ identity }) {
         await client.publish(tracks);
         if (!cancelled) {
           answeredAtRef.current = new Date();
+          setAnsweredAt(answeredAtRef.current);
           setStatus("in-call");
         }
       } catch (e) {
@@ -259,6 +265,7 @@ export function useDirectCall({ identity }) {
     setStatus("ringing-outgoing");
     isCallerRef.current = true;
     answeredAtRef.current = null;
+    setAnsweredAt(null);
     logCallStart({ source: "direct", caller: identityRef.current, callee: target, callType: type }).then((id) => {
       logIdRef.current = id;
     });
@@ -309,7 +316,7 @@ export function useDirectCall({ identity }) {
   useEffect(() => () => { cleanupMedia(); stopRingtone(); }, [cleanupMedia]);
 
   return {
-    status, callType, remoteName, remoteIdentity, muted, cameraOff, callError, hasRemoteVideo,
+    status, callType, remoteName, remoteIdentity, muted, cameraOff, callError, hasRemoteVideo, answeredAt,
     localVideoElRef, remoteVideoElRef,
     startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
     dismissError: () => setCallError(""),

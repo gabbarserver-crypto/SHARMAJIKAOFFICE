@@ -35,6 +35,10 @@ export function useCall({ threadId, identity }) {
   const [cameraOff, setCameraOff] = useState(false);
   const [callError, setCallError] = useState("");
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
+  // Mirrors answeredAtRef below, purely so the UI (live call-duration timer)
+  // can react to it — the ref stays the source of truth for logic inside
+  // closures/handlers, this state is read-only for display.
+  const [answeredAt, setAnsweredAt] = useState(null);
 
   // Identity changes reference on every parent render (App.jsx builds it
   // inline), so it's read through a ref inside callbacks/effects instead of
@@ -88,6 +92,7 @@ export function useCall({ threadId, identity }) {
     isCallerRef.current = false;
     logIdRef.current = null;
     answeredAtRef.current = null;
+    setAnsweredAt(null);
     await cleanupMedia();
     setStatus("idle");
     setCallType("audio");
@@ -194,6 +199,7 @@ export function useCall({ threadId, identity }) {
         await client.publish(tracks);
         if (!cancelled) {
           answeredAtRef.current = new Date();
+          setAnsweredAt(answeredAtRef.current);
           setStatus("in-call");
         }
       } catch (e) {
@@ -237,6 +243,7 @@ export function useCall({ threadId, identity }) {
     setStatus("ringing-outgoing");
     isCallerRef.current = true;
     answeredAtRef.current = null;
+    setAnsweredAt(null);
     logCallStart({ source: "thread", threadId, caller: identityRef.current, callType: type }).then((id) => {
       logIdRef.current = id;
     });
@@ -280,7 +287,7 @@ export function useCall({ threadId, identity }) {
   useEffect(() => () => { cleanupMedia(); stopRingtone(); }, [threadId, cleanupMedia]);
 
   return {
-    status, callType, remoteName, muted, cameraOff, callError, hasRemoteVideo,
+    status, callType, remoteName, muted, cameraOff, callError, hasRemoteVideo, answeredAt,
     localVideoElRef, remoteVideoElRef,
     startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
     dismissError: () => setCallError(""),
