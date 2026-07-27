@@ -238,26 +238,33 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       )}
 
       <main className="max-w-5xl mx-auto p-6 pb-24 md:pb-6">
-        <div className="grid sm:grid-cols-3 gap-4 mb-6">
-          <Card title="Wallet Balance">
-            <div className="flex items-center justify-between">
-              <p className="text-2xl font-bold text-emerald-600">
-                ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
-              </p>
-              <GhostButton onClick={() => setShowTopUp(true)}>Top Up</GhostButton>
+        {(tab === "Applications" || tab === "Ledger") && (
+          <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
+            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
+              <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Wallet Balance</h3>
+              <div className="flex items-center justify-between gap-1">
+                <p className="text-sm sm:text-2xl font-bold text-emerald-600 truncate">
+                  ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
+                </p>
+                <GhostButton onClick={() => setShowTopUp(true)} className="!px-2 !py-1 !text-[10px] sm:!text-sm shrink-0">
+                  Top Up
+                </GhostButton>
+              </div>
             </div>
-          </Card>
-          <Card title="Running Balance">
-            <p className={`text-2xl font-bold ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
-              {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
-            </p>
-          </Card>
-          <Card title="Credit Limit">
-            <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">
-              ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
-            </p>
-          </Card>
-        </div>
+            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
+              <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
+              <p className={`text-sm sm:text-2xl font-bold truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+                {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
+              </p>
+            </div>
+            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
+              <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Credit Limit</h3>
+              <p className="text-sm sm:text-2xl font-bold text-slate-800 dark:text-slate-100 truncate">
+                ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           <div className="hidden md:flex flex-wrap gap-2">
