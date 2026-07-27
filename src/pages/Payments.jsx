@@ -419,45 +419,6 @@ export default function Payments({ staff } = {}) {
         </PrimaryButton>
       </Card>
 
-      <Card title="Recent Payments">
-        <div className="mb-3">
-          <Input value={recentQuery} onChange={(e) => setRecentQuery(e.target.value)} placeholder="Search dealer, agency, application, reference…" />
-        </div>
-        <div className="overflow-x-auto max-h-[520px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-lg">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500 sticky top-0">
-              <tr>
-                <RecentSortTh label="Date" sortKeyName="date" />
-                <RecentSortTh label="Payer" sortKeyName="payer" />
-                <th className="px-3 py-2 text-left">Details</th>
-                <RecentSortTh label="Amount" sortKeyName="amount" align="right" />
-                {isAdmin && <th className="px-3 py-2 text-left">Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRecent.map((p) => (
-                <tr key={p.id} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{new Date(p.created_at).toLocaleString()}</td>
-                  <td className="px-3 py-2 whitespace-nowrap font-semibold text-slate-700 dark:text-slate-300">{payerNameOf(p)}</td>
-                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500">
-                    {p.applications?.draft_code ? `${p.applications.draft_code} · ` : ""}{p.payment_mode}
-                    {p.dealer_id && p.paid_at_agency?.name ? ` · Paid at: ${p.paid_at_agency.name}` : ""}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap text-right font-bold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</td>
-                  {isAdmin && (
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <button onClick={() => setEditingPayment(p)} className="text-xs font-semibold text-blue-600 hover:underline mr-3">Edit</button>
-                      <button onClick={() => deletePayment(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {visibleRecent.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-6">No payments match.</p>}
-        </div>
-      </Card>
-
       <AllPaymentsTable
         payments={allPayments}
         loading={allLoading}
@@ -469,6 +430,8 @@ export default function Payments({ staff } = {}) {
         setDateTo={setAllDateTo}
         isAdmin={isAdmin}
         onBulkDelete={bulkDeletePayments}
+        onEdit={setEditingPayment}
+        onDelete={deletePayment}
       />
 
       {editingPayment && (
@@ -501,7 +464,7 @@ export default function Payments({ staff } = {}) {
 // entirely client-side over what Payments() already fetched via
 // loadAllPayments(). Separate from "Recent Payments" above, which is
 // intentionally just the last 20 for a quick glance.
-function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDateFrom, dateTo, setDateTo, isAdmin, onBulkDelete }) {
+function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDateFrom, dateTo, setDateTo, isAdmin, onBulkDelete, onEdit, onDelete }) {
   const [selected, setSelected] = useState(new Set());
   const payerName = (p) => p.dealers?.name || (p.paid_at_agency?.name ? `${p.paid_at_agency.name} (Agency)` : "—");
 
@@ -612,6 +575,7 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                   <th className="px-3 py-2 text-left">Mode</th>
                   <th className="px-3 py-2 text-left">Reference</th>
                   <th className="px-3 py-2 text-right">Amount</th>
+                  {isAdmin && <th className="px-3 py-2 text-left">Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -628,6 +592,12 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.payment_mode}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.reference_no || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-right font-semibold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</td>
+                    {isAdmin && (
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <button onClick={() => onEdit(p)} className="text-xs font-semibold text-blue-600 hover:underline mr-3">Edit</button>
+                        <button onClick={() => onDelete(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
