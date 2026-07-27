@@ -369,8 +369,17 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
 
   useEffect(() => {
     load();
+    // Channel name must be unique per mount — Supabase caches channels by
+    // name, and removeChannel() below is async, so a fixed name here means
+    // a fast unmount/remount (e.g. leaving and reopening this tab, or
+    // React StrictMode's double-invoke in dev) can hand back the SAME
+    // already-subscribed channel object on the next mount. Calling .on()
+    // on an already-subscribed channel throws "cannot add postgres_changes
+    // callbacks ... after subscribe()", which crashes the whole tree since
+    // there's no error boundary — that's the white-screen bug this fixes.
+    const channelName = `comms-calls:${variant}:${dealerId || "staff"}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
     const channel = supabase
-      .channel(`comms-calls:${variant}:${dealerId || "staff"}`)
+      .channel(channelName)
       .on("postgres_changes", { event: "*", schema: "public", table: "call_logs" }, load)
       .subscribe();
     return () => supabase.removeChannel(channel);
