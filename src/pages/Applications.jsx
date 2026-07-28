@@ -335,6 +335,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [agencyList, setAgencyList] = useState([]);
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showUpdateCsv, setShowUpdateCsv] = useState(false);
   const [toast, setToast] = useState(null);
   const [pccCheckRow, setPccCheckRow] = useState(null);
   const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: unreadCount } — omitted/0 when nothing's awaiting our reply
@@ -1044,6 +1045,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             </button>
             <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
             {canEdit && !restricted && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
+            {canEdit && !restricted && <GhostButton onClick={() => setShowUpdateCsv(true)}>✎ Update via CSV</GhostButton>}
             {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
           </div>
           <button
@@ -1561,6 +1563,17 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           agencyList={agencyList}
           onClose={() => setShowImport(false)}
           onImported={() => { setShowImport(false); load(); }}
+        />
+      )}
+
+      {showUpdateCsv && (
+        <UpdateApplicationsModal
+          dealerList={dealerList}
+          serviceList={serviceList}
+          rtoList={rtoList}
+          agencyList={agencyList}
+          onClose={() => setShowUpdateCsv(false)}
+          onUpdated={() => { setShowUpdateCsv(false); load(); }}
         />
       )}
 
@@ -2143,6 +2156,473 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
                     {result.failures.map((f, i) => (
                       <tr key={i}>
                         <td className="px-2 py-1 whitespace-nowrap font-mono">{f.draft_code || "auto"}</td>
+                        <td className="px-2 py-1">{f.applicant_name}</td>
+                        <td className="px-2 py-1 text-rose-600 dark:text-rose-400">{f.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <GhostButton className="mt-3" onClick={onClose}>Close</GhostButton>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// Fields an Update-via-CSV file is allowed to change. `key` is the internal
+// name resolved from IMPORT_HEADER_MAP (so it reads the exact same headers
+// Export CSV writes and Import CSV accepts). `column` is the applications
+// table column it writes to. Dealer/Draft ID aren't here — they're the
+// match key, not something this flow edits.
+const UPDATE_FIELD_DEFS = [
+  { key: "applicant_name", label: "Applicant", column: "applicant_name", type: "text" },
+  { key: "father_husband_name", label: "Father/Husband", column: "father_husband_name", type: "text" },
+  { key: "date_of_birth", label: "DOB", column: "date_of_birth", type: "date" },
+  { key: "mobile", label: "Mobile", column: "mobile", type: "text" },
+  { key: "address", label: "Address", column: "address", type: "text" },
+  { key: "amount", label: "Amount", column: "amount", type: "number" },
+  { key: "rto_fee", label: "Fee", column: "rto_fee", type: "number" },
+  { key: "pcc_fee", label: "PCC Fee", column: "pcc_fee", type: "number" },
+  { key: "agency_fee", label: "Agency Fee", column: "agency_fee", type: "number" },
+  { key: "application_no", label: "Application No", column: "application_no", type: "text" },
+  { key: "ll_dl_no", label: "LL/DL No", column: "ll_dl_no", type: "text" },
+  { key: "pcc_no", label: "PCC No", column: "pcc_no", type: "text" },
+  { key: "pcc_status", label: "PCC Status", column: "pcc_status", type: "text" },
+  { key: "rto", label: "RTO", column: "rto_id", type: "rto" },
+  { key: "agency", label: "Agency", column: "agency_id", type: "agency" },
+  { key: "slot_time", label: "Slot", column: "slot_time", type: "text" },
+  { key: "remarks", label: "Remark", column: "remarks", type: "text" },
+  { key: "application_date", label: "Application Date", column: "application_date", type: "date" },
+  { key: "status", label: "Status", column: "status", type: "status" },
+  { key: "service", label: "Service", column: "service_id", type: "service" },
+];
+
+function formatOldDisplay(def, oldValue, serviceList, rtoList, agencyList) {
+  switch (def.type) {
+    case "number": return oldValue === null || oldValue === undefined ? "—" : `₹${Number(oldValue).toLocaleString("en-IN")}`;
+    case "date": return oldValue ? isoToDDMMYYYY(oldValue) : "—";
+    case "rto": return oldValue ? (rtoList.find((x) => x.id === oldValue)?.name || "—") : "—";
+    case "agency": return oldValue ? (agencyList.find((x) => x.id === oldValue)?.name || "—") : "—";
+    case "service": return oldValue ? serviceLabel(serviceList.find((s) => s.id === oldValue)) || "—" : "—";
+    default: return oldValue || "—";
+  }
+}
+
+// Compares a parsed CSV row against the application row it matched to in
+// the DB, field by field — but ONLY for fields whose header actually
+// appears in the uploaded file (presentKeys). A column left out of the
+// sheet entirely is never touched; a column that's present but left blank
+// clears that field (except Status/Service, where a blank cell means
+// "leave as-is" since those are required fields the app itself never lets
+// you clear).
+function diffFields(row, presentKeys, target, serviceList, rtoList, agencyList) {
+  const changes = [];
+  const fieldErrors = [];
+  for (const def of UPDATE_FIELD_DEFS) {
+    if (!presentKeys.has(def.key)) continue;
+    const raw = row[def.key];
+    let newValue;
+    let newDisplay;
+    let err = null;
+
+    if (def.type === "text") {
+      newValue = raw ? raw.trim() : null;
+      newDisplay = newValue || "—";
+    } else if (def.type === "number") {
+      newValue = toNumberOrNull(raw);
+      newDisplay = newValue === null ? "—" : `₹${Number(newValue).toLocaleString("en-IN")}`;
+    } else if (def.type === "date") {
+      newValue = raw ? ddmmyyyyToISO(raw) : null;
+      newDisplay = newValue ? isoToDDMMYYYY(newValue) : "—";
+    } else if (def.type === "status") {
+      const key = (raw || "").trim().toLowerCase();
+      if (!key) continue; // blank status cell — leave status as-is
+      const mapped = IMPORT_STATUS_MAP[key];
+      if (!mapped) { err = `Status "${raw}" not recognized`; }
+      else { newValue = mapped; newDisplay = mapped; }
+    } else if (def.type === "service") {
+      const trimmed = (raw || "").trim();
+      if (!trimmed) continue; // blank — leave service as-is, it's required
+      const service = findByLabel(serviceList, trimmed, ["parent_service", "short_name"]);
+      if (!service) { err = `Service "${raw}" not found`; }
+      else { newValue = service.id; newDisplay = serviceLabel(service); }
+    } else if (def.type === "rto") {
+      const trimmed = (raw || "").trim();
+      if (!trimmed) { newValue = null; newDisplay = "—"; }
+      else if (trimmed.toUpperCase() === "PCC") { newValue = null; newDisplay = "PCC"; }
+      else {
+        const rto = findByLabel(rtoList, trimmed, ["name", "code"]);
+        if (!rto) { err = `RTO "${raw}" not found`; }
+        else { newValue = rto.id; newDisplay = rto.name; }
+      }
+    } else if (def.type === "agency") {
+      const trimmed = (raw || "").trim();
+      if (!trimmed) { newValue = null; newDisplay = "—"; }
+      else {
+        const agency = findByLabel(agencyList, trimmed, ["name", "code"]);
+        if (!agency) { err = `Agency "${raw}" not found`; }
+        else { newValue = agency.id; newDisplay = agency.name; }
+      }
+    }
+
+    if (err) { fieldErrors.push(`${def.label}: ${err}`); continue; }
+
+    const oldValue = target[def.column];
+    const same = def.type === "number"
+      ? Number(oldValue ?? 0) === Number(newValue ?? 0)
+      : (oldValue ?? null) === (newValue ?? null);
+    if (same) continue;
+
+    changes.push({
+      key: def.key,
+      column: def.column,
+      label: def.label,
+      oldDisplay: formatOldDisplay(def, oldValue, serviceList, rtoList, agencyList),
+      newDisplay,
+      newValue,
+      // Flagged so the preview can warn that this particular change won't
+      // itself move any money already posted to the dealer ledger — same
+      // as editing Amount by hand on an Accepted row today.
+      warnLedger: def.key === "amount" && target.status === "Accepted",
+    });
+  }
+  return { changes, fieldErrors };
+}
+
+// Update-via-CSV: the round-trip counterpart to Export CSV. Upload a
+// previously-exported (or same-shaped) sheet with edited values — this
+// matches each row back to its application by Draft ID (+ Dealer, since
+// Draft IDs are only unique per-dealer) and updates ONLY the columns that
+// are both present in the file and actually different from what's stored.
+// Status→Accepted and Agency Fee/Agency changes reuse the exact same
+// ledger-posting logic as the single-row Approve button and inline Agency
+// Fee edit, so ledgers can't drift between the two entry points.
+function UpdateApplicationsModal({ dealerList, serviceList, rtoList, agencyList, onClose, onUpdated }) {
+  const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState([]);
+  const [parsing, setParsing] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [result, setResult] = useState(null); // { updated, failures }
+  const [error, setError] = useState("");
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    setError("");
+    setParsing(true);
+    try {
+      const text = await file.text();
+      const rawRows = parseCSV(text);
+      if (!rawRows.length) {
+        setError("No data rows found in that file.");
+        setPreview([]);
+        setParsing(false);
+        return;
+      }
+
+      const presentKeys = new Set();
+      Object.keys(rawRows[0]).forEach((h) => {
+        const key = IMPORT_HEADER_MAP[normalizeHeader(h)];
+        if (key) presentKeys.add(key);
+      });
+
+      if (!presentKeys.has("draft_code")) {
+        setError('This file has no "Draft ID" column — Update needs it to know which record each row belongs to. Use Export CSV, edit that file, then upload it here.');
+        setPreview([]);
+        setParsing(false);
+        return;
+      }
+
+      const parsedRows = rawRows.map((raw) => {
+        const row = {};
+        Object.entries(raw).forEach(([h, v]) => {
+          const key = IMPORT_HEADER_MAP[normalizeHeader(h)];
+          if (key) row[key] = v;
+        });
+        const dealer = row.dealer ? findByLabel(dealerList, row.dealer, ["name", "short_name", "code"]) : null;
+        return { raw, row, dealer, draftCode: (row.draft_code || "").trim() };
+      });
+
+      const draftCodes = [...new Set(parsedRows.map((r) => r.draftCode).filter(Boolean))];
+      const { data: existing, error: fetchError } = await supabase
+        .from("applications")
+        .select("*")
+        .in("draft_code", draftCodes);
+      if (fetchError) {
+        setError("Couldn't look up existing records: " + fetchError.message);
+        setPreview([]);
+        setParsing(false);
+        return;
+      }
+
+      const built = parsedRows.map(({ row, dealer, draftCode }) => {
+        const applicantRaw = row.applicant_name || "";
+        const dealerRaw = row.dealer || "";
+        if (!draftCode) {
+          return { draftCode: "", dealerRaw, applicantRaw, changes: [], fieldErrors: [], notFound: "Missing Draft ID", included: false };
+        }
+        const candidates = (existing || []).filter((a) => a.draft_code === draftCode);
+        const target = dealer
+          ? candidates.find((a) => a.dealer_id === dealer.id) || null
+          : (candidates.length === 1 ? candidates[0] : null);
+
+        if (!target) {
+          const notFound = candidates.length > 1
+            ? "Multiple applications share this Draft ID across dealers — add a Dealer column to disambiguate"
+            : "No application found with this Draft ID";
+          return { draftCode, dealerRaw, applicantRaw, changes: [], fieldErrors: [], notFound, included: false };
+        }
+
+        const { changes, fieldErrors } = diffFields(row, presentKeys, target, serviceList, rtoList, agencyList);
+        return {
+          draftCode,
+          dealerRaw: dealerRaw || dealerList.find((d) => d.id === target.dealer_id)?.name || "",
+          applicantRaw: applicantRaw || target.applicant_name || "",
+          target,
+          changes,
+          fieldErrors,
+          notFound: null,
+          included: changes.length > 0,
+        };
+      });
+
+      setPreview(built);
+    } catch (err) {
+      setError("Couldn't read that file: " + err.message);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const toggleIncluded = (i) => {
+    setPreview((rows) => rows.map((r, idx) => (idx === i && r.changes.length > 0 ? { ...r, included: !r.included } : r)));
+  };
+
+  const includedCount = preview.filter((r) => r.included).length;
+  const noChangeCount = preview.filter((r) => !r.notFound && r.changes.length === 0 && r.fieldErrors.length === 0).length;
+  const problemCount = preview.filter((r) => r.notFound || r.fieldErrors.length > 0).length;
+
+  const runUpdate = async () => {
+    const rowsToUpdate = preview.filter((r) => r.included);
+    if (!rowsToUpdate.length) return;
+    setUpdating(true);
+    setError("");
+    setProgress({ done: 0, total: rowsToUpdate.length });
+
+    let updated = 0;
+    const failures = [];
+
+    for (const r of rowsToUpdate) {
+      const fields = {};
+      r.changes.forEach((c) => { fields[c.column] = c.newValue; });
+
+      const statusChange = r.changes.find((c) => c.key === "status");
+      const becomingAccepted = statusChange && statusChange.newValue === "Accepted" && r.target.status !== "Accepted";
+
+      try {
+        if (becomingAccepted) {
+          // Same shape as the table's Approve button / CSV Import's
+          // pre-approved path: flip status, backfill application_date /
+          // completed_at if not already set, and post the dealer ledger debit.
+          const applicationDate = fields.application_date || r.target.application_date || new Date().toISOString().slice(0, 10);
+          fields.application_date = applicationDate;
+          if (!r.target.completed_at) fields.completed_at = new Date().toISOString();
+
+          const { error: updErr } = await supabase.from("applications").update(fields).eq("id", r.target.id);
+          if (updErr) throw updErr;
+
+          const finalAmount = fields.amount !== undefined ? fields.amount : r.target.amount;
+          const finalServiceId = fields.service_id !== undefined ? fields.service_id : r.target.service_id;
+          const finalApplicantName = fields.applicant_name !== undefined ? fields.applicant_name : r.target.applicant_name;
+          const finalApplicationNo = fields.application_no !== undefined ? fields.application_no : r.target.application_no;
+          const service = serviceList.find((s) => s.id === finalServiceId);
+          const descriptionParts = [
+            [serviceLabel(service), finalApplicantName].filter(Boolean).join(" ") || null,
+            finalApplicationNo ? `App No: ${finalApplicationNo}` : null,
+          ].filter(Boolean);
+
+          const { error: ledgerError } = await supabase.from("ledger_transactions").insert({
+            dealer_id: r.target.dealer_id,
+            type: "debit",
+            amount: finalAmount || 0,
+            voucher_no: r.target.draft_code,
+            description: descriptionParts.join(" · "),
+            created_at: applicationDate,
+          });
+          if (ledgerError) throw new Error("Status updated, but dealer ledger entry failed: " + ledgerError.message);
+        } else {
+          const { error: updErr } = await supabase.from("applications").update(fields).eq("id", r.target.id);
+          if (updErr) throw updErr;
+        }
+
+        // Keep the agency ledger in sync — same delete-then-insert pattern
+        // as the inline Agency Fee / Agency edits in the table.
+        const feeOrAgencyChanged = r.changes.some((c) => c.key === "agency_fee" || c.key === "agency");
+        if (feeOrAgencyChanged) {
+          const finalFee = fields.agency_fee !== undefined ? fields.agency_fee : r.target.agency_fee;
+          const finalAgencyId = fields.agency_id !== undefined ? fields.agency_id : r.target.agency_id;
+          const voucherNo = `${r.target.draft_code}-AGENCYFEE`;
+          const { error: delErr } = await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", voucherNo);
+          if (delErr) throw delErr;
+          if (finalFee && finalAgencyId) {
+            const finalServiceId = fields.service_id !== undefined ? fields.service_id : r.target.service_id;
+            const finalApplicantName = fields.applicant_name !== undefined ? fields.applicant_name : r.target.applicant_name;
+            const finalApplicationNo = fields.application_no !== undefined ? fields.application_no : r.target.application_no;
+            const service = serviceList.find((s) => s.id === finalServiceId);
+            const descriptionParts = [
+              "Agency Fee",
+              [serviceLabel(service), finalApplicantName].filter(Boolean).join(" ") || null,
+              finalApplicationNo ? `App No: ${finalApplicationNo}` : null,
+            ].filter(Boolean);
+            const { error: agencyErr } = await supabase.from("agency_ledger_transactions").insert({
+              agency_id: finalAgencyId,
+              voucher_no: voucherNo,
+              type: "debit",
+              amount: finalFee,
+              description: descriptionParts.join(" · "),
+            });
+            if (agencyErr) throw new Error("Saved, but agency ledger sync failed: " + agencyErr.message);
+          }
+        }
+
+        updated += 1;
+      } catch (err) {
+        failures.push({ draft_code: r.draftCode, applicant_name: r.target?.applicant_name || r.applicantRaw, message: err.message });
+      }
+
+      setProgress((p) => ({ done: (p?.done || 0) + 1, total: p?.total || rowsToUpdate.length }));
+    }
+
+    setResult({ updated, failures });
+    setUpdating(false);
+    setProgress(null);
+    if (updated > 0) onUpdated();
+  };
+
+  return (
+    <Modal title="Update Applications via CSV" onClose={onClose} wide>
+      <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+        Upload a CSV exported from this page (or shaped like it) with edited values. Rows are matched to existing
+        records by <strong>Draft ID</strong> (plus Dealer, since Draft IDs repeat across dealers) — only columns
+        present in the file, and only cells that actually differ from what's saved, get updated. Nothing is inserted;
+        rows with no matching Draft ID are skipped.
+      </p>
+
+      <div className="flex items-center gap-3 mb-4">
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleFile}
+          className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-slate-700 dark:file:text-slate-300 file:font-semibold file:text-sm"
+        />
+        {fileName && <span className="text-xs text-slate-400 dark:text-slate-500">{fileName}</span>}
+      </div>
+
+      {parsing && <p className="text-sm text-slate-400 dark:text-slate-500">Reading file…</p>}
+      {error && <p className="text-sm text-rose-600 mb-3">{error}</p>}
+
+      {preview.length > 0 && !result && (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              {preview.length} row{preview.length !== 1 ? "s" : ""} found — {includedCount} with changes to update
+              {noChangeCount > 0 && `, ${noChangeCount} unchanged`}
+              {problemCount > 0 && `, ${problemCount} with issues`}.
+            </p>
+          </div>
+          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-auto max-h-96 mb-4">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">Update?</th>
+                  <th className="px-3 py-2 text-left">Draft ID</th>
+                  <th className="px-3 py-2 text-left">Dealer</th>
+                  <th className="px-3 py-2 text-left">Applicant</th>
+                  <th className="px-3 py-2 text-left">Changes</th>
+                  <th className="px-3 py-2 text-left">Issues</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {preview.map((r, i) => (
+                  <tr key={i} className={r.notFound || r.fieldErrors.length ? "bg-rose-50/50 dark:bg-rose-500/5" : !r.changes.length ? "opacity-50" : ""}>
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={r.included}
+                        disabled={r.changes.length === 0}
+                        onChange={() => toggleIncluded(i)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap font-mono">{r.draftCode || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.dealerRaw || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.applicantRaw || "—"}</td>
+                    <td className="px-3 py-2">
+                      {r.changes.length > 0 ? (
+                        <ul className="space-y-0.5">
+                          {r.changes.map((c, ci) => (
+                            <li key={ci}>
+                              <span className="font-semibold">{c.label}:</span> {c.oldDisplay} → <span className="text-blue-600 dark:text-blue-400 font-semibold">{c.newDisplay}</span>
+                              {c.warnLedger && <span className="text-amber-600 dark:text-amber-400"> (won't move the already-posted dealer ledger entry)</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="text-slate-400 dark:text-slate-500 italic">no changes</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-rose-600">
+                      {r.notFound || r.fieldErrors.join("; ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <PrimaryButton disabled={updating || includedCount === 0} onClick={runUpdate}>
+            {updating ? "Updating…" : `Update ${includedCount} Row${includedCount !== 1 ? "s" : ""}`}
+          </PrimaryButton>
+
+          {updating && progress && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span>Updating {progress.done} of {progress.total}…</span>
+                <span>{Math.min(100, Math.round((progress.done / progress.total) * 100))}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-150"
+                  style={{ width: `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {result && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30 px-3 py-2">
+          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+            ✓ Updated {result.updated} record{result.updated !== 1 ? "s" : ""}.
+          </p>
+
+          {result.failures?.length > 0 && (
+            <div className="mt-2">
+              <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">
+                ✕ {result.failures.length} row{result.failures.length !== 1 ? "s" : ""} failed:
+              </p>
+              <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-rose-200 dark:border-rose-500/30 text-xs">
+                <table className="w-full">
+                  <tbody className="divide-y divide-rose-100 dark:divide-rose-500/10">
+                    {result.failures.map((f, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 whitespace-nowrap font-mono">{f.draft_code}</td>
                         <td className="px-2 py-1">{f.applicant_name}</td>
                         <td className="px-2 py-1 text-rose-600 dark:text-rose-400">{f.message}</td>
                       </tr>
