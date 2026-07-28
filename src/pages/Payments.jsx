@@ -807,6 +807,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
       const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
 
       let imported = 0;
+      const ledgerFailures = []; // payments that saved fine but whose ledger entry silently failed — surfaced instead of hidden
       for (const r of rowsToImport) {
         const { payload } = r;
 
@@ -882,11 +883,20 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             })
           );
         }
-        await Promise.all(ledgerInserts);
+        const ledgerResults = await Promise.all(ledgerInserts);
+        const ledgerError = ledgerResults.find((res) => res.error)?.error;
+        if (ledgerError) {
+          ledgerFailures.push({
+            reference_no: payload.reference_no || voucherNo,
+            amount: payload.amount,
+            name: payload.dealer_name || payload.agency_name,
+            message: ledgerError.message,
+          });
+        }
         imported++;
       }
 
-      setResult({ imported, skipped: preview.length - rowsToImport.length });
+      setResult({ imported, skipped: preview.length - rowsToImport.length, ledgerFailures });
       setImporting(false);
       onImported();
     } catch (err) {
@@ -982,6 +992,26 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           <div className="text-center py-6">
             <p className="text-lg font-semibold text-emerald-600">Imported {result.imported} payment{result.imported !== 1 ? "s" : ""}</p>
             {result.skipped > 0 && <p className="text-sm text-slate-400 mt-1">{result.skipped} row(s) skipped</p>}
+            {result.ledgerFailures?.length > 0 && (
+              <div className="mt-4 text-left rounded-xl border border-rose-200 bg-rose-50 dark:bg-rose-500/10 dark:border-rose-500/30 px-3 py-2">
+                <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">
+                  ⚠ {result.ledgerFailures.length} payment{result.ledgerFailures.length !== 1 ? "s" : ""} saved, but the ledger entry failed to post:
+                </p>
+                <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-rose-200 dark:border-rose-500/30 text-xs">
+                  <table className="w-full">
+                    <tbody className="divide-y divide-rose-100 dark:divide-rose-500/10">
+                      {result.ledgerFailures.map((f, i) => (
+                        <tr key={i}>
+                          <td className="px-2 py-1 whitespace-nowrap font-mono">{f.reference_no}</td>
+                          <td className="px-2 py-1">{f.name} · ₹{f.amount}</td>
+                          <td className="px-2 py-1 text-rose-600 dark:text-rose-400">{f.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             <PrimaryButton onClick={onClose} className="mt-4">Done</PrimaryButton>
           </div>
         )}
