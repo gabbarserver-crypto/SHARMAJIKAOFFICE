@@ -859,11 +859,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // Current-year-only is the default once the data set is large — an
     // explicit date range (below) is a more specific ask, so it takes over
     // instead of stacking with the year default. This matches the visible
-    // "Date" column (slot_time), not submission time — a row entered in
-    // 2026 for a 2024 slot date should drop out of "2026 Only".
+    // "Date" column, which is application_date — not slot_time (a separate,
+    // free-text appointment field) and not submission time.
     if (!showAllYears && !filterDateFrom && !filterDateTo) {
-      const y = r.slot_time
-        ? Number(r.slot_time.slice(-4))
+      const y = r.application_date
+        ? Number(r.application_date.slice(0, 4))
         : (r.submitted_at ? Number(r.submitted_at.slice(0, 4)) : null);
       if (y !== currentYear) return false;
     }
