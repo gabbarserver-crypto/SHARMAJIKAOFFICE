@@ -941,7 +941,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const exportCSV = () => {
     const headers = restricted
       ? ["Draft ID", "Service", "Applicant", "DOB", "Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
-      : ["Draft ID", "Amount", "Fee", "PCC Fee", "Agency Fee", "Profit", "Dealer", "Service",
+      : ["Draft ID", "Amount", "Fee", "PCC Fee", "Agency Fee", "Dealer", "Service",
       "Applicant", "DOB", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency",
       "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"];
     const escapeCsv = (val) => {
@@ -952,7 +952,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     sortedRows.forEach((r) => {
       const rtoCell = r.services?.pcc_required ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name;
       const fullRow = [
-        r.draft_code, r.amount, r.rto_fee, r.pcc_fee, r.agency_fee, profitOf(r),
+        r.draft_code, r.amount, r.rto_fee, r.pcc_fee, r.agency_fee,
         dealerLabel(r.dealers), serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
         r.application_no, r.ll_dl_no, r.pcc_no, r.pcc_status,
         rtoCell, agencyList.find((x) => x.id === r.agency_id)?.name,
