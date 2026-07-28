@@ -33,6 +33,21 @@ const APK_PATH = "/downloads/sjo-app.apk";
 
 const TABS = ["Applications", "Call/Chat", "Ledger"];
 
+// Small reusable sortable <th> — click toggles asc/desc on that column,
+// clicking a different column switches to it (asc first). Shared by the
+// Applications and Ledger tables below.
+function SortableTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "left" }) {
+  const active = sortKey === sortKeyName;
+  return (
+    <th
+      onClick={() => onSort(sortKeyName)}
+      className={`font-medium px-3 py-2 cursor-pointer select-none whitespace-nowrap hover:text-slate-700 dark:hover:text-slate-300 ${align === "right" ? "text-right" : "text-left"}`}
+    >
+      {label} {active && (sortDir === "asc" ? "↑" : "↓")}
+    </th>
+  );
+}
+
 // `identity` is { type: 'dealer' | 'dealer_staff', id, name } — resolved in
 // App.jsx from whichever login this is. It's what scopes chat messages to
 // "who sent this", while `dealer.id` (the parent dealer, same for both a
@@ -597,6 +612,12 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const [serviceList, setServiceList] = useState([]);
   const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null
   const [toast, setToast] = useState(null);
+  const [sortKey, setSortKey] = useState("submitted_at");
+  const [sortDir, setSortDir] = useState("desc");
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "submitted_at" ? "desc" : "asc"); }
+  };
 
   useEffect(() => {
     (async () => {
@@ -630,6 +651,22 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const visibleRows = !q ? statusFiltered : statusFiltered.filter((r) =>
     [r.applicant_name, r.mobile, r.draft_code, r.application_no].some((v) => (v || "").toLowerCase().includes(q))
   );
+
+  const APP_SORT_ACCESSORS = {
+    ref: (r) => r.application_no || r.draft_code || "",
+    applicant: (r) => r.applicant_name || "",
+    service: (r) => r.services?.short_name || r.services?.parent_service || "",
+    submitted_at: (r) => (r.submitted_at ? new Date(r.submitted_at).getTime() : 0),
+    status: (r) => r.status || "",
+  };
+  const sortedRows = [...visibleRows].sort((a, b) => {
+    const acc = APP_SORT_ACCESSORS[sortKey];
+    if (!acc) return 0;
+    const av = acc(a), bv = acc(b);
+    const dir = sortDir === "asc" ? 1 : -1;
+    if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+    return String(av).toLowerCase().localeCompare(String(bv).toLowerCase()) * dir;
+  });
   const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
 
   const bookAppointment = async (payload) => {
@@ -686,17 +723,17 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
-                <th className="text-left font-medium px-3 py-2">Ref No.</th>
-                <th className="text-left font-medium px-3 py-2">Applicant</th>
-                <th className="text-left font-medium px-3 py-2">Service</th>
-                <th className="text-left font-medium px-3 py-2">Submitted</th>
-                <th className="text-left font-medium px-3 py-2">Status</th>
+                <SortableTh label="Ref No." sortKeyName="ref" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Applicant" sortKeyName="applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Service" sortKeyName="service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Submitted" sortKeyName="submitted_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Status" sortKeyName="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="text-left font-medium px-3 py-2">Chat</th>
                 <th className="text-left font-medium px-3 py-2">Appointment</th>
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((r) => (
+              {sortedRows.map((r) => (
                 <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60">
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
                     {r.application_no || r.draft_code}
@@ -1333,10 +1370,25 @@ function TopUpModal({ dealer, onClose }) {
   );
 }
 
+function monthKeyOf(dateStr) {
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthLabelOf(key) {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
 function DealerLedger({ dealerId }) {
   const [txns, setTxns] = useState([]);
   const [appsByCode, setAppsByCode] = useState({}); // draft/application_no -> { applicant_name, services }
   const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState("created_at");
+  const [sortDir, setSortDir] = useState("desc");
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "created_at" ? "desc" : "asc"); }
+  };
 
   useEffect(() => {
     (async () => {
@@ -1373,15 +1425,59 @@ function DealerLedger({ dealerId }) {
     })();
   }, [dealerId]);
 
-  // Running balance shown per-row, computed chronologically (oldest first)
-  // even though the table itself displays newest-first.
-  const balanceById = {};
+  // Resolve each transaction's display fields once, up front, so both the
+  // balance walk and the sorting/grouping below can just read plain fields.
+  const enrichedTxns = txns.map((t) => {
+    const matched = appsByCode[t.voucher_no];
+    const isPayment = !matched && deriveTxnType(t.description) === "PAYMENT";
+    return {
+      ...t,
+      serviceCell: matched?.service || (isPayment ? "Payment" : (t.description || t.remarks || "—")),
+      applicantCell: matched?.applicant_name || (isPayment ? (stripTypeFromDescription(t.description) || "—") : "—"),
+    };
+  });
+
+  // Running balance walked chronologically (oldest first) regardless of
+  // display order, then grouped into months. Each month's opening balance is
+  // simply the running balance carried over from the end of the previous
+  // month — 0 for whichever month has the earliest activity.
+  const chronological = [...enrichedTxns].reverse();
   let running = 0;
-  [...txns].reverse().forEach((t) => {
+  const monthOrder = [];
+  const monthGroups = {};
+  chronological.forEach((t) => {
     running += t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0);
-    balanceById[t.id] = running;
+    const withBalance = { ...t, balance: running };
+    const key = t.created_at ? monthKeyOf(t.created_at) : "Undated";
+    if (!monthGroups[key]) {
+      monthGroups[key] = { key, opening: running - (t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0)), closing: running, txns: [] };
+      monthOrder.push(key);
+    }
+    monthGroups[key].txns.push(withBalance);
+    monthGroups[key].closing = running;
   });
   const currentBalance = running;
+
+  // Most recent month first; each month's own rows are then sorted per the
+  // clicked column (defaulting to newest-first, matching the old layout).
+  const orderedMonths = [...monthOrder].reverse().map((key) => monthGroups[key]);
+
+  const LEDGER_SORT_ACCESSORS = {
+    created_at: (t) => (t.created_at ? new Date(t.created_at).getTime() : 0),
+    serviceCell: (t) => t.serviceCell || "",
+    applicantCell: (t) => t.applicantCell || "",
+    amount: (t) => Number(t.amount || 0),
+    balance: (t) => t.balance,
+  };
+  const sortGroupTxns = (arr) => {
+    const acc = LEDGER_SORT_ACCESSORS[sortKey] || LEDGER_SORT_ACCESSORS.created_at;
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...arr].sort((a, b) => {
+      const av = acc(a), bv = acc(b);
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av).toLowerCase().localeCompare(String(bv).toLowerCase()) * dir;
+    });
+  };
 
   return (
     <Card title="My Ledger">
@@ -1390,41 +1486,55 @@ function DealerLedger({ dealerId }) {
       </p>
       {loading ? (
         <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
+      ) : orderedMonths.length === 0 ? (
+        <p className="text-center text-slate-400 dark:text-slate-500 py-8">No ledger entries yet</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
-              <tr>
-                <th className="text-left font-medium px-3 py-2">Date</th>
-                <th className="text-left font-medium px-3 py-2">Service</th>
-                <th className="text-left font-medium px-3 py-2">Applicant Name</th>
-                <th className="text-right font-medium px-3 py-2">Amount</th>
-                <th className="text-right font-medium px-3 py-2">Running Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {txns.map((t) => {
-                const matched = appsByCode[t.voucher_no];
-                const isPayment = !matched && deriveTxnType(t.description) === "PAYMENT";
-                const serviceCell = matched?.service || (isPayment ? "Payment" : (t.description || t.remarks || "—"));
-                const applicantCell = matched?.applicant_name || (isPayment ? (stripTypeFromDescription(t.description) || "—") : "—");
-                return (
-                  <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toLocaleDateString("en-IN") : "—"}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{serviceCell}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{applicantCell}</td>
-                    <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.type === "credit" ? "text-emerald-600" : "text-rose-600"}`}>
-                      {t.type === "credit" ? "+" : "-"}₹{Number(t.amount || 0).toLocaleString("en-IN")}
-                    </td>
-                    <td className="px-3 py-2 text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">₹{balanceById[t.id].toLocaleString("en-IN")}</td>
+        <div className="space-y-6">
+          {orderedMonths.map((group) => (
+            <div key={group.key} className="overflow-x-auto">
+              <div className="flex items-center justify-between mb-1 px-1">
+                <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  {group.key === "Undated" ? "Undated" : monthLabelOf(group.key)}
+                </h4>
+                <div className="text-xs text-slate-500 dark:text-slate-500 flex gap-4">
+                  <span>Opening: <span className="font-semibold text-slate-700 dark:text-slate-300">₹{group.opening.toLocaleString("en-IN")}</span></span>
+                  <span>Closing: <span className="font-semibold text-slate-700 dark:text-slate-300">₹{group.closing.toLocaleString("en-IN")}</span></span>
+                </div>
+              </div>
+              <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
+                  <tr>
+                    <SortableTh label="Date" sortKeyName="created_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableTh label="Service" sortKeyName="serviceCell" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableTh label="Applicant Name" sortKeyName="applicantCell" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableTh label="Amount" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                    <SortableTh label="Running Balance" sortKeyName="balance" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   </tr>
-                );
-              })}
-              {txns.length === 0 && (
-                <tr><td colSpan={5} className="text-center text-slate-400 dark:text-slate-500 py-8">No ledger entries yet</td></tr>
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30">
+                    <td colSpan={4} className="px-3 py-1.5 text-xs italic text-slate-400 dark:text-slate-500">Opening Balance</td>
+                    <td className="px-3 py-1.5 text-right text-xs italic text-slate-500 dark:text-slate-400 whitespace-nowrap">₹{group.opening.toLocaleString("en-IN")}</td>
+                  </tr>
+                  {sortGroupTxns(group.txns).map((t) => (
+                    <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toLocaleDateString("en-IN") : "—"}</td>
+                      <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{t.serviceCell}</td>
+                      <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{t.applicantCell}</td>
+                      <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.type === "credit" ? "text-emerald-600" : "text-rose-600"}`}>
+                        {t.type === "credit" ? "+" : "-"}₹{Number(t.amount || 0).toLocaleString("en-IN")}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">₹{t.balance.toLocaleString("en-IN")}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30">
+                    <td colSpan={4} className="px-3 py-1.5 text-xs italic text-slate-400 dark:text-slate-500">Closing Balance</td>
+                    <td className="px-3 py-1.5 text-right text-xs italic font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap">₹{group.closing.toLocaleString("en-IN")}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          ))}
         </div>
       )}
     </Card>
