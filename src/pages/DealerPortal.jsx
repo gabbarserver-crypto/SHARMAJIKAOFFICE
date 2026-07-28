@@ -614,6 +614,8 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const [toast, setToast] = useState(null);
   const [sortKey, setSortKey] = useState("submitted_at");
   const [sortDir, setSortDir] = useState("desc");
+  const [showAllYears, setShowAllYears] = useState(false);
+  const currentYear = new Date().getFullYear();
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir(key === "submitted_at" ? "desc" : "asc"); }
@@ -645,8 +647,14 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
-  const draftCount = rows.filter((r) => DEALER_STATUS_GROUPS.Draft(r.status)).length;
-  const statusFiltered = statusFilter === "All" ? rows : rows.filter((r) => DEALER_STATUS_GROUPS[statusFilter](r.status));
+  // Current-year-only is the default, same as the admin Applications page —
+  // toggling "Show All Years" drops this filter.
+  const yearScopedRows = showAllYears ? rows : rows.filter((r) => {
+    const y = r.submitted_at ? Number(r.submitted_at.slice(0, 4)) : null;
+    return y === currentYear;
+  });
+  const draftCount = yearScopedRows.filter((r) => DEALER_STATUS_GROUPS.Draft(r.status)).length;
+  const statusFiltered = statusFilter === "All" ? yearScopedRows : yearScopedRows.filter((r) => DEALER_STATUS_GROUPS[statusFilter](r.status));
   const q = search.trim().toLowerCase();
   const visibleRows = !q ? statusFiltered : statusFiltered.filter((r) =>
     [r.applicant_name, r.mobile, r.draft_code, r.application_no].some((v) => (v || "").toLowerCase().includes(q))
@@ -688,23 +696,34 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
 
   return (
     <Card title="My Applications">
-      <div className="flex items-center gap-2 -mt-1 mb-3 flex-wrap">
-        {["All", "Draft", "Process", "Approved"].map((f) => (
-          <button
-            key={f}
-            onClick={() => setStatusFilter(f)}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
-              statusFilter === f ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-            }`}
-          >
-            {f === "Process" ? "Under Process" : f}
-            {f === "Draft" && draftCount > 0 && (
-              <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                {draftCount}
-              </span>
-            )}
-          </button>
-        ))}
+      <div className="flex items-center justify-between -mt-1 mb-3 flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {["All", "Draft", "Process", "Approved"].map((f) => (
+            <button
+              key={f}
+              onClick={() => setStatusFilter(f)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                statusFilter === f ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              {f === "Process" ? "Under Process" : f}
+              {f === "Draft" && draftCount > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {draftCount}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setShowAllYears((v) => !v)}
+          title={showAllYears ? "Currently showing every year — click to go back to this year only" : `Currently showing ${currentYear} only — click to see all years`}
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+            showAllYears ? "bg-amber-500 text-white border-amber-500" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+          }`}
+        >
+          {showAllYears ? "📅 Showing All Years" : `📅 ${currentYear} Only`}
+        </button>
       </div>
       <div className="relative mb-3 max-w-sm">
         <input
@@ -1389,6 +1408,12 @@ function DealerLedger({ dealerId }) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir(key === "created_at" ? "desc" : "asc"); }
   };
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [viewMode, setViewMode] = useState("month"); // "month" | "range"
+  const [selectedMonthKey, setSelectedMonthKey] = useState(currentMonthKey);
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -1445,9 +1470,11 @@ function DealerLedger({ dealerId }) {
   let running = 0;
   const monthOrder = [];
   const monthGroups = {};
+  const chronologicalWithBalance = [];
   chronological.forEach((t) => {
     running += t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0);
     const withBalance = { ...t, balance: running };
+    chronologicalWithBalance.push(withBalance);
     const key = t.created_at ? monthKeyOf(t.created_at) : "Undated";
     if (!monthGroups[key]) {
       monthGroups[key] = { key, opening: running - (t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0)), closing: running, txns: [] };
@@ -1461,6 +1488,46 @@ function DealerLedger({ dealerId }) {
   // Most recent month first; each month's own rows are then sorted per the
   // clicked column (defaulting to newest-first, matching the old layout).
   const orderedMonths = [...monthOrder].reverse().map((key) => monthGroups[key]);
+
+  // Months that actually have entries, newest first — plus the current
+  // month even when it's empty, so the picker always has something selected.
+  const monthPickerOptions = monthOrder.includes(currentMonthKey)
+    ? [...monthOrder].reverse()
+    : [currentMonthKey, ...[...monthOrder].reverse()];
+
+  // Running balance immediately before a given month, for months with no
+  // transactions of their own (so the opening balance still carries over).
+  const balanceBeforeMonth = (key) => {
+    let bal = 0;
+    for (const k of monthOrder) {
+      if (k >= key) break;
+      bal = monthGroups[k].closing;
+    }
+    return bal;
+  };
+  const selectedMonthGroup = monthGroups[selectedMonthKey] || (() => {
+    const bal = balanceBeforeMonth(selectedMonthKey);
+    return { key: selectedMonthKey, opening: bal, closing: bal, txns: [] };
+  })();
+
+  // Date-range mode: opening balance is whatever the running balance was
+  // just before the first transaction in range.
+  let rangeOpening = 0;
+  const rangeTxns = [];
+  chronologicalWithBalance.forEach((t) => {
+    const d = t.created_at ? t.created_at.slice(0, 10) : null;
+    const afterFrom = !rangeFrom || (d && d >= rangeFrom);
+    const beforeTo = !rangeTo || (d && d <= rangeTo);
+    if (afterFrom && beforeTo) {
+      rangeTxns.push(t);
+    } else if (rangeFrom && d && d < rangeFrom) {
+      rangeOpening = t.balance;
+    }
+  });
+  const rangeClosing = rangeTxns.length ? rangeTxns[rangeTxns.length - 1].balance : rangeOpening;
+  const rangeGroup = { key: "range", opening: rangeOpening, closing: rangeClosing, txns: rangeTxns };
+
+  const displayedGroups = viewMode === "month" ? [selectedMonthGroup] : [rangeGroup];
 
   const LEDGER_SORT_ACCESSORS = {
     created_at: (t) => (t.created_at ? new Date(t.created_at).getTime() : 0),
@@ -1484,17 +1551,62 @@ function DealerLedger({ dealerId }) {
       <p className="text-sm text-slate-500 dark:text-slate-500 mb-4">
         Running balance: <span className="font-bold text-slate-800 dark:text-slate-100">₹{currentBalance.toLocaleString("en-IN")}</span>
       </p>
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <div className="flex items-center rounded-full border border-slate-300 dark:border-slate-700 overflow-hidden text-xs font-semibold">
+          <button
+            onClick={() => setViewMode("month")}
+            className={`px-3 py-1.5 ${viewMode === "month" ? "bg-slate-900 text-white" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300"}`}
+          >
+            Month-wise
+          </button>
+          <button
+            onClick={() => setViewMode("range")}
+            className={`px-3 py-1.5 ${viewMode === "range" ? "bg-slate-900 text-white" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300"}`}
+          >
+            Date-wise
+          </button>
+        </div>
+        {viewMode === "month" ? (
+          <select
+            value={selectedMonthKey}
+            onChange={(e) => setSelectedMonthKey(e.target.value)}
+            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+          >
+            {monthPickerOptions.map((key) => (
+              <option key={key} value={key}>{monthLabelOf(key)}</option>
+            ))}
+          </select>
+        ) : (
+          <>
+            <input
+              type="date"
+              value={rangeFrom}
+              onChange={(e) => setRangeFrom(e.target.value)}
+              className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+            />
+            <span className="text-xs text-slate-400">to</span>
+            <input
+              type="date"
+              value={rangeTo}
+              onChange={(e) => setRangeTo(e.target.value)}
+              className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+            />
+          </>
+        )}
+      </div>
       {loading ? (
         <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
-      ) : orderedMonths.length === 0 ? (
+      ) : txns.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No ledger entries yet</p>
       ) : (
         <div className="space-y-6">
-          {orderedMonths.map((group) => (
+          {displayedGroups.map((group) => (
             <div key={group.key} className="overflow-x-auto">
               <div className="flex items-center justify-between mb-1 px-1">
                 <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  {group.key === "Undated" ? "Undated" : monthLabelOf(group.key)}
+                  {group.key === "range"
+                    ? (rangeFrom || rangeTo ? `${rangeFrom || "…"} to ${rangeTo || "…"}` : "All transactions")
+                    : group.key === "Undated" ? "Undated" : monthLabelOf(group.key)}
                 </h4>
                 <div className="text-xs text-slate-500 dark:text-slate-500 flex gap-4">
                   <span>Opening: <span className="font-semibold text-slate-700 dark:text-slate-300">₹{group.opening.toLocaleString("en-IN")}</span></span>
@@ -1516,6 +1628,13 @@ function DealerLedger({ dealerId }) {
                     <td colSpan={4} className="px-3 py-1.5 text-xs italic text-slate-400 dark:text-slate-500">Opening Balance</td>
                     <td className="px-3 py-1.5 text-right text-xs italic text-slate-500 dark:text-slate-400 whitespace-nowrap">₹{group.opening.toLocaleString("en-IN")}</td>
                   </tr>
+                  {group.txns.length === 0 && (
+                    <tr className="border-t border-slate-100 dark:border-slate-800">
+                      <td colSpan={5} className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
+                        No transactions {viewMode === "month" ? "this month" : "in this range"}
+                      </td>
+                    </tr>
+                  )}
                   {sortGroupTxns(group.txns).map((t) => (
                     <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
                       <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toLocaleDateString("en-IN") : "—"}</td>
