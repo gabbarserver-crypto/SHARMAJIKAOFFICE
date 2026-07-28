@@ -533,12 +533,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // Admin-only: deletes an application record outright. If it had already
   // been approved (debited to the dealer ledger, voucher_no = draft_code),
   // that ledger entry is removed too so the ledger doesn't keep a debit
-  // for a record that no longer exists.
+  // for a record that no longer exists. The RTO Fee agency ledger entry
+  // (voucher_no = draft_code-RTOFEE) isn't gated by status, so it's always
+  // cleaned up here too.
   const deleteApplication = async (app) => {
     if (!window.confirm(`Delete application ${app.draft_code} (${app.applicant_name})? This cannot be undone.`)) return;
     if (app.status === "Accepted") {
       await supabase.from("ledger_transactions").delete().eq("dealer_id", app.dealer_id).eq("voucher_no", app.draft_code);
     }
+    await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", `${app.draft_code}-RTOFEE`);
     await supabase.from("application_documents").delete().eq("application_id", app.id);
     const { error } = await supabase.from("applications").delete().eq("id", app.id);
     if (error) {
@@ -602,6 +605,72 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return;
     }
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  };
+
+  // Keeps the Agency's ledger in sync with an application's RTO Fee — posts
+  // as a debit (RTO Fee is a cost we owe the agency), independent of the
+  // application's status. voucher_no is suffixed so it never collides with
+  // a Payments-page voucher on the same draft_code. Delete-then-insert keeps
+  // this idempotent whether the fee/agency changed or was cleared.
+  const syncRtoFeeLedger = async (row, rtoFeeValue, agencyId) => {
+    const voucherNo = `${row.draft_code}-RTOFEE`;
+    const { error: delError } = await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", voucherNo);
+    if (delError) return { error: delError };
+    if (rtoFeeValue && agencyId) {
+      const descriptionParts = [
+        "RTO Fee",
+        [serviceLabel(row.services), row.applicant_name].filter(Boolean).join(" ") || null,
+        row.application_no ? `App No: ${row.application_no}` : null,
+      ].filter(Boolean);
+      const { error: insError } = await supabase.from("agency_ledger_transactions").insert({
+        agency_id: agencyId,
+        voucher_no: voucherNo,
+        type: "debit",
+        amount: rtoFeeValue,
+        description: descriptionParts.join(" · "),
+      });
+      if (insError) return { error: insError };
+    }
+    return { error: null };
+  };
+
+  // RTO Fee needs an Agency to post its debit to, so entering a fee with no
+  // Agency selected is blocked rather than silently skipping the ledger.
+  const updateRtoFee = async (row, rawValue) => {
+    const value = rawValue === "" ? null : parseFloat(rawValue);
+    if (value !== null && !row.agency_id) {
+      setToast("Select an Agency for this application first — RTO Fee needs an agency to post to.");
+      return;
+    }
+    const { error } = await supabase.from("applications").update({ rto_fee: value }).eq("id", row.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, rto_fee: value } : r)));
+    const { error: ledgerError } = await syncRtoFeeLedger(row, value, row.agency_id);
+    if (ledgerError) setToast("RTO Fee saved, but agency ledger sync failed: " + ledgerError.message);
+  };
+
+  // Changing the Agency while an RTO Fee is already set moves the ledger
+  // debit to the new agency; clearing the Agency is blocked in that case
+  // instead of leaving an orphaned fee with nowhere to post.
+  const updateAgencyId = async (row, value) => {
+    const newAgencyId = value || null;
+    if (row.rto_fee && !newAgencyId) {
+      setToast("Can't remove the Agency while an RTO Fee is set on this application — clear the RTO Fee first.");
+      return;
+    }
+    const { error } = await supabase.from("applications").update({ agency_id: newAgencyId }).eq("id", row.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, agency_id: newAgencyId } : r)));
+    if (row.rto_fee) {
+      const { error: ledgerError } = await syncRtoFeeLedger(row, row.rto_fee, newAgencyId);
+      if (ledgerError) setToast("Agency updated, but ledger sync failed: " + ledgerError.message);
+    }
   };
 
   // PCC Fee is the trigger for auto-stamping today's date into Slot — used
@@ -1202,7 +1271,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       type="number"
                       width="w-20"
                       value={r.rto_fee}
-                      onSave={(v) => updateRowField(r.id, "rto_fee", v === "" ? null : parseFloat(v))}
+                      onSave={(v) => updateRtoFee(r, v)}
                     />
                   </td>
                 )}
@@ -1313,7 +1382,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       options={agencyList}
                       placeholder="Select Agency"
                       disabled={!r.services?.agency_required}
-                      onSave={(v) => updateRowField(r.id, "agency_id", v || null)}
+                      onSave={(v) => updateAgencyId(r, v)}
                     />
                   </td>
                 )}
