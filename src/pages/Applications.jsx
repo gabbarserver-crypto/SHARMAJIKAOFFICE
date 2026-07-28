@@ -309,6 +309,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [tab, setTab] = useState("All");
   const [chatOnly, setChatOnly] = useState(false);
   const [compactView, setCompactView] = useState(false); // point 9
+  // Defaults to current-year-only once the data set gets large (13k+ historical
+  // rows made "show everything" the default choke point). "Show All" lets
+  // anyone drop back to the full history on demand.
+  const [showAllYears, setShowAllYears] = useState(false);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -772,6 +776,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // hides "Book Appointment" once it's been used, so it can't be clicked twice.
   const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
 
+  const currentYear = new Date().getFullYear();
   const filteredRows = rows.filter((r) => {
     if (chatOnly && !chatStatus[r.id]) return false;
     if (filterDealer && r.dealer_id !== filterDealer) return false;
@@ -781,6 +786,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       if (!r.services?.pcc_required) return false;
     } else if (filterService && r.service_id !== filterService) {
       return false;
+    }
+    // Current-year-only is the default once the data set is large — an
+    // explicit date range (below) is a more specific ask, so it takes over
+    // instead of stacking with the year default.
+    if (!showAllYears && !filterDateFrom && !filterDateTo) {
+      const y = r.submitted_at ? Number(r.submitted_at.slice(0, 4)) : null;
+      if (y !== currentYear) return false;
     }
     if (filterDateFrom && (!r.submitted_at || r.submitted_at.slice(0, 10) < filterDateFrom)) return false;
     if (filterDateTo && (!r.submitted_at || r.submitted_at.slice(0, 10) > filterDateTo)) return false;
@@ -843,7 +855,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
   useEffect(() => {
     setPage(1);
-  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly]);
+  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly, showAllYears]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -948,6 +960,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAllYears((v) => !v)}
+              title={showAllYears ? "Currently showing every year — click to go back to this year only" : `Currently showing ${currentYear} only — click to see all years`}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                showAllYears ? "bg-amber-500 text-white border-amber-500" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              {showAllYears ? "📅 Showing All Years" : `📅 ${currentYear} Only`}
+            </button>
             <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
             {canEdit && !restricted && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
             {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
