@@ -1643,6 +1643,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
   const [preview, setPreview] = useState([]); // { included, errors: [], payload }
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(null); // { done, total }
   const [result, setResult] = useState(null); // { imported, skipped }
   const [error, setError] = useState("");
 
@@ -1764,35 +1765,81 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
   const includedCount = preview.filter((r) => r.included).length;
   const errorCount = preview.filter((r) => r.errors.length > 0).length;
 
+  // Batches this large go into a single insert() otherwise — and since insert()
+  // is all-or-nothing, one colliding/bad row anywhere in a 10,000+ row file
+  // fails the whole thing, every time it's retried. Chunking limits the blast
+  // radius, and falling back to row-by-row within a failed chunk means a
+  // duplicate draft_code (e.g. re-importing rows that already made it in on
+  // a prior attempt) gets skipped and reported instead of blocking everything
+  // else in that chunk.
+  const IMPORT_CHUNK_SIZE = 300;
+
+  const isDuplicateKeyError = (err) =>
+    err?.code === "23505" || /duplicate key value/i.test(err?.message || "");
+
   const runImport = async () => {
     const rowsToImport = preview.filter((r) => r.included && r.errors.length === 0);
     if (!rowsToImport.length) return;
     setImporting(true);
     setError("");
+    const totalSteps = rowsToImport.length * 2; // code-gen pass + insert pass, so the bar reflects real work either phase does
+    setProgress({ done: 0, total: totalSteps, label: "Assigning draft codes…" });
     try {
       // Assign each row's real sequential draft code now (not during preview) so
       // cancelling after preview doesn't burn/skip numbers in a dealer's counter.
       // Rows where the CSV itself specified a draft_code keep that value as-is.
       const payloads = [];
+      let codeGenDone = 0;
       for (const r of rowsToImport) {
         if (r.payload.draft_code) {
           payloads.push(r.payload);
-          continue;
+        } else {
+          const { data: generated, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: r.payload.dealer_id });
+          if (codeError) {
+            setError(`Import failed generating a draft code for "${r.payload.applicant_name}": ` + codeError.message);
+            setImporting(false);
+            setProgress(null);
+            return;
+          }
+          payloads.push({ ...r.payload, draft_code: generated });
         }
-        const { data: generated, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: r.payload.dealer_id });
-        if (codeError) {
-          setError(`Import failed generating a draft code for "${r.payload.applicant_name}": ` + codeError.message);
-          setImporting(false);
-          return;
+        codeGenDone += 1;
+        if (codeGenDone % 25 === 0 || codeGenDone === rowsToImport.length) {
+          setProgress({ done: codeGenDone, total: totalSteps, label: "Assigning draft codes…" });
         }
-        payloads.push({ ...r.payload, draft_code: generated });
       }
 
-      const { data: insertedRows, error: insertError } = await supabase.from("applications").insert(payloads).select();
-      if (insertError) {
-        setError("Import failed: " + insertError.message);
-        setImporting(false);
-        return;
+      const insertedRows = [];
+      const duplicates = []; // { draft_code, applicant_name } — skipped, already existed
+      const failures = []; // { draft_code, applicant_name, message } — unexpected errors
+
+      for (let i = 0; i < payloads.length; i += IMPORT_CHUNK_SIZE) {
+        const chunk = payloads.slice(i, i + IMPORT_CHUNK_SIZE);
+        const { data: chunkRows, error: chunkError } = await supabase.from("applications").insert(chunk).select();
+
+        if (!chunkError) {
+          insertedRows.push(...(chunkRows || []));
+        } else {
+          // Whole chunk failed — fall back to one-row-at-a-time so a single
+          // duplicate/bad row doesn't take the rest of the chunk down with it.
+          for (const row of chunk) {
+            const { data: rowData, error: rowError } = await supabase.from("applications").insert(row).select();
+            if (!rowError) {
+              insertedRows.push(...(rowData || []));
+            } else if (isDuplicateKeyError(rowError)) {
+              duplicates.push({ draft_code: row.draft_code, applicant_name: row.applicant_name });
+            } else {
+              failures.push({ draft_code: row.draft_code, applicant_name: row.applicant_name, message: rowError.message });
+            }
+          }
+        }
+
+        const insertDone = Math.min(i + IMPORT_CHUNK_SIZE, payloads.length);
+        setProgress({
+          done: rowsToImport.length + insertDone,
+          total: totalSteps,
+          label: `Importing rows ${insertDone.toLocaleString("en-IN")} of ${payloads.length.toLocaleString("en-IN")}…`,
+        });
       }
 
       // Rows imported directly as Accepted skip the normal "Approve" action
@@ -1803,7 +1850,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
       // to "now" — otherwise every imported row shows up on the ledger as
       // if it happened at import time, and the description now also
       // includes the service so it's identifiable without opening the row.
-      const preApproved = (insertedRows || []).filter((r) => r.status === "Accepted");
+      const preApproved = insertedRows.filter((r) => r.status === "Accepted");
       if (preApproved.length) {
         const ledgerRows = preApproved.map((r) => {
           const service = serviceList.find((s) => s.id === r.service_id);
@@ -1820,16 +1867,24 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
         if (ledgerError) {
           setError(`Applications imported, but ${preApproved.length} ledger entr${preApproved.length !== 1 ? "ies" : "y"} failed to post: ` + ledgerError.message);
           setImporting(false);
+          setProgress(null);
           return;
         }
       }
 
-      setResult({ imported: rowsToImport.length, skipped: preview.length - rowsToImport.length });
+      setResult({
+        imported: insertedRows.length,
+        skipped: preview.length - rowsToImport.length,
+        duplicates,
+        failures,
+      });
       setImporting(false);
+      setProgress(null);
       onImported();
     } catch (err) {
       setError("Import failed: " + err.message);
       setImporting(false);
+      setProgress(null);
     }
   };
 
@@ -1908,6 +1963,24 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
           <PrimaryButton disabled={importing || includedCount === 0} onClick={runImport}>
             {importing ? "Importing…" : `Import ${includedCount} Row${includedCount !== 1 ? "s" : ""}`}
           </PrimaryButton>
+
+          {importing && progress && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span>{progress.label}</span>
+                <span>{Math.min(100, Math.round((progress.done / progress.total) * 100))}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-150"
+                  style={{ width: `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%` }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                A file this size can take a few minutes — this stays open until every row's been processed.
+              </p>
+            </div>
+          )}
         </>
       )}
 
@@ -1917,6 +1990,48 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
             ✓ Imported {result.imported} record{result.imported !== 1 ? "s" : ""}
             {result.skipped > 0 && ` (${result.skipped} skipped due to errors)`}.
           </p>
+
+          {result.duplicates?.length > 0 && (
+            <div className="mt-2">
+              <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
+                ⚠ {result.duplicates.length} row{result.duplicates.length !== 1 ? "s" : ""} skipped — draft code already existed:
+              </p>
+              <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-amber-200 dark:border-amber-500/30 text-xs">
+                <table className="w-full">
+                  <tbody className="divide-y divide-amber-100 dark:divide-amber-500/10">
+                    {result.duplicates.map((d, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 whitespace-nowrap font-mono">{d.draft_code}</td>
+                        <td className="px-2 py-1">{d.applicant_name}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {result.failures?.length > 0 && (
+            <div className="mt-2">
+              <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">
+                ✕ {result.failures.length} row{result.failures.length !== 1 ? "s" : ""} failed with an unexpected error:
+              </p>
+              <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-rose-200 dark:border-rose-500/30 text-xs">
+                <table className="w-full">
+                  <tbody className="divide-y divide-rose-100 dark:divide-rose-500/10">
+                    {result.failures.map((f, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 whitespace-nowrap font-mono">{f.draft_code || "auto"}</td>
+                        <td className="px-2 py-1">{f.applicant_name}</td>
+                        <td className="px-2 py-1 text-rose-600 dark:text-rose-400">{f.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <GhostButton className="mt-3" onClick={onClose}>Close</GhostButton>
         </div>
       )}
