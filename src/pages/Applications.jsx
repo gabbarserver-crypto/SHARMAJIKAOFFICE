@@ -1966,6 +1966,33 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
         }
       }
 
+      // The "Fee" column (rto_fee) posts a debit to the Agency's ledger —
+      // same as editing it in the table — for any imported row that has
+      // both a Fee and an Agency, regardless of status. Rows with a Fee but
+      // no Agency just mean that fee was paid directly, nothing to post.
+      // Backdated to Application Date for the same reason as above.
+      const feeWithAgency = insertedRows.filter((r) => r.rto_fee && r.agency_id);
+      if (feeWithAgency.length) {
+        const agencyLedgerRows = feeWithAgency.map((r) => {
+          const service = serviceList.find((s) => s.id === r.service_id);
+          return {
+            agency_id: r.agency_id,
+            type: "debit",
+            amount: r.rto_fee,
+            voucher_no: `${r.draft_code}-RTOFEE`,
+            description: `Fee${service ? ` · Service: ${serviceLabel(service)}` : ""} · ${r.applicant_name || ""}${r.application_no ? ` · App No: ${r.application_no}` : ""}`,
+            ...(r.application_date ? { created_at: r.application_date } : {}),
+          };
+        });
+        const { error: agencyLedgerError } = await supabase.from("agency_ledger_transactions").insert(agencyLedgerRows);
+        if (agencyLedgerError) {
+          setError(`Applications imported, but ${feeWithAgency.length} agency ledger entr${feeWithAgency.length !== 1 ? "ies" : "y"} failed to post: ` + agencyLedgerError.message);
+          setImporting(false);
+          setProgress(null);
+          return;
+        }
+      }
+
       setResult({
         imported: insertedRows.length,
         skipped: preview.length - rowsToImport.length,
