@@ -640,8 +640,8 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                   <AllSortTh label="Date" sortKeyName="date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Payer" sortKeyName="payer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Application" sortKeyName="application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                  <AllSortTh label="Mode" sortKeyName="mode" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                  <AllSortTh label="Reference" sortKeyName="reference" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Payment Mode" sortKeyName="mode" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <AllSortTh label="Reference No" sortKeyName="reference" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Amount" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   {isAdmin && <th className="px-3 py-2 text-left">Actions</th>}
                 </tr>
