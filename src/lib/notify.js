@@ -14,6 +14,8 @@
 // half is a separate, bigger piece of work once you've got that Firebase
 // project.
 
+import { isSoundEnabled, getSelectedTone } from "./notificationSound";
+
 const hasBrowserNotifications = typeof window !== "undefined" && "Notification" in window;
 
 // Browsers (and the Android WebView especially) refuse to let an
@@ -51,31 +53,47 @@ export async function requestNotificationPermission() {
   return Notification.permission;
 }
 
-// A short two-tone "ping" via WebAudio — no external audio file to ship or
-// for the Capacitor build to worry about bundling.
-let audioCtx = null;
-export function playPing() {
+// Plays a short sequence of notes via WebAudio — no external audio file to
+// ship or for the Capacitor build to worry about bundling. `notes` is the
+// same shape as NOTIFICATION_TONES entries in lib/notificationSound.js:
+// [{ freq, start, dur, peak }, ...].
+function playTonePattern(notes) {
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     const ctx = audioCtx;
     if (ctx.state === "suspended") ctx.resume();
-    [880, 660].forEach((freq, i) => {
-      const start = ctx.currentTime + i * 0.12;
+    notes.forEach(({ freq, start = 0, dur = 0.22, peak = 0.16 }) => {
+      const noteStart = ctx.currentTime + start;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.16, start + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.22);
+      gain.gain.setValueAtTime(0.0001, noteStart);
+      gain.gain.exponentialRampToValueAtTime(peak, noteStart + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + dur);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + 0.22);
+      osc.start(noteStart);
+      osc.stop(noteStart + dur);
     });
   } catch {
     // best-effort — a silent notification still isn't a broken one
   }
+}
+let audioCtx = null;
+
+// Plays the user's currently-selected notification tone (Settings ->
+// Notifications), unless they've muted notification sound entirely.
+export function playPing() {
+  if (!isSoundEnabled()) return;
+  playTonePattern(getSelectedTone().notes);
+}
+
+// Plays a specific tone regardless of the mute setting — used by the
+// Settings page's "preview" buttons so users can hear a tone before
+// choosing it, even while sound is currently muted.
+export function previewTone(toneDef) {
+  playTonePattern(toneDef.notes);
 }
 
 // A repeating ringtone (reuses the same ping, looped) for incoming calls —
