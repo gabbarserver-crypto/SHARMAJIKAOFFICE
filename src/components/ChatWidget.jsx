@@ -36,7 +36,7 @@ export default function ChatWidget({ dealerId, identity, title = "SJO Support" }
       style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
     >
       {state === "open" && (
-        <div className="w-80 h-[440px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+        <div className="w-80 h-[440px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
           <button onClick={openFull} className="bg-blue-600 text-white px-4 py-3 flex items-center gap-2.5 shrink-0 text-left">
             <Avatar name={title} size={34} />
             <div className="min-w-0 flex-1">

@@ -170,7 +170,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   return (
     <div className="flex flex-col h-full relative">
       {identity && (
-        <div className="flex items-center justify-end gap-1 px-2 py-1.5 border-b border-slate-200 shrink-0 bg-white">
+        <div className="flex items-center justify-end gap-1 px-2 py-1.5 border-b border-slate-200 dark:border-slate-800 shrink-0 bg-white dark:bg-slate-900">
           <button
             onClick={() => call.startCall("audio")}
             disabled={call.status !== "idle" || !threadId}
@@ -278,7 +278,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
         </div>
       )}
 
-      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2 bg-slate-50">
+      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2 bg-slate-50 dark:bg-slate-950">
         {loading ? (
           <p className="text-sm text-slate-400 text-center py-6">Loading…</p>
         ) : messages.length === 0 ? (
@@ -290,7 +290,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
               <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
-                    mine ? SENDER_BUBBLE[m.sender_type] + " rounded-br-sm" : "bg-white text-slate-700 border border-slate-200 rounded-bl-sm"
+                    mine ? SENDER_BUBBLE[m.sender_type] + " rounded-br-sm" : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-bl-sm"
                   }`}
                 >
                   {!mine && <p className="text-[11px] font-semibold opacity-60 mb-0.5">{m.sender_name}</p>}
@@ -304,7 +304,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                       href={m.attachment_url}
                       target="_blank"
                       rel="noreferrer"
-                      className={`flex items-center gap-2 rounded-lg px-2.5 py-2 mb-1 ${mine ? "bg-white/10" : "bg-slate-100"}`}
+                      className={`flex items-center gap-2 rounded-lg px-2.5 py-2 mb-1 ${mine ? "bg-white/10" : "bg-slate-100 dark:bg-slate-700"}`}
                     >
                       <MapPin size={16} className="shrink-0" />
                       <span className="text-xs font-semibold underline">View location on map</span>
@@ -315,7 +315,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                       href={m.attachment_url}
                       target="_blank"
                       rel="noreferrer"
-                      className={`flex items-center gap-2 rounded-lg px-2.5 py-2 mb-1 ${mine ? "bg-white/10" : "bg-slate-100"}`}
+                      className={`flex items-center gap-2 rounded-lg px-2.5 py-2 mb-1 ${mine ? "bg-white/10" : "bg-slate-100 dark:bg-slate-700"}`}
                     >
                       <Paperclip size={16} className="shrink-0" />
                       <span className="text-xs font-semibold underline truncate">{attachmentFileName(m.attachment_url)}</span>
@@ -343,12 +343,12 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
         </div>
       )}
 
-      <div className="border-t border-slate-200 p-2 flex items-center gap-1.5 shrink-0 relative">
+      <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2 flex items-center gap-1.5 shrink-0 relative">
         <button
           onClick={() => setShowEmoji((s) => !s)}
           disabled={!identity}
           title="Quick reactions"
-          className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 disabled:opacity-40"
+          className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40"
         >
           <Smile size={19} />
         </button>
@@ -359,7 +359,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
             onClick={() => setShowAttachMenu((s) => !s)}
             disabled={!identity}
             title="Attach"
-            className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 disabled:opacity-40 ${showAttachMenu ? "bg-slate-100" : ""}`}
+            className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 ${showAttachMenu ? "bg-slate-100 dark:bg-slate-800" : ""}`}
           >
             <Paperclip size={19} />
           </button>
@@ -367,11 +367,11 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
           {showAttachMenu && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowAttachMenu(false)} />
-              <div className="absolute bottom-11 left-0 z-20 w-52 bg-white rounded-xl border border-slate-200 shadow-lg py-1.5">
+              <div className="absolute bottom-11 left-0 z-20 w-52 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg py-1.5">
                 <button
                   onClick={() => { setShowAttachMenu(false); fileInputRef.current?.click(); }}
                   disabled={uploading}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40"
                 >
                   <ImageIcon size={17} className="text-blue-600" />
                   Photo / File
@@ -379,7 +379,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                 <button
                   onClick={() => { setShowAttachMenu(false); sendLocation(); }}
                   disabled={sharingLocation}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40"
                 >
                   <MapPin size={17} className="text-blue-600" />
                   Location
@@ -387,7 +387,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                 {identity?.type === "staff" && (
                   <button
                     onClick={() => { setShowAttachMenu(false); setDraft("Please share the OTP you received, so we can proceed with your application."); }}
-                    className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-amber-700 hover:bg-amber-50"
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20"
                   >
                     <span className="w-[17px] text-center font-bold text-xs">🔑</span>
                     OTP Required
@@ -404,7 +404,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder="Type your message…"
           disabled={!identity}
-          className="flex-1 text-sm rounded-full border border-slate-300 px-3.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-100"
+          className="flex-1 text-sm rounded-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 px-3.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-100 dark:disabled:bg-slate-900"
         />
         <button
           onClick={() => (draft.trim() ? send() : send("👍"))}
