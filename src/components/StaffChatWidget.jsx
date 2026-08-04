@@ -66,7 +66,7 @@ export default function StaffChatWidget({ staff, identity, pendingCount, onExpan
   return (
     <div className="no-print fixed bottom-5 right-5 z-50 flex flex-col items-end gap-3">
       {open && (
-        <div className="w-80 h-[420px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+        <div className="w-80 h-[420px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
           <div className="bg-slate-900 text-white px-4 py-3 flex items-center gap-2.5 shrink-0">
             <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center shrink-0">
               <MessageCircle size={18} />
@@ -97,7 +97,7 @@ export default function StaffChatWidget({ staff, identity, pendingCount, onExpan
             <>
               <button
                 onClick={() => setSelected(null)}
-                className="text-xs font-semibold text-blue-600 px-3 py-1.5 border-b border-slate-100 text-left hover:bg-slate-50 shrink-0"
+                className="text-xs font-semibold text-blue-600 px-3 py-1.5 border-b border-slate-100 dark:border-slate-800 text-left hover:bg-slate-50 dark:hover:bg-slate-800 shrink-0"
               >
                 ← Back to list
               </button>
@@ -112,7 +112,7 @@ export default function StaffChatWidget({ staff, identity, pendingCount, onExpan
               </div>
             </>
           ) : (
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
               {loading ? (
                 <p className="text-sm text-slate-400 text-center py-8">Loading…</p>
               ) : threads.length === 0 ? (
@@ -122,10 +122,10 @@ export default function StaffChatWidget({ staff, identity, pendingCount, onExpan
                   <button
                     key={t.threadId}
                     onClick={() => setSelected(t)}
-                    className="w-full text-left px-4 py-3 hover:bg-slate-50"
+                    className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800"
                   >
                     <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-sm font-semibold text-slate-700 truncate">{t.label}</span>
+                      <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 truncate">{t.label}</span>
                       <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 ml-2" />
                     </div>
                     <p className="text-xs text-slate-400 mb-1">{t.dealerLabel}</p>

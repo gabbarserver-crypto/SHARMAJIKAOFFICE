@@ -921,9 +921,9 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredRows, sortKey, sortDir, rtoList, agencyList]);
 
-  // Pagination — 10 rows per page (point 8). Export CSV still uses the full
+  // Pagination — 14 rows per page by default. Export CSV still uses the full
   // sortedRows (unpaginated), only the on-screen table is sliced.
-  const [pageSize, setPageSize] = useState(15);
+  const [pageSize, setPageSize] = useState(14);
   const PAGE_SIZE = pageSize;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
