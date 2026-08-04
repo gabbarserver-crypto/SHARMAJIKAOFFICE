@@ -149,7 +149,7 @@ export function Select({ children, ...props }) {
 }
 
 export function Modal({ title, onClose, children, wide, size }) {
-  const width = size === "md" ? "max-w-2xl" : wide || size === "wide" ? "max-w-3xl" : "max-w-lg";
+  const width = size === "md" ? "max-w-2xl" : size === "xl" ? "max-w-7xl" : wide || size === "wide" ? "max-w-3xl" : "max-w-lg";
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className={`bg-white dark:bg-slate-900 rounded-xl w-full ${width} max-h-[90vh] overflow-y-auto`}>
