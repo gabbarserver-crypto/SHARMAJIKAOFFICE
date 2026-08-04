@@ -2,11 +2,17 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Select, Toast } from "../components/UI";
+import NotificationSettings from "../components/NotificationSettings";
 
 const RIGHTS = ["can_view", "can_add", "can_edit", "can_delete", "can_approve", "can_print", "can_export"];
 const RIGHT_LABELS = { can_view: "View", can_add: "Add", can_edit: "Edit", can_delete: "Delete", can_approve: "Approve", can_print: "Print", can_export: "Export" };
 
-export default function Settings() {
+const TABS = [
+  { key: "permissions", label: "Permissions" },
+  { key: "notifications", label: "Notifications" },
+];
+
+function PermissionsTab() {
   const [roles, setRoles] = useState([]);
   const [roleId, setRoleId] = useState("");
   const [rows, setRows] = useState([]);
@@ -36,7 +42,6 @@ export default function Settings() {
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-1">Settings — Permissions</h2>
       <p className="text-sm text-slate-400 dark:text-slate-500 mb-5">Control what each role can see and do across the ERP</p>
 
       <Card className="mb-5">
@@ -78,6 +83,34 @@ export default function Settings() {
       </div>
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+    </div>
+  );
+}
+
+export default function Settings() {
+  const [tab, setTab] = useState("permissions");
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-1">Settings</h2>
+
+      <div className="flex gap-1 border-b border-slate-200 dark:border-slate-800 mb-5">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+              tab === t.key
+                ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                : "border-transparent text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "permissions" ? <PermissionsTab /> : <NotificationSettings />}
     </div>
   );
 }
