@@ -1261,7 +1261,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.applicant && (
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <button onClick={() => openDetail(r, "customer")} className="text-blue-600 font-semibold hover:underline text-left">
+                    <button onClick={() => openDetail(r, isAdmin ? "admin" : "customer")} className="text-blue-600 font-semibold hover:underline text-left">
                       {r.applicant_name}
                     </button>
                   </td>
@@ -2958,48 +2958,268 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     );
   }
 
+  if (mode === "admin") {
+    const fee = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+    const profit = Number(app.amount || 0) - Number(app.rto_fee || 0) - Number(app.pcc_fee || 0) - Number(app.agency_fee || 0);
+    return (
+      <>
+      <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="xl">
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 dark:text-slate-500 mb-4 -mt-1">
+          <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>
+          <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
+          <span className="flex items-center gap-1.5">
+            <StatusBadge status={app.status} />
+            {app.application_date && <span className="text-xs text-slate-400 dark:text-slate-500">Approved on {isoToDDMMYYYY(app.application_date)}</span>}
+          </span>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-6">
+          {/* Column 1: applicant details + staff assignment */}
+          <div>
+            <Card title="Applicant Details" className="mb-4">
+              <div className="grid grid-cols-2 gap-x-4">
+                <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
+                <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
+                <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
+                  className={ageHighlightClass(ddmmyyyyToISO(applicant.date_of_birth)) ? "border-amber-400" : ""} /></Field>
+                <Field label="Mobile">
+                  <div className="flex items-center gap-2">
+                    <Input value={applicant.mobile} onChange={setApplicantField("mobile")} />
+                    {applicant.mobile && (
+                      <a
+                        href={`tel:${applicant.mobile}`}
+                        title={`Call ${applicant.mobile}`}
+                        className="shrink-0 w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center hover:bg-emerald-100"
+                      >
+                        <Phone size={14} />
+                      </a>
+                    )}
+                  </div>
+                </Field>
+                <div className="col-span-2"><Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field></div>
+                {app.services?.pcc_required && (
+                  <>
+                    <Field label="Police Station">
+                      <SearchableSelect
+                        value={applicant.police_station}
+                        options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+                        onChange={(name) => setApplicant((s) => ({ ...s, police_station: name }))}
+                        placeholder="Search police station…"
+                      />
+                    </Field>
+                    <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.stay_since} onChange={setApplicantField("stay_since")} /></Field>
+                  </>
+                )}
+              </div>
+              <PrimaryButton disabled={savingApplicant} onClick={saveApplicant}>
+                {savingApplicant ? "Saving…" : "Save Applicant Details"}
+              </PrimaryButton>
+              {applicantAgeError && <p className="text-rose-500 text-xs mt-2">{applicantAgeError}</p>}
+            </Card>
+
+            <Card title="Assign Staff">
+              <Field label="Responsible Staff">
+                <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+                  <option value="">— Unassigned —</option>
+                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </Select>
+              </Field>
+              <GhostButton onClick={() => onAssign(staffId || null)}>Save Assignment</GhostButton>
+            </Card>
+          </div>
+
+          {/* Column 2: service answers, documents, chat */}
+          <div>
+            <Card title="Service Answers" className="mb-4">
+              {answers.map((row, i) => (
+                <div key={i} className="flex gap-2 mb-2">
+                  <Input placeholder="Field name" value={row.key} onChange={setAnswerKey(i)} className="w-2/5" />
+                  <Input placeholder="Value" value={row.value} onChange={setAnswerValue(i)} />
+                  <button onClick={() => removeAnswer(i)} className="text-rose-500 text-xs font-semibold px-2 shrink-0">Remove</button>
+                </div>
+              ))}
+              <div className="flex items-center justify-between mt-2">
+                <GhostButton onClick={addAnswer}>+ Add Field</GhostButton>
+                <PrimaryButton disabled={savingAnswers} onClick={saveAnswers}>
+                  {savingAnswers ? "Saving…" : "Save Details"}
+                </PrimaryButton>
+              </div>
+            </Card>
+
+            <Card title="Documents" className="mb-4">
+              {app.services?.pcc_required && (
+                <button
+                  onClick={() => setShowPccLetter(true)}
+                  className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 block"
+                >
+                  📄 Generate PCC Request Letter
+                </button>
+              )}
+              {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
+              {(app.docs || [])
+                .filter((d) => !d.post_approval || app.status === "Accepted")
+                .map((d) => (
+                  <div key={d.id}>
+                    {/learn/i.test(d.name) && app.application_no && (
+                      <button
+                        onClick={() => window.open(
+                          `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                          "sarathi_popup", "width=900,height=700,noopener,noreferrer"
+                        )}
+                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                      >
+                        ↗ Download Learning (opens Sarathi)
+                      </button>
+                    )}
+                    {/aadhaar/i.test(d.name) && (
+                      <button
+                        onClick={() => window.open("https://myaadhaar.uidai.gov.in", "uidai_popup", "width=900,height=700,noopener,noreferrer")}
+                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                      >
+                        ↗ Download Aadhaar (opens UIDAI)
+                      </button>
+                    )}
+                    {/pcc/i.test(d.name) && app.pcc_no && (
+                      <button
+                        onClick={() => setPccCheckApp(app)}
+                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1 block"
+                      >
+                        ↗ Download PCC Certificate
+                      </button>
+                    )}
+                    <DocumentRow doc={d} onChanged={onDocsChanged} />
+                  </div>
+                ))}
+            </Card>
+
+            {app.services?.chat_in_app && (
+              <Card title="Chat">
+                <div className="h-80 -mx-5 -mb-5 border-t border-slate-200 dark:border-slate-800 overflow-hidden rounded-b-xl">
+                  <ChatPanel
+                    dealerId={app.dealer_id}
+                    applicationId={app.id}
+                    identity={staffIdentity}
+                    emptyLabel="No messages on this application yet."
+                  />
+                </div>
+              </Card>
+            )}
+          </div>
+
+          {/* Column 3: fee details, history, update status */}
+          <div>
+            <Card title="Fee Details" className="mb-4">
+              <div className="grid grid-cols-2 gap-y-1.5 text-sm">
+                <span className="text-slate-400 dark:text-slate-500">Amount (charged)</span>
+                <span className="text-slate-800 dark:text-slate-100 font-medium">{fee(app.amount)}</span>
+                <span className="text-slate-400 dark:text-slate-500">Fee</span>
+                <span className="text-slate-700 dark:text-slate-200">{fee(app.rto_fee)}</span>
+                <span className="text-slate-400 dark:text-slate-500">PCC Fee</span>
+                <span className="text-slate-700 dark:text-slate-200">{fee(app.pcc_fee)}</span>
+                <span className="text-slate-400 dark:text-slate-500">Agency Fee</span>
+                <span className="text-slate-700 dark:text-slate-200">{fee(app.agency_fee)}</span>
+                <span className="text-slate-500 dark:text-slate-400 font-semibold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1">Profit</span>
+                <span className={`font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1 ${profit < 0 ? "text-rose-600" : "text-emerald-600"}`}>{fee(profit)}</span>
+              </div>
+            </Card>
+
+            <Card title="Application History" className="mb-4">
+              {(app.history || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No history yet</p>}
+              {(app.history || []).map((h) => (
+                <div key={h.id} className="text-xs text-slate-500 dark:text-slate-500 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">{h.status}</span> — {new Date(h.changed_at).toLocaleString()}
+                  {h.remarks && <div className="text-slate-400 dark:text-slate-500 mt-0.5">{h.remarks}</div>}
+                </div>
+              ))}
+            </Card>
+
+            <Card title="Update Status">
+              <Field label="Remarks (shown to dealer)">
+                <Input
+                  as="textarea"
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  placeholder="e.g. Please re-upload a clearer Aadhaar photo"
+                />
+              </Field>
+              <div className="flex flex-wrap gap-2">
+                <PrimaryButton onClick={() => onStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
+                <GhostButton onClick={() => onStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                <PrimaryButton
+                  onClick={() => onStatusChange("Accepted", remarks)}
+                  className="!bg-emerald-600 hover:!bg-emerald-700"
+                  disabled={!canApprove}
+                  title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
+                >
+                  Approve
+                </PrimaryButton>
+                <DangerButton onClick={() => onStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                <DangerButton
+                  onClick={() => onDelete(app)}
+                  className="!bg-transparent !text-rose-600 border border-rose-300 hover:!bg-rose-50 dark:hover:!bg-rose-950"
+                  title={`Delete application ${app.draft_code}`}
+                >
+                  🗑 Delete Application
+                </DangerButton>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </Modal>
+      {pccCheckApp && (
+        <PCCStatusCheckModal row={pccCheckApp} onClose={() => setPccCheckApp(null)} />
+      )}
+      {showPccLetter && (
+        <PCCLetterModal app={app} onClose={() => setShowPccLetter(false)} />
+      )}
+      </>
+    );
+  }
+
   // mode === "customer": edit only customer-related details
   return (
     <>
-    <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="md">
+    <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="wide">
       <div>
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 dark:text-slate-500 mb-4 -mt-1">
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
         </div>
         <Card title="Applicant Details" className="mb-4">
-          <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
-          <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
-          <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
-            className={ageHighlightClass(ddmmyyyyToISO(applicant.date_of_birth)) ? "border-amber-400" : ""} /></Field>
-          <Field label="Mobile">
-            <div className="flex items-center gap-2">
-              <Input value={applicant.mobile} onChange={setApplicantField("mobile")} />
-              {applicant.mobile && (
-                <a
-                  href={`tel:${applicant.mobile}`}
-                  title={`Call ${applicant.mobile}`}
-                  className="shrink-0 w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center hover:bg-emerald-100"
-                >
-                  <Phone size={14} />
-                </a>
-              )}
-            </div>
-          </Field>
-          <Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field>
-          {app.services?.pcc_required && (
-            <>
-              <Field label="Police Station">
-                <SearchableSelect
-                  value={applicant.police_station}
-                  options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
-                  onChange={(name) => setApplicant((s) => ({ ...s, police_station: name }))}
-                  placeholder="Search police station…"
-                />
-              </Field>
-              <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.stay_since} onChange={setApplicantField("stay_since")} /></Field>
-            </>
-          )}
+          <div className="grid grid-cols-2 gap-x-4">
+            <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
+            <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
+            <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
+              className={ageHighlightClass(ddmmyyyyToISO(applicant.date_of_birth)) ? "border-amber-400" : ""} /></Field>
+            <Field label="Mobile">
+              <div className="flex items-center gap-2">
+                <Input value={applicant.mobile} onChange={setApplicantField("mobile")} />
+                {applicant.mobile && (
+                  <a
+                    href={`tel:${applicant.mobile}`}
+                    title={`Call ${applicant.mobile}`}
+                    className="shrink-0 w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center hover:bg-emerald-100"
+                  >
+                    <Phone size={14} />
+                  </a>
+                )}
+              </div>
+            </Field>
+            <div className="col-span-2"><Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field></div>
+            {app.services?.pcc_required && (
+              <>
+                <Field label="Police Station">
+                  <SearchableSelect
+                    value={applicant.police_station}
+                    options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+                    onChange={(name) => setApplicant((s) => ({ ...s, police_station: name }))}
+                    placeholder="Search police station…"
+                  />
+                </Field>
+                <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.stay_since} onChange={setApplicantField("stay_since")} /></Field>
+              </>
+            )}
+          </div>
           <PrimaryButton disabled={savingApplicant} onClick={saveApplicant}>
             {savingApplicant ? "Saving…" : "Save Applicant Details"}
           </PrimaryButton>

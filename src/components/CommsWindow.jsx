@@ -24,10 +24,11 @@
 // it. Admin staff, on the other hand, can call/chat with any dealer or
 // dealer_staff — that's the whole point of the support desk.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageCircle, MessageSquare, Users, UserPlus, Phone, Video, PhoneMissed, PhoneOff, Search, X, Plus, Filter } from "lucide-react";
+import { MessageCircle, MessageSquare, Users, UserPlus, Phone, Video, PhoneMissed, PhoneOff, Search, X, Plus, Filter, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import ChatPanel from "./ChatPanel";
 import PastelAvatar from "./PastelAvatar";
+import { Modal } from "./UI";
 import { listRecentThreadsForStaff, listRecentThreadsForDealer } from "../lib/chat";
 import { loadSeenMap, saveSeenMap, isThreadSeen } from "../lib/threadSeen";
 import { fetchAllCallLogs, fetchCallLogs } from "../lib/callLog";
@@ -105,6 +106,54 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
   const [tab, setTab] = useState("chats");
   const [selectedThread, setSelectedThread] = useState(null); // { dealerId, applicationId, label } | null
   const [seenMap, setSeenMap] = useState(() => loadSeenMap(identity));
+  const [showThreadDetail, setShowThreadDetail] = useState(false);
+  const [threadDetail, setThreadDetail] = useState(null);
+  const [threadDetailLoading, setThreadDetailLoading] = useState(false);
+
+  // Clicking the name in a thread's header pulls up who you're talking to —
+  // for a customer-chat thread (tied to one application) that's the
+  // applicant's details + documents; for a general dealer thread there's no
+  // single applicant, so it shows the dealer's own contact details instead.
+  const loadThreadDetail = async (thread) => {
+    if (!thread) return;
+    setShowThreadDetail(true);
+    setThreadDetailLoading(true);
+    setThreadDetail(null);
+    if (thread.applicationId) {
+      const { data: app } = await supabase
+        .from("applications")
+        .select("applicant_name, father_husband_name, mobile, address, services(parent_service, short_name)")
+        .eq("id", thread.applicationId)
+        .maybeSingle();
+      const { data: docs } = await supabase
+        .from("application_documents")
+        .select("id, name, file_url, status")
+        .eq("application_id", thread.applicationId);
+      setThreadDetail({
+        kind: "application",
+        name: app?.applicant_name || thread.label,
+        phone: app?.mobile || null,
+        fatherName: app?.father_husband_name || null,
+        address: app?.address || null,
+        service: app?.services ? (app.services.short_name || app.services.parent_service) : null,
+        docs: docs || [],
+      });
+    } else if (thread.dealerId) {
+      const { data: dealer } = await supabase
+        .from("dealers")
+        .select("name, short_name, contact_name, mobile, address")
+        .eq("id", thread.dealerId)
+        .maybeSingle();
+      setThreadDetail({
+        kind: "dealer",
+        name: dealer?.short_name || dealer?.name || thread.label,
+        phone: dealer?.mobile || null,
+        contactName: dealer?.contact_name || null,
+        address: dealer?.address || null,
+      });
+    }
+    setThreadDetailLoading(false);
+  };
 
   const openWindow = () => setOpen(true);
   const closeWindow = () => { setOpen(false); setSelectedThread(null); };
@@ -149,8 +198,14 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
             ← Back
           </button>
         ) : null}
-        <div className="min-w-0 flex-1">
-          <p className="text-lg font-bold leading-tight truncate text-slate-900 dark:text-slate-100">{headerTitle}</p>
+        <div
+          className={`min-w-0 flex-1 ${selectedThread ? "cursor-pointer" : ""}`}
+          onClick={() => selectedThread && loadThreadDetail(selectedThread)}
+        >
+          <p className="text-lg font-bold leading-tight truncate text-slate-900 dark:text-slate-100 flex items-center gap-1">
+            {headerTitle}
+            {selectedThread && <ChevronRight size={15} className="text-slate-300 dark:text-slate-600 shrink-0" />}
+          </p>
           {headerSubtitle && <p className="text-xs text-slate-400 leading-tight truncate mt-0.5">{headerSubtitle}</p>}
         </div>
         {!selectedThread && tab === "chats" && (
@@ -234,6 +289,78 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
             </div>
           </div>
         </>
+      )}
+
+      {showThreadDetail && (
+        <Modal title="Details" onClose={() => setShowThreadDetail(false)}>
+          {threadDetailLoading ? (
+            <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
+          ) : threadDetail ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-y-2 text-sm">
+                <span className="text-slate-400 dark:text-slate-500">Name</span>
+                <span className="text-slate-800 dark:text-slate-100 font-medium">{threadDetail.name || "—"}</span>
+
+                <span className="text-slate-400 dark:text-slate-500">Phone</span>
+                <span className="text-slate-700 dark:text-slate-200 flex items-center gap-2">
+                  {threadDetail.phone || "—"}
+                  {threadDetail.phone && (
+                    <a href={`tel:${threadDetail.phone}`} title={`Call ${threadDetail.phone}`} className="text-emerald-600 hover:text-emerald-700">
+                      <Phone size={14} />
+                    </a>
+                  )}
+                </span>
+
+                {threadDetail.kind === "application" && (
+                  <>
+                    <span className="text-slate-400 dark:text-slate-500">Father/Husband</span>
+                    <span className="text-slate-700 dark:text-slate-200">{threadDetail.fatherName || "—"}</span>
+                  </>
+                )}
+                {threadDetail.kind === "dealer" && threadDetail.contactName && (
+                  <>
+                    <span className="text-slate-400 dark:text-slate-500">Contact Person</span>
+                    <span className="text-slate-700 dark:text-slate-200">{threadDetail.contactName}</span>
+                  </>
+                )}
+
+                <span className="text-slate-400 dark:text-slate-500">Address</span>
+                <span className="text-slate-700 dark:text-slate-200">{threadDetail.address || "—"}</span>
+
+                {threadDetail.kind === "application" && (
+                  <>
+                    <span className="text-slate-400 dark:text-slate-500">Service</span>
+                    <span className="text-slate-700 dark:text-slate-200">{threadDetail.service || "—"}</span>
+                  </>
+                )}
+              </div>
+
+              {threadDetail.kind === "application" && (
+                <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+                  <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase mb-2">Documents</p>
+                  {threadDetail.docs.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
+                  {threadDetail.docs.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between text-sm py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                      <span className="text-slate-700 dark:text-slate-200">{d.name}</span>
+                      <div className="flex items-center gap-2">
+                        {d.file_url ? (
+                          <a href={d.file_url} target="_blank" rel="noreferrer" className="text-blue-600 dark:text-blue-400 text-xs font-semibold">View</a>
+                        ) : (
+                          <span className="text-rose-500 text-xs">Missing</span>
+                        )}
+                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                          {d.status || "Pending"}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400 dark:text-slate-500">No details found.</p>
+          )}
+        </Modal>
       )}
 
       {/* FAB — hidden on mobile while the full-screen panel is open (its

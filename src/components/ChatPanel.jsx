@@ -47,6 +47,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   const [uploading, setUploading] = useState(false);
   const [sharingLocation, setSharingLocation] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [error, setError] = useState("");
   const bodyRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -342,7 +343,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
         </div>
       )}
 
-      <div className="border-t border-slate-200 p-2 flex items-center gap-1.5 shrink-0">
+      <div className="border-t border-slate-200 p-2 flex items-center gap-1.5 shrink-0 relative">
         <button
           onClick={() => setShowEmoji((s) => !s)}
           disabled={!identity}
@@ -352,32 +353,51 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
           <Smile size={19} />
         </button>
         <input ref={fileInputRef} type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" hidden onChange={(e) => sendAttachment(e.target.files?.[0])} />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={!identity || uploading}
-          title="Send an attachment"
-          className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 disabled:opacity-40"
-        >
-          <ImageIcon size={19} />
-        </button>
-        <button
-          onClick={sendLocation}
-          disabled={!identity || sharingLocation}
-          title="Share your current location"
-          className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 disabled:opacity-40"
-        >
-          <MapPin size={19} />
-        </button>
-        {identity?.type === "staff" && (
+
+        <div className="relative shrink-0">
           <button
-            onClick={() => setDraft("Please share the OTP you received, so we can proceed with your application.")}
+            onClick={() => setShowAttachMenu((s) => !s)}
             disabled={!identity}
-            title="Insert 'OTP Required' template"
-            className="px-2 h-8 shrink-0 rounded-full text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 disabled:opacity-40 whitespace-nowrap"
+            title="Attach"
+            className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-blue-600 hover:bg-slate-100 disabled:opacity-40 ${showAttachMenu ? "bg-slate-100" : ""}`}
           >
-            OTP Required
+            <Paperclip size={19} />
           </button>
-        )}
+
+          {showAttachMenu && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setShowAttachMenu(false)} />
+              <div className="absolute bottom-11 left-0 z-20 w-52 bg-white rounded-xl border border-slate-200 shadow-lg py-1.5">
+                <button
+                  onClick={() => { setShowAttachMenu(false); fileInputRef.current?.click(); }}
+                  disabled={uploading}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  <ImageIcon size={17} className="text-blue-600" />
+                  Photo / File
+                </button>
+                <button
+                  onClick={() => { setShowAttachMenu(false); sendLocation(); }}
+                  disabled={sharingLocation}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  <MapPin size={17} className="text-blue-600" />
+                  Location
+                </button>
+                {identity?.type === "staff" && (
+                  <button
+                    onClick={() => { setShowAttachMenu(false); setDraft("Please share the OTP you received, so we can proceed with your application."); }}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-amber-700 hover:bg-amber-50"
+                  >
+                    <span className="w-[17px] text-center font-bold text-xs">🔑</span>
+                    OTP Required
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
