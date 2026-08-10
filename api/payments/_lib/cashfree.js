@@ -7,10 +7,12 @@
 //   CASHFREE_CLIENT_ID       (Cashfree Dashboard -> Developers -> API Keys)
 //   CASHFREE_CLIENT_SECRET   (same page -- keep secret, server-side only)
 //   CASHFREE_ENV              "SANDBOX" while testing, "PRODUCTION" once live
-//   CASHFREE_WEBHOOK_SECRET  (Dashboard -> Developers -> Webhooks -> your
-//                             webhook's secret -- NOT the same as the API
-//                             client secret. Used only to verify that a
-//                             webhook call really came from Cashfree.)
+//
+// NOTE: Cashfree does NOT issue a separate per-webhook signing secret like
+// some other providers do -- their docs confirm webhook signatures are
+// verified using the same PG secret key (CASHFREE_CLIENT_SECRET) used for
+// API auth. So there is no CASHFREE_WEBHOOK_SECRET to configure separately;
+// verifyWebhookSignature() below reuses CASHFREE_CLIENT_SECRET.
 //
 // NOTE ON API VERSION: Cashfree versions their PG API by date via the
 // x-api-version header, and response field names have shifted across
@@ -39,7 +41,7 @@ function authHeaders() {
 }
 
 export function cashfreeConfigured() {
-  return !!(process.env.CASHFREE_CLIENT_ID && process.env.CASHFREE_CLIENT_SECRET && process.env.CASHFREE_WEBHOOK_SECRET);
+  return !!(process.env.CASHFREE_CLIENT_ID && process.env.CASHFREE_CLIENT_SECRET);
 }
 
 // Creates a Cashfree order for this exact amount, expiring at expiresAtIso.
@@ -121,7 +123,7 @@ export async function fetchOrderStatus(orderId) {
 // re-stringifying the body can reorder keys or change whitespace, which
 // would make a genuine Cashfree webhook fail signature verification.
 export function verifyWebhookSignature({ rawBody, timestamp, signature }) {
-  const secret = process.env.CASHFREE_WEBHOOK_SECRET;
+  const secret = process.env.CASHFREE_CLIENT_SECRET;
   if (!secret || !timestamp || !signature) return false;
   const expected = createHmac("sha256", secret).update(timestamp + rawBody).digest("base64");
   try {
