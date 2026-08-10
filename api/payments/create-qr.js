@@ -17,7 +17,11 @@
 import { supabaseAdmin, resolveCaller } from "../_lib/adminAuth.js";
 import { createOrder, generateUpiQr, cashfreeConfigured } from "./_lib/cashfree.js";
 
-const DEFAULT_MINUTES_VALID = 10;
+// Cashfree requires order_expiry_time to be more than 15 minutes out (and
+// less than 30 days), so this fallback -- and anything the client sends --
+// must stay above 15.
+const DEFAULT_MINUTES_VALID = 20;
+const MIN_MINUTES_VALID = 16;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -48,7 +52,11 @@ export default async function handler(req, res) {
       .maybeSingle();
     if (dealerErr || !dealer) return res.status(404).json({ error: "Dealer not found" });
 
-    const minutes = Number(minutesValid) > 0 ? Number(minutesValid) : DEFAULT_MINUTES_VALID;
+    const requestedMinutes = Number(minutesValid) > 0 ? Number(minutesValid) : DEFAULT_MINUTES_VALID;
+    if (requestedMinutes < MIN_MINUTES_VALID) {
+      return res.status(400).json({ error: `QR must be valid for at least ${MIN_MINUTES_VALID} minutes (Cashfree requires more than 15 minutes)` });
+    }
+    const minutes = requestedMinutes;
     const expiresAt = new Date(Date.now() + minutes * 60 * 1000);
     const cfOrderId = `SJO-${dealerId.slice(0, 8)}-${Date.now()}`;
 
