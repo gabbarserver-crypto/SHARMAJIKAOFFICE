@@ -18,7 +18,10 @@ import { createPaymentQr, sendPush } from "../lib/serverApi";
 import { getOrCreateThread, sendMessage, identityFor } from "../lib/chat";
 import { Modal, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "./UI";
 
-const DEFAULT_MINUTES = 10;
+// Cashfree requires order_expiry_time to be more than 15 minutes out, so
+// this must stay above 15 -- 10 used to be the default and silently failed
+// every "Generate & Send" until raised.
+const DEFAULT_MINUTES = 20;
 
 export default function StaffQrSendPanel({ staff, dealers, onClose }) {
   const [step, setStep] = useState("form"); // form | sending | qr | paid | expired
@@ -54,9 +57,11 @@ export default function StaffQrSendPanel({ staff, dealers, onClose }) {
       const thread = await getOrCreateThread({ dealerId, applicationId: applicationId || null });
       await sendMessage({
         threadId: thread.id,
-        sender: identityFor({ staff }),
-        body: `Payment QR for ₹${Number(amount).toLocaleString("en-IN")} — scan with any UPI app (PhonePe, GPay, Paytm, BHIM). Expires in ${minutesValid} minutes.`,
-        attachmentUrl: result.qrImageUrl,
+        sender: {
+          ...identityFor({ staff }),
+          body: `Payment QR for ₹${Number(amount).toLocaleString("en-IN")} — scan with any UPI app (PhonePe, GPay, Paytm, BHIM). Expires in ${minutesValid} minutes.`,
+          attachmentUrl: result.qrImageUrl,
+        },
       });
 
       await sendPush({
