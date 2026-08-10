@@ -22,8 +22,10 @@ In Supabase SQL editor, run `supabase/009_qr_payments.sql`. It:
    (there's a separate pair for Sandbox and Production).
 3. Dashboard → **Developers → Webhooks** → add a webhook pointing at
    `https://<your-deployed-domain>/api/payments/webhook`, subscribed to
-   **Payment Success** (and Payment Failed, optional). Copy the **webhook
-   secret** it gives you — this is different from your API client secret.
+   **Payment Success** (and Payment Failed, optional). Cashfree does not
+   issue a separate secret per webhook endpoint — it signs webhook payloads
+   with the same PG Client Secret from step 2, so there's nothing extra to
+   copy here.
 
 ## 3. Set Vercel environment variables
 
@@ -32,8 +34,7 @@ Project Settings → Environment Variables:
 | Variable | Value |
 |---|---|
 | `CASHFREE_CLIENT_ID` | from step 2 |
-| `CASHFREE_CLIENT_SECRET` | from step 2 |
-| `CASHFREE_WEBHOOK_SECRET` | from step 2 |
+| `CASHFREE_CLIENT_SECRET` | from step 2 (also used to verify webhook signatures — see note in step 2) |
 | `CASHFREE_ENV` | `SANDBOX` while testing, `PRODUCTION` once live |
 | `PUBLIC_APP_URL` | your deployed URL, e.g. `https://sjo-admin.vercel.app` (no trailing slash) |
 
@@ -51,9 +52,9 @@ the existing login endpoints — the new functions reuse them.)
   handles that simulate a successful payment without real money.
 - Confirm the webhook actually reaches you — check Vercel's function logs
   after a sandbox payment; `payments/webhook.js` logs a warning if the
-  signature check fails (usually means `CASHFREE_WEBHOOK_SECRET` is wrong,
-  or you copied the API client secret into it by mistake — they're not the
-  same value).
+  signature check fails (usually means `CASHFREE_CLIENT_SECRET` doesn't
+  match what's set in the Cashfree Dashboard for the environment — Sandbox
+  and Production have different secrets, so check you're not mixing them).
 
 ## What got added / changed
 

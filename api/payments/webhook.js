@@ -6,9 +6,11 @@
 // fails). No accessToken, no dealer session -- so nothing here can be
 // trusted just because the request arrived; every request is verified two
 // separate ways before anything gets written:
-//   1. The x-webhook-signature header, checked against CASHFREE_WEBHOOK_SECRET
-//      (verifyWebhookSignature in _lib/cashfree.js) -- proves the request
-//      body wasn't forged or tampered with in transit.
+//   1. The x-webhook-signature header, checked against CASHFREE_CLIENT_SECRET
+//      (verifyWebhookSignature in _lib/cashfree.js -- Cashfree signs webhooks
+//      with the same PG secret key used for API auth, not a separate
+//      per-webhook secret) -- proves the request body wasn't forged or
+//      tampered with in transit.
 //   2. A direct server-to-server fetchOrderStatus() call back to Cashfree
 //      -- proves the order is ACTUALLY marked PAID on Cashfree's side right
 //      now, rather than trusting whatever status string the webhook body
