@@ -51,6 +51,15 @@ export async function sendPush({ targetType, targetId, title, body, data }) {
   }
 }
 
+// A dealer (or their active sub-staff), or staff on a dealer's behalf, asks
+// for a UPI QR to pay a specific amount -- see api/payments/create-qr.js.
+// Returns { qrRequestId, qrImageUrl, qrRawString, expiresAt, cfOrderId }.
+// Nothing lands in `payments` from this call alone -- that only happens
+// once Cashfree's webhook confirms the money actually moved.
+export async function createPaymentQr({ dealerId, applicationId, amount, minutesValid }) {
+  return post("/api/payments/create-qr", { accessToken: await accessToken(), dealerId, applicationId, amount, minutesValid });
+}
+
 // Anyone signed in (staff, dealer, or dealer sub-staff) can request a token
 // to join an Agora call on the given channel (= the chat_thread id).
 export async function fetchAgoraToken({ channel }) {

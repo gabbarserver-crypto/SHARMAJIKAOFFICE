@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton, GhostButton, DangerButton, Modal, Toast } from "../components/UI";
+import StaffQrSendPanel from "../components/StaffQrSendPanel";
 import { parseCSV, findByLabel, ddmmyyyyToISO } from "../lib/csv";
 
 function isoToDDMMYYYY(iso) {
@@ -21,6 +22,7 @@ export default function Payments({ staff } = {}) {
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showSendQr, setShowSendQr] = useState(false);
   const [allPayments, setAllPayments] = useState([]);
   const [allLoading, setAllLoading] = useState(true);
   const [allQuery, setAllQuery] = useState("");
@@ -383,9 +385,14 @@ export default function Payments({ staff } = {}) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <PrimaryButton onClick={() => setShowSendQr(true)}>📲 Send Payment QR</PrimaryButton>
         <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
       </div>
+
+      {showSendQr && (
+        <StaffQrSendPanel staff={staff} dealers={dealers} onClose={() => { setShowSendQr(false); loadRecent(); loadAllPayments(); }} />
+      )}
 
       <Card title="Record New Payment">
         <div className="grid gap-x-4 sm:grid-cols-2 lg:grid-cols-4">

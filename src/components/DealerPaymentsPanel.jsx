@@ -9,7 +9,8 @@
 // for how that's enforced at the database level, not just in this UI.
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, Field, Input, Select, PrimaryButton, Toast } from "./UI";
+import { Card, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "./UI";
+import QrPaymentPanel from "./QrPaymentPanel";
 
 const STATUS_META = {
   pending: { label: "Pending verification", className: "text-amber-600 dark:text-amber-400" },
@@ -23,6 +24,7 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
   const [form, setForm] = useState({ application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [showQr, setShowQr] = useState(false);
 
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.value }));
 
@@ -71,8 +73,15 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
   return (
     <div className="grid lg:grid-cols-2 gap-6">
       <Card title="Submit a Payment">
+        <div className="mb-4 p-3 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">Pay by QR — instant, no verification wait</p>
+            <p className="text-xs text-emerald-600/80 dark:text-emerald-500/70">Scan with any UPI app; it's recorded automatically the moment it's paid.</p>
+          </div>
+          <GhostButton onClick={() => setShowQr(true)} className="whitespace-nowrap">Pay by QR</GhostButton>
+        </div>
         <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
-          Let us know about a payment you've made — it'll show as Pending until our team verifies it against what we received.
+          Or let us know about a payment you've made another way — it'll show as Pending until our team verifies it against what we received.
         </p>
         <Field label="Application (optional)">
           <Select value={form.application_id} onChange={set("application_id")}>
@@ -127,6 +136,15 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
       </Card>
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+
+      {showQr && (
+        <QrPaymentPanel
+          dealerId={dealerId}
+          applications={applications}
+          onClose={() => setShowQr(false)}
+          onPaid={() => load()}
+        />
+      )}
     </div>
   );
 }
