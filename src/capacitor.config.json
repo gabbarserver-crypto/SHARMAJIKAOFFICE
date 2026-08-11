@@ -1,0 +1,8 @@
+{
+  "appId": "com.sharmajikaoffice.erp",
+  "appName": "Sharma Ji Ka Office",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
