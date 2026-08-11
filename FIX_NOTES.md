@@ -19,10 +19,12 @@ create-dealer-staff-login, admin/create-dealer-login) had the same latent
 bug — the screenshot just happened to catch it on the calling feature
 first.
 
-This also explains the "Cannot read properties of undefined (reading
-'replace')" banner in your other screenshot — same class of bug, different
-endpoint/spot; happy to hunt that one down the same way if you paste
-another screenshot/network trace of it happening.
+**Update:** the "Cannot read properties of undefined (reading 'replace')"
+banner turned out to be a *different* bug, not this one — it's an Android
+WebView permission quirk (Microphone allowed in Android Settings isn't
+enough on its own for a WebView's `getUserMedia()`). See
+`android-webrtc-permissions/README.md` for the fix and the native files to
+drop in.
 
 ## The fix
 1. **`api/_lib/adminAuth.js`** — `resolveCaller()` now wraps its body in
