@@ -207,6 +207,12 @@ export function useCall({ threadId, dealerId, identity }) {
         }
       } catch (e) {
         if (!cancelled) {
+          // TEMP DEBUG — remove once the "Cannot read properties of
+          // undefined (reading 'replace')" crash is root-caused. Nothing
+          // upstream of this ever logged the raw error/stack, which is why
+          // it never showed up in chrome://inspect — only the friendly
+          // banner text did.
+          console.error("[call.js] join/publish failed:", e, e?.stack);
           setCallError(friendlyCallError(e));
           reset("ended");
         }

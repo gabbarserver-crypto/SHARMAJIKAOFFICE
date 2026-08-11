@@ -19,3 +19,26 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# --- Capacitor core & bridge — required or the WebView<->native bridge
+# breaks with a black screen / instant crash under R8 ---
+-keep class com.getcapacitor.** { *; }
+-keep class com.getcapacitor.plugin.** { *; }
+-keepclassmembers class * extends com.getcapacitor.Plugin {
+    @com.getcapacitor.annotation.CapacitorPlugin <methods>;
+}
+-keepattributes JavascriptInterface
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
+# --- Firebase / push notifications ---
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.firebase.**
+-dontwarn com.google.android.gms.**
+
+# --- Biometric auth plugin ---
+-keep class com.aparajita.capacitor.biometricauth.** { *; }
+
+# --- App's own native code (MainActivity etc.) ---
+-keep class com.sharmajikaoffice.erp.** { *; }
