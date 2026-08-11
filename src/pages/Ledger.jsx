@@ -133,6 +133,12 @@ export default function Ledger({ only, initialEntityId } = {}) {
   // and the linked application's own amount field, so the two stay in
   // sync. Only Amount is editable here — every other field in the modal is
   // read-only, on purpose.
+  //
+  // Both writes happen inside a single Postgres function (see
+  // supabase/013_atomic_ledger_amount_update.sql) instead of two separate
+  // client-side .update() calls — so either both land or neither does,
+  // and the ledger + application amount can never go out of sync from a
+  // half-completed save.
   const saveAmount = useCallback(async () => {
     if (!appDetailTxn || !appDetail) return;
     const newAmount = Number(editAmount);
@@ -142,14 +148,15 @@ export default function Ledger({ only, initialEntityId } = {}) {
     }
     setSavingAmount(true);
     setAmountSaveError("");
-    const ledgerTable = entityMode === "dealer" ? "ledger_transactions" : "agency_ledger_transactions";
-    const [{ error: ledgerErr }, { error: appErr }] = await Promise.all([
-      supabase.from(ledgerTable).update({ amount: newAmount }).eq("id", appDetailTxn.id),
-      supabase.from("applications").update({ amount: newAmount }).eq("id", appDetail.id),
-    ]);
+    const rpcName = entityMode === "dealer" ? "update_dealer_ledger_amount" : "update_agency_ledger_amount";
+    const { error: rpcErr } = await supabase.rpc(rpcName, {
+      p_txn_id: appDetailTxn.id,
+      p_application_id: appDetail.id,
+      p_new_amount: newAmount,
+    });
     setSavingAmount(false);
-    if (ledgerErr || appErr) {
-      setAmountSaveError((ledgerErr || appErr).message);
+    if (rpcErr) {
+      setAmountSaveError(rpcErr.message);
       return;
     }
     // Reflect the new amount locally so the ledger table + running balance
