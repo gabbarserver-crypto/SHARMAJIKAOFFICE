@@ -240,7 +240,7 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
         ) : tab === "calls" ? (
           <CallsTab variant={variant} dealerId={dealerId} identity={identity} call={call} seenMap={seenMap} onOpenThread={openThread} />
         ) : (
-          <NewCallTab variant={variant} identity={identity} call={call} />
+          <NewCallTab variant={variant} identity={identity} call={call} dealerId={dealerId} onOpenThread={openThread} />
         )}
       </div>
 
@@ -593,12 +593,18 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
 // design (see the file-level comment): a dealer/dealer_staff can ONLY ever
 // list and call admin staff here.
 // ============================================================
-function NewCallTab({ variant, identity, call }) {
-  return variant === "staff" ? <StaffNewCallList call={call} /> : <DealerNewCallList call={call} />;
+function NewCallTab({ variant, identity, call, dealerId, onOpenThread }) {
+  return variant === "staff"
+    ? <StaffNewCallList call={call} onOpenThread={onOpenThread} />
+    : <DealerNewCallList call={call} dealerId={dealerId} onOpenThread={onOpenThread} />;
 }
 
-// Staff can call any dealer, or any of that dealer's active sub-staff.
-function StaffNewCallList({ call }) {
+// Staff can call — or now, message — any dealer, or any of that dealer's
+// active sub-staff. Messaging a dealer_staff contact opens that same
+// dealer's general thread (dealer_staff folded into 'dealer' for chat too,
+// same as it already is for the call log — there's no separate per-staff
+// thread), so each contact keeps track of its parent dealer's id for that.
+function StaffNewCallList({ call, onOpenThread }) {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -611,8 +617,8 @@ function StaffNewCallList({ call }) {
         supabase.from("dealer_staff").select("id, full_name, dealer_id, active, dealers(short_name, name)").eq("active", true).order("full_name"),
       ]);
       const combined = [
-        ...(dealers || []).map((d) => ({ type: "dealer", id: d.id, name: d.short_name || d.name, sub: "Dealer" })),
-        ...(dealerStaff || []).map((s) => ({ type: "dealer_staff", id: s.id, name: s.full_name, sub: s.dealers?.short_name || s.dealers?.name || "Dealer staff" })),
+        ...(dealers || []).map((d) => ({ type: "dealer", id: d.id, name: d.short_name || d.name, sub: "Dealer", dealerId: d.id })),
+        ...(dealerStaff || []).map((s) => ({ type: "dealer_staff", id: s.id, name: s.full_name, sub: s.dealers?.short_name || s.dealers?.name || "Dealer staff", dealerId: s.dealer_id })),
       ].sort((a, b) => a.name.localeCompare(b.name));
       setContacts(combined);
       setLoading(false);
@@ -621,13 +627,19 @@ function StaffNewCallList({ call }) {
 
   const filtered = contacts.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()) || c.sub.toLowerCase().includes(query.toLowerCase()));
 
-  return <ContactList contacts={filtered} loading={loading} query={query} setQuery={setQuery} call={call} />;
+  const handleMessage = (c) => onOpenThread?.({ dealerId: c.dealerId, applicationId: null, label: c.name, dealerName: c.sub });
+
+  return <ContactList contacts={filtered} loading={loading} query={query} setQuery={setQuery} call={call} onMessage={onOpenThread ? handleMessage : null} />;
 }
 
-// A dealer (or their sub-staff) can ONLY see and call admin staff — this
-// query never touches the dealers/dealer_staff tables at all, so there is
-// no way for a dealer to end up looking at, or ringing, another dealer.
-function DealerNewCallList({ call }) {
+// A dealer (or their sub-staff) can ONLY see and call/message admin staff —
+// this query never touches the dealers/dealer_staff tables at all, so
+// there is no way for a dealer to end up looking at, or ringing, another
+// dealer. Every staff contact here shares the SAME one running thread with
+// this dealer (see ThreadsTab's "Support Team" general thread) — there's
+// no per-staff-member thread — so messaging any of them opens that one
+// thread, same as tapping "Recent Chats" would.
+function DealerNewCallList({ call, dealerId, onOpenThread }) {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -643,10 +655,22 @@ function DealerNewCallList({ call }) {
 
   const filtered = contacts.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
 
-  return <ContactList contacts={filtered} loading={loading} query={query} setQuery={setQuery} call={call} emptyLabel="No team members found." />;
+  const handleMessage = () => onOpenThread?.({ dealerId, applicationId: null, label: "Support Team", dealerName: null });
+
+  return (
+    <ContactList
+      contacts={filtered}
+      loading={loading}
+      query={query}
+      setQuery={setQuery}
+      call={call}
+      emptyLabel="No team members found."
+      onMessage={onOpenThread && dealerId ? handleMessage : null}
+    />
+  );
 }
 
-function ContactList({ contacts, loading, query, setQuery, call, emptyLabel = "No contacts found." }) {
+function ContactList({ contacts, loading, query, setQuery, call, emptyLabel = "No contacts found.", onMessage }) {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <SearchBar value={query} onChange={setQuery} placeholder="Search contacts…" />
@@ -680,6 +704,15 @@ function ContactList({ contacts, loading, query, setQuery, call, emptyLabel = "N
               >
                 <Video size={15} />
               </button>
+              {onMessage && (
+                <button
+                  onClick={() => onMessage(c)}
+                  title={`Message ${c.name}`}
+                  className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-violet-600 bg-violet-50 dark:bg-violet-900/30 hover:bg-violet-100"
+                >
+                  <MessageSquare size={15} />
+                </button>
+              )}
             </div>
           ))
         )}

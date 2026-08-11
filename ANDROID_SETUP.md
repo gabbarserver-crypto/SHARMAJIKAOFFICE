@@ -54,6 +54,7 @@ in this order — happy to do the code for whichever you want next:
 | File upload/download | `@capacitor/filesystem` | Needed so downloaded PDFs/receipts save to the device instead of just opening in-browser |
 | Fingerprint login | `@aparajita/capacitor-biometric-auth` | Gate app open (or a specific screen) behind Face/Fingerprint unlock |
 | Push notifications | `@capacitor/push-notifications` | Needs a Firebase project (free tier is fine) — optional, skip for v1 |
+| Voice/video call mic & camera access | none (native code, no plugin) | The Android WebView needs its own permission grant on top of the Android Settings toggle, or calls fail with a cryptic "Cannot read properties of undefined (reading 'replace')" error even when Microphone is allowed in Settings — see `android-webrtc-permissions/README.md` for the exact 2-file patch, applied right after step 2 below (`npm run android:add`) |
 
 ## 6. App icon & splash screen
 Android Studio ships with placeholder icons. Once you have a logo, the
