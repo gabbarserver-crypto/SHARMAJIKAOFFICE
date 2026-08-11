@@ -363,11 +363,12 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
         </Modal>
       )}
 
-      {/* FAB — hidden on mobile while the full-screen panel is open (its
-          own Back button replaces it); always visible on desktop, where it
-          doubles as the popup's close button. */}
+      {/* FAB — hidden while the window is open on any screen size (mobile's
+          full-screen panel has its own Back button, and desktop's popup has
+          its own header Close (X) button — so this floating button would
+          just be a redundant second close control sitting on top of it). */}
       <div
-        className={`no-print fixed z-50 flex-col items-end ${open ? "hidden md:flex" : "flex"}`}
+        className={`no-print fixed z-50 flex-col items-end ${open ? "hidden" : "flex"}`}
         style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
       >
         <button
