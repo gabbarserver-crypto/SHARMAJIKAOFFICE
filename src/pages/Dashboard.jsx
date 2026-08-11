@@ -10,10 +10,16 @@ import { BOTTOM_TAB_KEYS } from "../components/BottomTabBar";
 // BottomTabBar.jsx: Ledger already covers both).
 const OVERFLOW_ICONS = { payments: CreditCard, reports: BarChart2, settings: SettingsIcon };
 
-// Bump this when you replace public/downloads/sjo-app.apk with a new build
-// so the version number on the dashboard stays in sync.
+// Bump this when you upload a new build to the GitHub Release so the
+// version number on the dashboard stays in sync.
+// IMPORTANT: this is a GitHub Releases URL, NOT a local /public file. Do
+// not put the .apk under public/downloads/ — Capacitor copies the entire
+// dist/ (which includes everything in public/) into the native Android
+// app's own assets at build time, so a self-hosted APK there ends up
+// bundled INSIDE the app itself, ballooning its size with every build
+// (this is what caused the app to balloon to ~100MB+ before).
 const APP_VERSION = "1.0.0";
-const APK_PATH = "/downloads/sjo-app.apk";
+const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
 
 // Each tile gets its own solid color fill (point 16) instead of a plain
 // white card with just the number colored — makes the dashboard scannable

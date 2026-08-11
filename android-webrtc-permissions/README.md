@@ -1,3 +1,11 @@
+**Update:** if you installed the earlier version of this patch and the app
+started crashing on launch with a null pointer exception, that's fixed in
+this version — it does the WebView wiring in `onStart()` instead of
+`onCreate()`, with null-checks throughout, so it can never crash the app
+even in the worst case (it just silently skips the mic/camera grant for
+that session instead). Re-copy the updated `MainActivity.java` from this
+folder over your existing one and rebuild.
+
 # Fix: calls fail with "Cannot read properties of undefined (reading 'replace')" even though Microphone permission is allowed
 
 ## Root cause

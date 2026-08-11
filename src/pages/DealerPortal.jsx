@@ -29,7 +29,13 @@ import { stripTypeFromDescription, deriveTxnType } from "./Ledger";
 
 // Same file the Dashboard's "Download App" card points to (see
 // src/pages/Dashboard.jsx) — one APK, linked from every portal.
-const APK_PATH = "/downloads/sjo-app.apk";
+// IMPORTANT: this is a GitHub Releases URL, NOT a local /public file.
+// Do not put the .apk back under public/downloads/ — Capacitor copies the
+// entire dist/ (which includes everything in public/) into the native
+// Android app's own assets at build time, so a self-hosted APK there ends
+// up bundled INSIDE the app itself, ballooning its size with every build
+// (this is what caused the app to balloon to ~100MB+ before).
+const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
 
 const TABS = ["Applications", "Call/Chat", "Ledger"];
 
