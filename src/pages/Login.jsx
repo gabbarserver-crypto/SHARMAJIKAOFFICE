@@ -283,6 +283,21 @@ export default function Login({ authError }) {
           <Fingerprint size={18} />
           {passkeyLoading ? "Waiting for fingerprint / Face ID…" : "Sign in with Fingerprint / Face ID"}
         </button>
+
+        {/* This portal is dealer/staff-only. Anyone landing here without a
+           login — Welcome's own link only shows once per session — should
+           still have a way to reach the public-facing site. */}
+        <p className="text-slate-400 text-xs text-center mt-5">
+          Looking for our public services?{" "}
+          <a
+            href="https://sharma-ji-stamps.vercel.app/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 font-medium hover:underline"
+          >
+            Visit our website
+          </a>
+        </p>
       </div>
     </div>
   );

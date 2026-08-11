@@ -12,18 +12,50 @@ import logo from "../assets/sjo-logo-full.png";
 
 export default function Welcome({ onContinue }) {
   return (
-    <div className="min-h-screen bg-[#0f1b3d] flex items-center justify-center p-4">
-      <div className="w-full max-w-sm text-center">
-        <div className="bg-white rounded-2xl p-8 shadow-xl">
-          <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[240px] mx-auto mb-4" />
-          <p className="text-slate-500 text-sm leading-relaxed mb-6">
-            Your trusted partner for Driving Licence, RC Transfer, PCC and other RTO services.
-          </p>
-          <button onClick={onContinue} className="w-full btn-accent text-white font-semibold py-3 rounded-xl">
-            Continue
-          </button>
+    <div className="min-h-screen bg-[#0f1b3d] flex flex-col">
+      <div className="flex-1 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm text-center">
+          <div className="bg-white rounded-2xl p-8 shadow-xl">
+            <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[240px] mx-auto mb-4" />
+            <p className="text-slate-500 text-sm leading-relaxed mb-6">
+              Your trusted partner for Driving Licence, RC Transfer, PCC and other RTO services.
+            </p>
+
+            {/* Two entry points: our Stamps & Prints storefront (a separate
+                site — see sharma-ji-stamps.vercel.app), and the RTO/PCC
+                service, which continues into Login on this same app. */}
+            <div className="space-y-3">
+              <a
+                href="https://sharma-ji-stamps.vercel.app/"
+                className="block w-full border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl"
+              >
+                Stamps &amp; Prints
+              </a>
+              <button onClick={onContinue} className="w-full btn-accent text-white font-semibold py-3 rounded-xl">
+                RTO Services
+              </button>
+            </div>
+          </div>
         </div>
       </div>
+
+      {/* Public footer — this is the part Cashfree (and any payment-gateway
+          KYC crawler) needs to reach without hitting a login wall. Kept
+          plain <a href> links (real navigations, not client-side nav
+          callbacks) so they work as standalone routes — see App.jsx's
+          LEGAL_ROUTES check, which serves these before any auth logic. */}
+      <footer className="text-white/50 text-xs sm:text-sm py-6 px-4">
+        <div className="max-w-sm mx-auto text-center space-y-2">
+          <nav className="flex flex-wrap justify-center gap-x-4 gap-y-1">
+            <a href="/privacy-policy" className="hover:text-white/80">Privacy Policy</a>
+            <a href="/terms-and-conditions" className="hover:text-white/80">Terms &amp; Conditions</a>
+            <a href="/refund-policy" className="hover:text-white/80">Refund Policy</a>
+            <a href="/contact-us" className="hover:text-white/80">Contact Us</a>
+          </nav>
+          <p>Dayalpur, 33 Ft Road, North East Delhi – 110094 · 9899029807</p>
+          <p>© {new Date().getFullYear()} Sharma Ji Ka Office</p>
+        </div>
+      </footer>
     </div>
   );
 }

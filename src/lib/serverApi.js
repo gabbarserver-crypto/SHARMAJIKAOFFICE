@@ -65,3 +65,12 @@ export async function createPaymentQr({ dealerId, applicationId, amount, minutes
 export async function fetchAgoraToken({ channel }) {
   return post("/api/agora-token", { accessToken: await accessToken(), channel });
 }
+
+// Marks the caller's side ('staff' or 'dealer', dealer_staff folded into
+// 'dealer') as having read a thread up to now, and returns both sides'
+// last_read_at — ChatPanel uses this to color its double-ticks blue.
+// Pass markRead: false for a status-only check that doesn't bump your own
+// read time.
+export async function chatReadReceipt({ threadId, markRead = true }) {
+  return post("/api/chat/read-receipt", { accessToken: await accessToken(), threadId, markRead });
+}
