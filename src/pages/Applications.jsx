@@ -1417,7 +1417,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       value={r.slot_time}
                       disabled={!r.services?.slot_booking_required}
                       onSave={(v) => updateRowField(r.id, "slot_time", v || null)}
-                      placeholder="e.g. 15-07 11AM"
+                      placeholder="DD-MM-YYYY"
                     />
                   </td>
                 )}
