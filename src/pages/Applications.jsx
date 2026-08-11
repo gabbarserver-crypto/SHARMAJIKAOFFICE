@@ -371,11 +371,47 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const load = useCallback(async () => {
     setLoading(true);
+    // The service embed needs !inner (forcing an inner join) only when we're
+    // filtering on one of its own columns (pcc_required) — using !inner
+    // unconditionally would silently drop any application whose service_id
+    // is somehow null.
+    const servicesEmbed = filterService === "__PCC_REQUIRED__"
+      ? "services!inner(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age)"
+      : "services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age)";
     let query = supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name)")
+      .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name)`)
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
+    // Dealer / RTO / Agency / Service filters used to run client-side after
+    // fetching the entire table (all ~15k rows every time, joins and all) —
+    // pushed into the query itself so only the rows that actually match
+    // come over the network.
+    if (filterDealer) query = query.eq("dealer_id", filterDealer);
+    if (filterRto) query = query.eq("rto_id", filterRto);
+    if (filterAgency) query = query.eq("agency_id", filterAgency);
+    if (filterService === "__PCC_REQUIRED__") {
+      query = query.eq("services.pcc_required", true);
+    } else if (filterService) {
+      query = query.eq("service_id", filterService);
+    }
+    // Date filtering: an explicit From/To range overrides the current-year
+    // default, exactly as it did client-side before — just evaluated by
+    // Postgres now instead of being fetched in full and thrown away in the
+    // browser. The current-year default mirrors the old logic: prefer
+    // application_date, fall back to submitted_at when application_date is
+    // unset.
+    if (filterDateFrom || filterDateTo) {
+      if (filterDateFrom) query = query.gte("submitted_at", `${filterDateFrom}T00:00:00`);
+      if (filterDateTo) query = query.lte("submitted_at", `${filterDateTo}T23:59:59`);
+    } else if (!showAllYears) {
+      const currentYear = new Date().getFullYear();
+      const yFrom = `${currentYear}-01-01`;
+      const yTo = `${currentYear}-12-31`;
+      query = query.or(
+        `and(application_date.gte.${yFrom},application_date.lte.${yTo}),and(application_date.is.null,submitted_at.gte.${yFrom}T00:00:00,submitted_at.lte.${yTo}T23:59:59)`
+      );
+    }
     const { data, error } = await query;
     if (error) {
       setToast("Couldn't load applications: " + error.message);
@@ -426,7 +462,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     } catch {
       setChatStatus({});
     }
-  }, [tab]);
+  }, [tab, filterDealer, filterRto, filterAgency, filterService, filterDateFrom, filterDateTo, showAllYears]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -873,29 +909,12 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
 
   const currentYear = new Date().getFullYear();
+  // Dealer/RTO/Agency/Service and date-range filtering now happen in the
+  // query itself (see load()) so a 15k-row table isn't fetched in full on
+  // every load — this only handles chatOnly and free-text search, which
+  // still run over whatever the query already narrowed down.
   const filteredRows = rows.filter((r) => {
     if (chatOnly && !chatStatus[r.id]) return false;
-    if (filterDealer && r.dealer_id !== filterDealer) return false;
-    if (filterRto && r.rto_id !== filterRto) return false;
-    if (filterAgency && r.agency_id !== filterAgency) return false;
-    if (filterService === "__PCC_REQUIRED__") {
-      if (!r.services?.pcc_required) return false;
-    } else if (filterService && r.service_id !== filterService) {
-      return false;
-    }
-    // Current-year-only is the default once the data set is large — an
-    // explicit date range (below) is a more specific ask, so it takes over
-    // instead of stacking with the year default. This matches the visible
-    // "Date" column, which is application_date — not slot_time (a separate,
-    // free-text appointment field) and not submission time.
-    if (!showAllYears && !filterDateFrom && !filterDateTo) {
-      const y = r.application_date
-        ? Number(r.application_date.slice(0, 4))
-        : (r.submitted_at ? Number(r.submitted_at.slice(0, 4)) : null);
-      if (y !== currentYear) return false;
-    }
-    if (filterDateFrom && (!r.submitted_at || r.submitted_at.slice(0, 10) < filterDateFrom)) return false;
-    if (filterDateTo && (!r.submitted_at || r.submitted_at.slice(0, 10) > filterDateTo)) return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       const haystack = [
