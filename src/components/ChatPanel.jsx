@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
+import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
-import { sendPush } from "../lib/serverApi";
+import { sendPush, chatReadReceipt } from "../lib/serverApi";
 import { useCall } from "../lib/call";
 import CallTimer from "./CallTimer";
 
@@ -49,9 +49,16 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   const [showEmoji, setShowEmoji] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [error, setError] = useState("");
+  // { staff: isoString|null, dealer: isoString|null } — last time each
+  // side read this thread. Drives the double-tick (sent) vs blue-tick
+  // (read) color on our own messages. dealer_staff logins fold into the
+  // "dealer" side, same as everywhere else in this app.
+  const [readStatus, setReadStatus] = useState({ staff: null, dealer: null });
   const bodyRef = useRef(null);
   const fileInputRef = useRef(null);
   const call = useCall({ threadId, identity });
+  const mySide = identity?.type === "staff" ? "staff" : identity?.type ? "dealer" : null;
+  const otherSide = mySide === "staff" ? "dealer" : mySide === "dealer" ? "staff" : null;
 
   // Whoever ISN'T the sender should hear about this, even if their app is
   // closed. Staff messaging a dealer targets that dealer's own login (the
@@ -102,6 +109,29 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [messages]);
+
+  // Marks this thread read on open, and re-polls every few seconds while
+  // the panel stays open — this is what makes the OTHER side's tick flip
+  // grey→blue without needing a Realtime subscription on a second table.
+  // Cheap: it's one small request, only while a thread is actually open.
+  useEffect(() => {
+    if (!threadId || !identity) return;
+    let cancelled = false;
+    const markAndRefresh = async () => {
+      try {
+        const status = await chatReadReceipt({ threadId, markRead: true });
+        if (!cancelled) setReadStatus(status);
+      } catch {
+        // Non-fatal — ticks just won't update this cycle, no user-facing error needed.
+      }
+    };
+    markAndRefresh();
+    const interval = setInterval(markAndRefresh, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [threadId, identity]);
 
   const send = async (body) => {
     const text = (body ?? draft).trim();
@@ -286,6 +316,11 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
         ) : (
           messages.map((m) => {
             const mine = identity && m.sender_type === identity.type && m.sender_id === identity.id;
+            // Read = the OTHER side's last_read_at is at/after this
+            // message's created_at. Falls back to grey (sent, not yet
+            // read) whenever we don't have a read timestamp for them yet.
+            const otherReadAt = otherSide && readStatus[otherSide];
+            const isRead = mine && otherReadAt && new Date(otherReadAt).getTime() >= new Date(m.created_at).getTime();
             return (
               <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
                 <div
@@ -322,6 +357,11 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                     </a>
                   )}
                   {m.body && <p>{m.body}</p>}
+                  {mine && (
+                    <div className="flex justify-end mt-0.5" title={isRead ? "Read" : "Sent"}>
+                      <CheckCheck size={14} className={isRead ? "text-sky-300" : "opacity-50"} />
+                    </div>
+                  )}
                 </div>
               </div>
             );

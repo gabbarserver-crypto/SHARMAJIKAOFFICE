@@ -27,6 +27,23 @@ import { identityFor, countOpenThreads } from "./lib/chat";
 import PinUnlock from "./pages/PinUnlock";
 import SetupPinPrompt from "./components/SetupPinPrompt";
 import { hasPinSetUp, hasBeenPromptedForPin } from "./lib/pinLock";
+import PrivacyPolicy from "./pages/legal/PrivacyPolicy";
+import TermsAndConditions from "./pages/legal/TermsAndConditions";
+import RefundPolicy from "./pages/legal/RefundPolicy";
+import ContactUs from "./pages/legal/ContactUs";
+
+// Public, unauthenticated routes — reachable with no login and no session,
+// on purpose. This is what payment-gateway KYC verification (Cashfree etc.)
+// crawls for: a homepage + footer with these policies not gated behind
+// login. Checked first, before any Supabase/auth logic below, so a signed-
+// out crawler visiting e.g. /privacy-policy never even sees the Login
+// screen.
+const LEGAL_ROUTES = {
+  "/privacy-policy": PrivacyPolicy,
+  "/terms-and-conditions": TermsAndConditions,
+  "/refund-policy": RefundPolicy,
+  "/contact-us": ContactUs,
+};
 
 // Thin wrappers so "Dealer" and "Agency" can be their own sidebar entries
 // (each scoped to just that one head + its transaction ledger) while still
@@ -375,6 +392,11 @@ export default function App() {
     else unregisterForPush();
   }, [myIdentity?.type, myIdentity?.id]);
 
+
+  const LegalPage = LEGAL_ROUTES[window.location.pathname.replace(/\/$/, "")];
+  if (LegalPage) {
+    return <LegalPage />;
+  }
 
   if (passwordRecovery) {
     return <ResetPassword onDone={() => { setPasswordRecovery(false); supabase.auth.signOut(); }} />;
