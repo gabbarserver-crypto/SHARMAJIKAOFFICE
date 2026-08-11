@@ -851,10 +851,15 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
     }
 
     // Safety net: older drafts (created before this feature, or hit a
-    // transient error) may have zero document rows even though their
-    // service does require some. Backfill them here instead of just
-    // telling the dealer "none required".
-    if ((!data || data.length === 0) && application.service_id) {
+    // transient error) may be missing document rows even though their
+    // service does require some. This also covers the case where the
+    // service's required documents changed *after* this application was
+    // created — application_documents is a one-time snapshot taken at
+    // creation, so any doc type added to the service later never gets
+    // added to already-existing applications on its own. Diff against
+    // the current required docs (not just "zero rows total") and backfill
+    // whatever's missing, instead of just telling the dealer "none required".
+    if (application.service_id) {
       const { data: reqDocs, error: reqDocsError } = await supabase
         .from("service_documents")
         .select("name, mandatory, post_approval")
@@ -868,9 +873,11 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
         setLoading(false);
         return;
       }
-      if (reqDocs?.length) {
+      const existingNames = new Set((data || []).map((d) => d.name));
+      const missing = (reqDocs || []).filter((d) => !existingNames.has(d.name));
+      if (missing.length) {
         const { error: backfillInsertError } = await supabase.from("application_documents").upsert(
-          reqDocs.map((d) => ({ application_id: application.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
+          missing.map((d) => ({ application_id: application.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
           { onConflict: "application_id,name", ignoreDuplicates: true }
         );
         if (backfillInsertError) {

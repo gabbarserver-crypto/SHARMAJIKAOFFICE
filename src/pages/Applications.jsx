@@ -9,7 +9,7 @@ import { parseCSV, findByLabel } from "../lib/csv";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2 } from "lucide-react";
+import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2, Link as LinkIcon } from "lucide-react";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import PCCLetterModal from "../components/PCCLetterModal";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
@@ -79,7 +79,7 @@ function ddmmyyyyToISO(input) {
   return trimmed; // leave as-is, let DB flag invalid dates
 }
 
-function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false }) {
+function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false, noSpinner = false }) {
   const canEdit = useContext(CanEditContext);
   const locked = disabled || !canEdit;
   const [val, setVal] = useState(value ?? "");
@@ -93,7 +93,7 @@ function EditableCell({ value, onSave, type = "text", width = "w-24", placeholde
       title={!canEdit && !disabled ? "You don't have edit access for this section" : undefined}
       onChange={(e) => setVal(e.target.value)}
       onBlur={() => { if (String(val) !== String(value ?? "")) onSave(val); }}
-      className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
+      className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${noSpinner ? "no-spinner" : ""} ${
         locked
           ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 placeholder:text-slate-300 dark:placeholder:text-slate-600 cursor-not-allowed"
           : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100"
@@ -455,7 +455,33 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name)")
       .eq("id", row.id)
       .maybeSingle();
-    const { data: docs } = await supabase.from("application_documents").select("*").eq("application_id", row.id);
+    let docs = (await supabase.from("application_documents").select("*").eq("application_id", row.id)).data || [];
+    // Safety net: a service's required documents can change after an
+    // application was created (e.g. a new "only after approval" doc gets
+    // added to the service later). application_documents is a one-time
+    // snapshot taken at creation, so older applications silently miss any
+    // doc type added afterwards — they don't even show as "Missing", the
+    // row just doesn't exist. Diff against the service's current required
+    // docs and backfill anything absent, rather than only handling the
+    // zero-docs case.
+    const serviceId = row.service_id || freshRow?.service_id;
+    if (serviceId) {
+      const { data: reqDocs } = await supabase
+        .from("service_documents")
+        .select("name, mandatory, post_approval")
+        .eq("service_id", serviceId);
+      const existingNames = new Set(docs.map((d) => d.name));
+      const missing = (reqDocs || []).filter((d) => !existingNames.has(d.name));
+      if (missing.length) {
+        const { error: backfillError } = await supabase.from("application_documents").upsert(
+          missing.map((d) => ({ application_id: row.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
+          { onConflict: "application_id,name", ignoreDuplicates: true }
+        );
+        if (!backfillError) {
+          docs = (await supabase.from("application_documents").select("*").eq("application_id", row.id)).data || [];
+        }
+      }
+    }
     const { data: history } = await supabase
       .from("application_status_history")
       .select("*")
@@ -1218,11 +1244,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.amount && (
                   <td className="px-3 py-2">
-                    <EditableCell type="number" width="w-20" value={r.amount} onSave={(v) => updateRowField(r.id, "amount", v === "" ? null : parseFloat(v))} />
+                    <EditableCell type="number" width="w-14" noSpinner value={r.amount} onSave={(v) => updateRowField(r.id, "amount", v === "" ? null : parseFloat(v))} />
                   </td>
                 )}
                 {visibleCols.dealer && (
-                  <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                  <td className={`px-3 py-2 whitespace-nowrap ${dealerHold[r.dealer_id] ? "text-rose-600 font-bold" : "text-slate-600 dark:text-slate-300"}`}>
                     {r.status === "Draft Submitted" ? (
                       <EditableSelect
                         width="w-36"
@@ -1271,7 +1297,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   <td className="px-3 py-2">
                     <EditableCell
                       type="number"
-                      width="w-20"
+                      width="w-14"
+                      noSpinner
                       value={r.rto_fee}
                       onSave={(v) => updateRowField(r.id, "rto_fee", v === "" ? null : parseFloat(v))}
                     />
@@ -1313,9 +1340,9 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       <button
                         onClick={() => openSarathi(r)}
                         title="Open on Sarathi Parivahan and copy DOB"
-                        className="text-blue-600 text-xs font-semibold underline shrink-0"
+                        className="text-blue-600 shrink-0"
                       >
-                        Link
+                        <LinkIcon size={14} />
                       </button>
                     </div>
                   </td>

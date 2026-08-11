@@ -1,5 +1,6 @@
 // src/components/UI.jsx
 import React from "react";
+import { Pause, CheckCircle2, FileX, FileText, FileQuestion } from "lucide-react";
 
 export const colors = {
   navy: "#0f1b3d",
@@ -39,9 +40,22 @@ export const STATUS_DISPLAY_LABELS = {
   Accepted: "Approved",
 };
 
+// Icon shown before the label in each status badge. On Hold gets a pause
+// icon, Under Review a refresh/in-process icon, Accepted (shown as
+// "Approved") a checkmark, Rejected a cross, Draft Submitted a pencil.
+const STATUS_ICONS = {
+  "Draft Submitted": FileText,
+  "Under Review": FileQuestion,
+  "On Hold": Pause,
+  Rejected: FileX,
+  Accepted: CheckCircle2,
+};
+
 export function StatusBadge({ status }) {
+  const Icon = STATUS_ICONS[status];
   return (
-    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${STATUS_STYLES[status] || "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"}`}>
+    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${STATUS_STYLES[status] || "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"}`}>
+      {Icon && <Icon size={12} />}
       {STATUS_DISPLAY_LABELS[status] || status}
     </span>
   );
