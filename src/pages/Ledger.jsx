@@ -98,16 +98,22 @@ export default function Ledger({ only, initialEntityId } = {}) {
   const [appDetail, setAppDetail] = useState(null); // application row shown in the description-click modal
   const [appDetailLoading, setAppDetailLoading] = useState(false);
   const [appDetailError, setAppDetailError] = useState("");
+  const [appDetailTxn, setAppDetailTxn] = useState(null); // the ledger_transactions/agency_ledger_transactions row that was clicked
+  const [editAmount, setEditAmount] = useState(""); // draft value while editing the Amount field in the modal
+  const [savingAmount, setSavingAmount] = useState(false);
+  const [amountSaveError, setAmountSaveError] = useState("");
 
   // Description cells that carry an "App No: ..." are clickable — this
   // looks the application up by that number and opens it in a modal so
   // staff don't have to leave the ledger to see what a line item was for.
-  const openAppDetail = useCallback(async (description) => {
-    const appNo = extractAppNo(description);
+  const openAppDetail = useCallback(async (txn) => {
+    const appNo = extractAppNo(txn.description);
     if (!appNo) return;
     setAppDetailLoading(true);
     setAppDetailError("");
+    setAmountSaveError("");
     setAppDetail(null);
+    setAppDetailTxn(txn);
     const { data, error } = await supabase
       .from("applications")
       .select("*, dealers(name,code,short_name), services(parent_service,short_name), staff:assigned_staff_id(full_name)")
@@ -119,7 +125,39 @@ export default function Ledger({ only, initialEntityId } = {}) {
       return;
     }
     setAppDetail(data);
+    setEditAmount(String(txn.amount ?? data.amount ?? ""));
   }, []);
+
+  // Saves the edited Amount into both the ledger transaction that was
+  // clicked (so the ledger table + running balance reflect it immediately)
+  // and the linked application's own amount field, so the two stay in
+  // sync. Only Amount is editable here — every other field in the modal is
+  // read-only, on purpose.
+  const saveAmount = useCallback(async () => {
+    if (!appDetailTxn || !appDetail) return;
+    const newAmount = Number(editAmount);
+    if (!Number.isFinite(newAmount) || newAmount < 0) {
+      setAmountSaveError("Enter a valid amount");
+      return;
+    }
+    setSavingAmount(true);
+    setAmountSaveError("");
+    const ledgerTable = entityMode === "dealer" ? "ledger_transactions" : "agency_ledger_transactions";
+    const [{ error: ledgerErr }, { error: appErr }] = await Promise.all([
+      supabase.from(ledgerTable).update({ amount: newAmount }).eq("id", appDetailTxn.id),
+      supabase.from("applications").update({ amount: newAmount }).eq("id", appDetail.id),
+    ]);
+    setSavingAmount(false);
+    if (ledgerErr || appErr) {
+      setAmountSaveError((ledgerErr || appErr).message);
+      return;
+    }
+    // Reflect the new amount locally so the ledger table + running balance
+    // recompute without a full refetch.
+    setTxns((prev) => prev.map((t) => (t.id === appDetailTxn.id ? { ...t, amount: newAmount } : t)));
+    setAppDetailTxn((t) => ({ ...t, amount: newAmount }));
+    setAppDetail((a) => ({ ...a, amount: newAmount }));
+  }, [appDetailTxn, appDetail, editAmount, entityMode]);
 
   // Running balance is a property of *when* a transaction happened, not of
   // whatever order it's currently displayed in — so it's always computed by
@@ -393,7 +431,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
                       {extractAppNo(t.description) ? (
                         <button
                           type="button"
-                          onClick={() => openAppDetail(t.description)}
+                          onClick={() => openAppDetail(t)}
                           className="text-left hover:underline decoration-dotted text-blue-600 dark:text-blue-400"
                           title="View application details"
                         >
@@ -423,7 +461,10 @@ export default function Ledger({ only, initialEntityId } = {}) {
         </div>
       )}
       {(appDetailLoading || appDetail || appDetailError) && (
-        <Modal title="Application Details" onClose={() => { setAppDetail(null); setAppDetailError(""); }}>
+        <Modal
+          title="Application Details"
+          onClose={() => { setAppDetail(null); setAppDetailError(""); setAppDetailTxn(null); setAmountSaveError(""); }}
+        >
           {appDetailLoading && <p className="text-sm text-slate-500 dark:text-slate-400">Loading…</p>}
           {appDetailError && <p className="text-sm text-rose-600">{appDetailError}</p>}
           {appDetail && (
@@ -434,7 +475,23 @@ export default function Ledger({ only, initialEntityId } = {}) {
               <Row label="Service" value={appDetail.services?.short_name || appDetail.services?.parent_service} />
               <Row label="Dealer" value={appDetail.dealers?.name} />
               <Row label="Assigned Staff" value={appDetail.staff?.full_name} />
-              <Row label="Amount" value={appDetail.amount != null ? `₹${Number(appDetail.amount).toLocaleString("en-IN")}` : null} />
+              <div className="flex justify-between items-center gap-4 border-b border-slate-100 dark:border-slate-800 pb-2">
+                <span className="text-slate-400 dark:text-slate-500">Amount</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    className="w-32 text-right rounded-lg border border-slate-300 dark:border-slate-700 px-2 py-1 text-sm text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)] focus:border-[var(--accent)]"
+                  />
+                  <PrimaryButton onClick={saveAmount} disabled={savingAmount || Number(editAmount) === Number(appDetail.amount)}>
+                    {savingAmount ? "Saving…" : "Save"}
+                  </PrimaryButton>
+                </div>
+              </div>
+              {amountSaveError && <p className="text-rose-600 text-xs -mt-1">{amountSaveError}</p>}
               <Row label="Submitted" value={appDetail.submitted_at ? new Date(appDetail.submitted_at).toLocaleDateString() : null} />
             </div>
           )}
