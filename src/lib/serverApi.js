@@ -2,14 +2,36 @@
 // Talks to the login-creation endpoints — deployed as Vercel Serverless
 // Functions under /api (see /api/admin/create-dealer-login.js and
 // /api/create-dealer-staff-login.js at the project root), which run
-// alongside the frontend on the same Vercel deployment. Defaulting to ""
-// means it hits the same origin the app is served from — no separate
-// server, no env var, no CORS to configure. VITE_SERVER_API_BASE is still
-// supported as an override if you ever want to point this at a different
-// backend instead.
+// alongside the frontend on the same Vercel deployment.
+//
+// Defaulting to "" (same-origin) is correct on the web/PWA, where the page
+// really is served from the Vercel domain. It is NOT correct inside the
+// Capacitor Android app: that WebView's origin is Capacitor's own local
+// sandbox (https://localhost), which has no real server behind it — any
+// relative "/api/..." fetch there gets silently intercepted by Capacitor
+// (shouldInterceptRequest) and handed back the app's own index.html
+// (200 OK, Content-Type: text/html) instead of ever reaching Vercel. The
+// caller then gets `{}` back with no thrown error, so every field (token,
+// appId, uid, etc.) is undefined — which is what was crashing the Agora
+// SDK's client.join()/setAppId() deep inside a .replace() call with an
+// opaque "Cannot read properties of undefined" TypeError, on every single
+// call attempt from the APK, while the web/PWA build worked fine.
+//
+// window.Capacitor is only present inside the native wrapper, never in a
+// normal browser tab, so it's a reliable way to tell the two apart without
+// needing a separate env var per platform.
 import { supabase } from "./supabase";
 
-export const SERVER_API_BASE = import.meta.env.VITE_SERVER_API_BASE || "";
+const REAL_BACKEND_ORIGIN = "https://sharmajikaoffice.vercel.app";
+
+function resolveServerApiBase() {
+  const configured = import.meta.env.VITE_SERVER_API_BASE;
+  if (configured) return configured;
+  const isNativeApp = typeof window !== "undefined" && !!window.Capacitor;
+  return isNativeApp ? REAL_BACKEND_ORIGIN : "";
+}
+
+export const SERVER_API_BASE = resolveServerApiBase();
 
 async function accessToken() {
   const { data } = await supabase.auth.getSession();

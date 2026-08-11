@@ -23,6 +23,17 @@
 // LOAD TIME (before this handler even runs), which crashed every single
 // request here with FUNCTION_INVOCATION_FAILED. Importing the default
 // export and destructuring from it avoids that.
+//
+// CORS: the Android app (Capacitor) loads its bundled JS from the WebView's
+// own local sandbox origin (https://localhost), NOT from this domain — so
+// every request it makes here is a genuine cross-origin request from the
+// browser's point of view, unlike the web/PWA build where the page and
+// this API share the same origin. Without explicit CORS headers, the
+// browser fetch() call inside the app fails with an opaque
+// "TypeError: Failed to fetch" before the response body is ever readable,
+// even though this function ran successfully server-side. The headers
+// below, plus responding to the preflight OPTIONS request, are what let
+// that cross-origin call through.
 import agoraToken from "agora-token";
 import { resolveCaller } from "./_lib/adminAuth.js";
 
@@ -32,7 +43,24 @@ const AGORA_APP_ID = (process.env.AGORA_APP_ID || "").trim();
 const AGORA_APP_CERTIFICATE = (process.env.AGORA_APP_CERTIFICATE || "").trim();
 const TOKEN_TTL_SECONDS = 3600; // 1 hour — plenty for any single call
 
+function setCorsHeaders(res) {
+  // "*" is fine here — this endpoint requires a valid Supabase accessToken
+  // in the body to do anything, so an open CORS policy doesn't itself
+  // expose anything; auth is enforced by resolveCaller() below, not by
+  // origin-checking.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
 export default async function handler(req, res) {
+  setCorsHeaders(res);
+
+  // Preflight — the browser sends this automatically before the real POST
+  // on a cross-origin request; it just needs a 2xx response with the CORS
+  // headers above, no body required.
+  if (req.method === "OPTIONS") return res.status(204).end();
+
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
     return res.status(500).json({ error: "Server isn't configured with AGORA_APP_ID / AGORA_APP_CERTIFICATE" });

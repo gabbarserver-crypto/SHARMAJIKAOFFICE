@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.webkit.PermissionRequest;
+import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
@@ -24,6 +25,16 @@ public class MainActivity extends BridgeActivity {
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+
+    // Capacitor only turns on WebView debugging (chrome://inspect) when
+    // BuildConfig.DEBUG is true, i.e. only for debug builds — a release
+    // APK's WebView is otherwise completely uninspectable, with no error
+    // or indication why, just an empty device tab list. Forcing this on
+    // unconditionally means chrome://inspect always works for diagnosing
+    // field issues, on any build type. Harmless in production: it only
+    // allows inspection from a device already trusted via USB debugging
+    // authorization, same as any other Android app.
+    WebView.setWebContentsDebuggingEnabled(true);
 
     // Only prompt if not already granted — otherwise this pops the OS
     // permission dialog on every single app launch, even for a user who
