@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
+import { StatusBar, Style } from "@capacitor/status-bar";
 import { supabase } from "./lib/supabase";
 import Sidebar from "./components/Sidebar";
 import BottomTabBar, { BOTTOM_TAB_KEYS } from "./components/BottomTabBar";
@@ -329,6 +330,18 @@ export default function App() {
     return () => listener.subscription.unsubscribe();
   }, [verifySession]);
 
+  // Give the status bar its own space instead of letting the WebView draw
+  // full-bleed behind it — otherwise on edge-to-edge Android (targetSdk 35+,
+  // Android 15+) the OS clock/wifi/battery icons overlap whatever is at the
+  // top of the page (e.g. the "Dashboard" title, the sidebar's hamburger
+  // button). setOverlaysWebView(false) reserves that strip natively so
+  // nothing renders under it, regardless of which screen is showing.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+    StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
+  }, []);
+
   // Catches Google sign-in's redirect back into the app (see
   // submitWithGoogle in Login.jsx, which opens the Google login as an
   // in-app Custom Tab rather than switching to Chrome). Once Google
@@ -451,7 +464,10 @@ export default function App() {
         badges={{ chats: pendingChatCount }}
         onLogout={() => supabase.auth.signOut()}
       />
-      <main className="flex-1 p-8 pb-24 md:pb-8 overflow-y-auto">
+      <main
+        className="flex-1 p-8 pb-24 md:pb-8 overflow-y-auto"
+        style={{ paddingTop: "calc(2rem + env(safe-area-inset-top, 0px))" }}
+      >
         <Active
           staff={staff}
           canEdit={canEditActive}
