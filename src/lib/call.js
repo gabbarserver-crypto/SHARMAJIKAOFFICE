@@ -20,14 +20,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient, createMicrophoneAudioTrack, createCameraVideoTrack } from "agora-rtc-sdk-ng/esm";
 import { supabase } from "./supabase";
-import { fetchAgoraToken } from "./serverApi";
+import { fetchAgoraToken, sendPush } from "./serverApi";
 import { notify, startRingtone, stopRingtone } from "./notify";
 import { logCallStart, logCallOutcome } from "./callLog";
 import { friendlyCallError } from "./callErrors";
 
 const RING_TIMEOUT_MS = 30000;
 
-export function useCall({ threadId, identity }) {
+export function useCall({ threadId, dealerId, identity }) {
   // 'idle' | 'ringing-outgoing' | 'ringing-incoming' | 'connecting' | 'in-call'
   const [status, setStatus] = useState("idle");
   const [callType, setCallType] = useState("audio"); // 'audio' | 'video'
@@ -47,6 +47,8 @@ export function useCall({ threadId, identity }) {
   // constantly.
   const identityRef = useRef(identity);
   useEffect(() => { identityRef.current = identity; }, [identity]);
+  const dealerIdRef = useRef(dealerId);
+  useEffect(() => { dealerIdRef.current = dealerId; }, [dealerId]);
 
   const clientRef = useRef(null);
   const localAudioRef = useRef(null);
@@ -249,6 +251,19 @@ export function useCall({ threadId, identity }) {
       logIdRef.current = id;
     });
     send("ring", { callType: type });
+    // Realtime broadcast above only reaches a device that already has this
+    // thread's channel open (app running/foregrounded). A real FCM push is
+    // what actually rings a closed/backgrounded app — same staff<->dealer
+    // targeting ChatPanel's pushForMessage uses, since a thread has exactly
+    // two sides.
+    const caller = identityRef.current;
+    const callTitle = `${caller.name || "Someone"} is calling`;
+    const callBody = `Incoming ${type === "video" ? "video" : "voice"} call`;
+    if (caller.type === "staff") {
+      sendPush({ targetType: "dealer", targetId: dealerIdRef.current, title: callTitle, body: callBody, data: { kind: "call", threadId } });
+    } else {
+      sendPush({ targetType: "all_staff", title: callTitle, body: callBody, data: { kind: "call", threadId } });
+    }
   }, [threadId, status, send]);
 
   const acceptCall = useCallback(() => {

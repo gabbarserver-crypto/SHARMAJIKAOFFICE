@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck, Reply, X } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
 import { sendPush, chatReadReceipt } from "../lib/serverApi";
 import { useCall } from "../lib/call";
@@ -35,6 +35,16 @@ function attachmentFileName(url) {
   }
 }
 
+// 12-hour clock time for the "Seen by ... at <time>" line — matches the
+// kind of timestamp WhatsApp shows, not a full date (this is always
+// "today-ish" info glanced at right after sending).
+function formatSeenTime(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
 // Renders the message list + composer for one thread (general dealer thread,
 // or one scoped to a single application). Owns thread resolution, initial
 // load, and the realtime subscription; the caller just tells it who's
@@ -54,11 +64,30 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   // (read) color on our own messages. dealer_staff logins fold into the
   // "dealer" side, same as everywhere else in this app.
   const [readStatus, setReadStatus] = useState({ staff: null, dealer: null });
+  // Per-person read rows for this thread — [{ type, id, name, lastReadAt }] —
+  // what powers the named "Seen by ..." line under our own messages, as
+  // opposed to readStatus above which only drives the tick's grey/blue colour.
+  const [readers, setReaders] = useState([]);
+  // The message the composer is currently drafting a reply to, or null.
+  // Cleared once that reply actually sends (or the user backs out of it).
+  const [replyingTo, setReplyingTo] = useState(null);
   const bodyRef = useRef(null);
   const fileInputRef = useRef(null);
-  const call = useCall({ threadId, identity });
+  const composerInputRef = useRef(null);
+  // id -> message, so a bubble whose reply_to_id points at something already
+  // loaded in this thread can render a quoted preview of it inline.
+  const messagesById = useMemo(() => {
+    const map = {};
+    for (const m of messages) map[m.id] = m;
+    return map;
+  }, [messages]);
+  const call = useCall({ threadId, dealerId, identity });
   const mySide = identity?.type === "staff" ? "staff" : identity?.type ? "dealer" : null;
   const otherSide = mySide === "staff" ? "dealer" : mySide === "dealer" ? "staff" : null;
+  // reader_type values that belong to "the other side" — a dealer's own
+  // sub-staff logins are a separate reader_type ('dealer_staff') from
+  // 'dealer' but still the same side for this purpose.
+  const otherReaderTypes = mySide === "staff" ? ["dealer", "dealer_staff"] : mySide === "dealer" ? ["staff"] : [];
 
   // Whoever ISN'T the sender should hear about this, even if their app is
   // closed. Staff messaging a dealer targets that dealer's own login (the
@@ -82,6 +111,8 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
       if (!dealerId) return;
       setLoading(true);
       setError("");
+      setReplyingTo(null); // a reply target from the previous thread can't carry over
+      setReaders([]);
       try {
         const thread = await getOrCreateThread({ dealerId, applicationId });
         if (cancelled) return;
@@ -120,7 +151,10 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
     const markAndRefresh = async () => {
       try {
         const status = await chatReadReceipt({ threadId, markRead: true });
-        if (!cancelled) setReadStatus(status);
+        if (!cancelled) {
+          setReadStatus(status);
+          setReaders(status.readers || []);
+        }
       } catch {
         // Non-fatal — ticks just won't update this cycle, no user-facing error needed.
       }
@@ -136,10 +170,12 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   const send = async (body) => {
     const text = (body ?? draft).trim();
     if (!text || !threadId || !identity) return;
+    const replyToId = replyingTo?.id || null;
     setDraft("");
     setShowEmoji(false);
+    setReplyingTo(null);
     try {
-      await sendMessage({ threadId, sender: { ...identity, body: text } });
+      await sendMessage({ threadId, sender: { ...identity, body: text, replyToId } });
       pushForMessage(text.length > 120 ? text.slice(0, 117) + "…" : text);
       // No optimistic push needed — the realtime subscription (including our
       // own insert) will bring it back in, keeping a single source of truth.
@@ -148,13 +184,36 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
     }
   };
 
+  // Puts the composer into "replying to this message" mode — swipe/tap-to-
+  // reply, WhatsApp-style. The quote travels with whatever's sent next
+  // (text, attachment, or location) and clears itself once that happens.
+  const startReply = (message) => {
+    setReplyingTo(message);
+    composerInputRef.current?.focus();
+  };
+  const cancelReply = () => setReplyingTo(null);
+
+  // Short single-line preview of a message, for the quoted-reply banner and
+  // the in-bubble quote — never the full body, just enough to place it.
+  const previewFor = (message) => {
+    if (!message) return "";
+    if (message.body) return message.body.length > 80 ? message.body.slice(0, 77) + "…" : message.body;
+    const kind = attachmentKind(message.attachment_url);
+    if (kind === "image") return "📷 Photo";
+    if (kind === "location") return "📍 Location";
+    if (kind === "file") return `📎 ${attachmentFileName(message.attachment_url)}`;
+    return "Message";
+  };
+
   const sendAttachment = async (file) => {
     if (!file || !threadId || !identity) return;
+    const replyToId = replyingTo?.id || null;
     setUploading(true);
     setError("");
+    setReplyingTo(null);
     try {
       const url = await uploadChatAttachment(threadId, file);
-      await sendMessage({ threadId, sender: { ...identity, attachmentUrl: url } });
+      await sendMessage({ threadId, sender: { ...identity, attachmentUrl: url, replyToId } });
       pushForMessage(file.type?.startsWith("image/") ? "📎 Sent an image" : `📎 Sent a file: ${file.name}`);
     } catch (e) {
       setError(e.message || "Couldn't send attachment");
@@ -321,14 +380,41 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
             // read) whenever we don't have a read timestamp for them yet.
             const otherReadAt = otherSide && readStatus[otherSide];
             const isRead = mine && otherReadAt && new Date(otherReadAt).getTime() >= new Date(m.created_at).getTime();
+            const quoted = m.reply_to_id ? messagesById[m.reply_to_id] : null;
+            const seenBy = mine
+              ? readers.filter(
+                  (r) => otherReaderTypes.includes(r.type) && new Date(r.lastReadAt).getTime() >= new Date(m.created_at).getTime()
+                )
+              : [];
             return (
-              <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+              <div key={m.id} className={`group flex items-center gap-1 ${mine ? "justify-end" : "justify-start"}`}>
+                {mine && (
+                  <button
+                    onClick={() => startReply(m)}
+                    title="Reply"
+                    className="w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-slate-400 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 hover:text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700 transition-opacity"
+                  >
+                    <Reply size={13} />
+                  </button>
+                )}
                 <div
                   className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
                     mine ? SENDER_BUBBLE[m.sender_type] + " rounded-br-sm" : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-bl-sm"
                   }`}
                 >
                   {!mine && <p className="text-[11px] font-semibold opacity-60 mb-0.5">{m.sender_name}</p>}
+                  {m.reply_to_id && (
+                    <div
+                      className={`mb-1.5 pl-2 border-l-2 rounded-r-md py-1 pr-2 text-xs ${
+                        mine ? "border-white/40 bg-white/10" : "border-blue-400 bg-slate-100 dark:bg-slate-700/60"
+                      }`}
+                    >
+                      <p className={`font-semibold ${mine ? "opacity-80" : "text-blue-600 dark:text-blue-400"}`}>
+                        {quoted ? quoted.sender_name : "Original message"}
+                      </p>
+                      <p className={`truncate ${mine ? "opacity-70" : "opacity-70"}`}>{quoted ? previewFor(quoted) : "Message unavailable"}</p>
+                    </div>
+                  )}
                   {m.attachment_url && attachmentKind(m.attachment_url) === "image" && (
                     <a href={m.attachment_url} target="_blank" rel="noreferrer" className="block mb-1">
                       <img src={m.attachment_url} alt="attachment" className="rounded-lg max-w-full max-h-48 object-cover" />
@@ -358,11 +444,30 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                   )}
                   {m.body && <p>{m.body}</p>}
                   {mine && (
-                    <div className="flex justify-end mt-0.5" title={isRead ? "Read" : "Sent"}>
-                      <CheckCheck size={14} className={isRead ? "text-sky-300" : "opacity-50"} />
+                    <div className="flex flex-col items-end mt-0.5 gap-0.5">
+                      <div title={isRead ? "Read" : "Sent"}>
+                        <CheckCheck size={14} className={isRead ? "text-sky-300" : "opacity-50"} />
+                      </div>
+                      {seenBy.length > 0 && (
+                        <p
+                          className="text-[10px] leading-tight opacity-70 text-right"
+                          title={seenBy.map((r) => `${r.name} — ${formatSeenTime(r.lastReadAt)}`).join("\n")}
+                        >
+                          Seen by {seenBy.map((r) => `${r.name}, ${formatSeenTime(r.lastReadAt)}`).join(" · ")}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
+                {!mine && (
+                  <button
+                    onClick={() => startReply(m)}
+                    title="Reply"
+                    className="w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-slate-400 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 hover:text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700 transition-opacity"
+                  >
+                    <Reply size={13} />
+                  </button>
+                )}
               </div>
             );
           })
@@ -380,6 +485,22 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
               {e}
             </button>
           ))}
+        </div>
+      )}
+
+      {replyingTo && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-t border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/70 shrink-0">
+          <div className="flex-1 min-w-0 pl-2 border-l-2 border-blue-500">
+            <p className="text-[11px] font-semibold text-blue-600 dark:text-blue-400">Replying to {replyingTo.sender_name}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{previewFor(replyingTo)}</p>
+          </div>
+          <button
+            onClick={cancelReply}
+            title="Cancel reply"
+            className="w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
 
@@ -439,10 +560,14 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
         </div>
 
         <input
+          ref={composerInputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Type your message…"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") send();
+            else if (e.key === "Escape" && replyingTo) cancelReply();
+          }}
+          placeholder={replyingTo ? "Type your reply…" : "Type your message…"}
           disabled={!identity}
           className="flex-1 text-sm rounded-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 px-3.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-100 dark:disabled:bg-slate-900"
         />

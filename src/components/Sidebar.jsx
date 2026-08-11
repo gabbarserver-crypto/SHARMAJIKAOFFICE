@@ -141,7 +141,8 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
       <button
         onClick={() => setMobileOpen(true)}
         aria-label="Open menu"
-        className="no-print md:hidden fixed top-3 left-3 z-40 w-10 h-10 rounded-xl bg-white dark:bg-slate-900 shadow-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-200"
+        className="no-print md:hidden fixed left-3 z-40 w-10 h-10 rounded-xl bg-white dark:bg-slate-900 shadow-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-200"
+        style={{ top: "calc(0.75rem + env(safe-area-inset-top, 0px))" }}
       >
         ☰
       </button>
@@ -161,7 +162,11 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
         mobileOpen ? "translate-x-0" : "-translate-x-[120%] md:translate-x-0",
         collapsed ? "w-20" : "w-64",
       ].join(" ")}
-      style={{ height: "calc(100vh - 1.5rem)", background: `linear-gradient(to bottom, ${from}, ${to})` }}
+      style={{
+        height: "calc(100vh - 1.5rem)",
+        marginTop: "calc(0.75rem + env(safe-area-inset-top, 0px))",
+        background: `linear-gradient(to bottom, ${from}, ${to})`,
+      }}
     >
       {/* Header */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b border-white/15">

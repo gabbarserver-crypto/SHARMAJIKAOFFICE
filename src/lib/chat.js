@@ -57,6 +57,7 @@ export async function sendMessage({ threadId, sender }) {
     sender_name: sender.name,
     body: sender.body || null,
     attachment_url: sender.attachmentUrl || null,
+    reply_to_id: sender.replyToId || null,
   });
   if (error) throw error;
 }

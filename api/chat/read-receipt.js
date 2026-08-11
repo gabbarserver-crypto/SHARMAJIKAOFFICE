@@ -11,10 +11,14 @@
 //   without bumping this caller's own last_read_at (not currently used by
 //   the client, but kept as an option rather than always writing).
 //
-// Response: { staff: isoString|null, dealer: isoString|null }
+// Response: { staff: isoString|null, dealer: isoString|null, readers: [...] }
 //   "dealer" covers both `dealer` and `dealer_staff` callers — same
 //   side-collapsing convention chat.js already uses for push targeting and
 //   unread counts (a dealer's own sub-staff logins all count as one side).
+//   readers is the finer-grained, per-person list this side-level pair
+//   collapses: [{ type, id, name, lastReadAt }, ...], one row per
+//   individual who has ever opened this thread — lets the UI show exactly
+//   who ("Seen by Rahul, 2:14 PM") rather than just which side.
 import { supabaseAdmin, resolveCaller } from "../_lib/adminAuth.js";
 
 function sideFor(caller) {
@@ -51,10 +55,20 @@ export default async function handler(req, res) {
     }
 
     if (markRead) {
+      const nowIso = new Date().toISOString();
       const { error: upsertErr } = await supabaseAdmin
         .from("chat_thread_reads")
-        .upsert({ thread_id: threadId, side, last_read_at: new Date().toISOString() }, { onConflict: "thread_id,side" });
+        .upsert({ thread_id: threadId, side, last_read_at: nowIso }, { onConflict: "thread_id,side" });
       if (upsertErr) return res.status(500).json({ error: upsertErr.message });
+
+      // Per-individual row too — same last_read_at, keyed finer so "Seen by
+      // <name>" can name the actual person, not just their side. Non-fatal:
+      // a failure here shouldn't break the (already-working) tick feature.
+      const { error: identityUpsertErr } = await supabaseAdmin.from("chat_thread_reads_by_identity").upsert(
+        { thread_id: threadId, reader_type: caller.kind, reader_id: caller.id, reader_name: caller.name, last_read_at: nowIso },
+        { onConflict: "thread_id,reader_type,reader_id" }
+      );
+      if (identityUpsertErr) console.error("chat_thread_reads_by_identity upsert failed:", identityUpsertErr.message);
     }
 
     const { data: rows, error: selectErr } = await supabaseAdmin
@@ -63,8 +77,20 @@ export default async function handler(req, res) {
       .eq("thread_id", threadId);
     if (selectErr) return res.status(500).json({ error: selectErr.message });
 
+    const { data: identityRows, error: identitySelectErr } = await supabaseAdmin
+      .from("chat_thread_reads_by_identity")
+      .select("reader_type, reader_id, reader_name, last_read_at")
+      .eq("thread_id", threadId);
+    if (identitySelectErr) console.error("chat_thread_reads_by_identity select failed:", identitySelectErr.message);
+
     const result = { staff: null, dealer: null };
     for (const row of rows || []) result[row.side] = row.last_read_at;
+    result.readers = (identityRows || []).map((r) => ({
+      type: r.reader_type,
+      id: r.reader_id,
+      name: r.reader_name || "Unknown",
+      lastReadAt: r.last_read_at,
+    }));
     res.json(result);
   } catch (e) {
     console.error("chat read-receipt failed:", e);
