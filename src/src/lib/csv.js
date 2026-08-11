@@ -1,0 +1,91 @@
+// Minimal CSV parser — handles quoted fields (including embedded commas/
+// newlines and "" escaped quotes) without pulling in an extra dependency.
+// Returns an array of row objects keyed by the (trimmed) header row.
+export function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  const pushField = () => { row.push(field); field = ""; };
+  const pushRow = () => { rows.push(row); row = []; };
+  // Normalize line endings, then walk character by character.
+  const s = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") pushField();
+    else if (c === "\n") { pushField(); pushRow(); }
+    else field += c;
+  }
+  if (field.length || row.length) { pushField(); pushRow(); }
+  const nonEmptyRows = rows.filter((r) => r.some((v) => v.trim() !== ""));
+  if (!nonEmptyRows.length) return [];
+  const headers = nonEmptyRows[0].map((h) => h.trim());
+  return nonEmptyRows.slice(1).map((r) => {
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = (r[i] ?? "").trim(); });
+    return obj;
+  });
+}
+
+// Looks a free-text CSV value up against a master list by name/short
+// name/code, case-insensitively — used to resolve "Dealer", "Service",
+// "RTO", "Agency" columns to their real IDs during import.
+//
+// Matches by field PRIORITY across the whole list, not by list order: it
+// checks every item's `fields[0]` (e.g. "name") first, and only falls back
+// to `fields[1]` (e.g. "code") across the whole list if nothing matched on
+// the first field. Checking item-by-item instead (i.e. field A-then-B for
+// item 1, then field A-then-B for item 2, ...) was the actual bug behind
+// "I select Raja Garden, but after import it shows CVR Raja Garden" — if
+// some other RTO earlier in the list happened to have code "Raja Garden",
+// it matched on ITS code before the search ever reached the RTO whose name
+// is actually "Raja Garden".
+export function findByLabel(list, value, fields) {
+  if (!value) return null;
+  const needle = value.trim().toLowerCase();
+  if (!needle) return null;
+  for (const field of fields) {
+    const match = list.find((item) => item[field] && String(item[field]).trim().toLowerCase() === needle);
+    if (match) return match;
+  }
+  return null;
+}
+
+// Parses "DD-MM-YYYY" / "DD/MM/YYYY" (and passes already-ISO "YYYY-MM-DD"
+// straight through) into an ISO date string. Used when a CSV import should
+// backdate a record (e.g. a ledger entry) to the row's own date instead of
+// defaulting to "now" at import time.
+export function ddmmyyyyToISO(input) {
+  if (!input) return null;
+  const trimmed = String(input).trim();
+  const m = trimmed.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+  if (m) {
+    const [, d, mo, y] = m;
+    return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed; // already ISO
+  return null;
+}
+
+// Maps whatever a spreadsheet actually says ("NEFT", "bank transfer",
+// "net banking", "Card", mixed case, extra spaces, ...) onto the 4 modes
+// the app uses (Cash / Bank / UPI / Cheque). Returns null for anything it
+// doesn't recognize, so the caller can flag the row instead of sending a
+// raw string to the database and having the whole import batch fail on a
+// check-constraint violation.
+export function normalizePaymentMode(raw) {
+  if (!raw) return "Cash";
+  const key = String(raw).trim().toLowerCase().replace(/[^a-z]/g, "");
+  if (!key) return "Cash";
+  if (key === "cash") return "Cash";
+  if (key === "upi") return "UPI";
+  if (key === "cheque" || key === "check") return "Cheque";
+  if (["bank", "banktransfer", "neft", "rtgs", "imps", "netbanking", "onlinetransfer", "card", "creditcard", "debitcard"].includes(key)) return "Bank";
+  return null;
+}
