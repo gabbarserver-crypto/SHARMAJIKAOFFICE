@@ -1,7 +1,7 @@
 // src/pages/Ledger.jsx
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../lib/supabase";
-import { Card, Field, GhostButton, PrimaryButton } from "../components/UI";
+import { Card, Field, GhostButton, PrimaryButton, Modal } from "../components/UI";
 import { DealerForm, AgencyForm } from "./Masters";
 
 // Now that Type has its own column, strip the parts of the description that
@@ -30,6 +30,14 @@ export function deriveTxnType(description) {
   const m = description.match(/Service:\s*([^·\n]+)/i);
   if (m) return m[1].trim().toUpperCase();
   return null;
+}
+
+// Pulls the application number back out of a ledger description like
+// "...· App No: 1870636524" so a row can be linked to its application.
+export function extractAppNo(description) {
+  if (!description) return null;
+  const m = description.match(/App No:\s*([^\s·\-–—]+)/i);
+  return m ? m[1].trim() : null;
 }
 
 // Tailwind classes per Type, purely cosmetic grouping — payments in green,
@@ -87,6 +95,31 @@ export default function Ledger({ only, initialEntityId } = {}) {
   const [sortDir, setSortDir] = useState("desc"); // newest first by default
   const [periodFrom, setPeriodFrom] = useState(""); // yyyy-mm-dd, empty = no lower bound
   const [periodTo, setPeriodTo] = useState(""); // yyyy-mm-dd, empty = no upper bound
+  const [appDetail, setAppDetail] = useState(null); // application row shown in the description-click modal
+  const [appDetailLoading, setAppDetailLoading] = useState(false);
+  const [appDetailError, setAppDetailError] = useState("");
+
+  // Description cells that carry an "App No: ..." are clickable — this
+  // looks the application up by that number and opens it in a modal so
+  // staff don't have to leave the ledger to see what a line item was for.
+  const openAppDetail = useCallback(async (description) => {
+    const appNo = extractAppNo(description);
+    if (!appNo) return;
+    setAppDetailLoading(true);
+    setAppDetailError("");
+    setAppDetail(null);
+    const { data, error } = await supabase
+      .from("applications")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name), staff:assigned_staff_id(full_name)")
+      .eq("application_no", appNo)
+      .maybeSingle();
+    setAppDetailLoading(false);
+    if (error || !data) {
+      setAppDetailError(`No application found for App No: ${appNo}`);
+      return;
+    }
+    setAppDetail(data);
+  }, []);
 
   // Running balance is a property of *when* a transaction happened, not of
   // whatever order it's currently displayed in — so it's always computed by
@@ -356,7 +389,20 @@ export default function Ledger({ only, initialEntityId } = {}) {
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(t.created_at).toLocaleDateString()}</td>
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.voucher_no}</td>
                     <td className={`px-3 py-2 whitespace-nowrap ${txnTypeClass(deriveTxnType(t.description))}`}>{deriveTxnType(t.description) || "—"}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{stripTypeFromDescription(t.description)}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
+                      {extractAppNo(t.description) ? (
+                        <button
+                          type="button"
+                          onClick={() => openAppDetail(t.description)}
+                          className="text-left hover:underline decoration-dotted text-blue-600 dark:text-blue-400"
+                          title="View application details"
+                        >
+                          {stripTypeFromDescription(t.description)}
+                        </button>
+                      ) : (
+                        stripTypeFromDescription(t.description)
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-rose-600">
                       {t.type === "debit" ? `₹${Number(t.amount).toLocaleString("en-IN")}` : ""}
                     </td>
@@ -376,6 +422,34 @@ export default function Ledger({ only, initialEntityId } = {}) {
           </div>
         </div>
       )}
+      {(appDetailLoading || appDetail || appDetailError) && (
+        <Modal title="Application Details" onClose={() => { setAppDetail(null); setAppDetailError(""); }}>
+          {appDetailLoading && <p className="text-sm text-slate-500 dark:text-slate-400">Loading…</p>}
+          {appDetailError && <p className="text-sm text-rose-600">{appDetailError}</p>}
+          {appDetail && (
+            <div className="space-y-3 text-sm">
+              <Row label="Applicant" value={appDetail.applicant_name} />
+              <Row label="App No." value={appDetail.application_no} />
+              <Row label="Status" value={appDetail.status} />
+              <Row label="Service" value={appDetail.services?.short_name || appDetail.services?.parent_service} />
+              <Row label="Dealer" value={appDetail.dealers?.name} />
+              <Row label="Assigned Staff" value={appDetail.staff?.full_name} />
+              <Row label="Amount" value={appDetail.amount != null ? `₹${Number(appDetail.amount).toLocaleString("en-IN")}` : null} />
+              <Row label="Submitted" value={appDetail.submitted_at ? new Date(appDetail.submitted_at).toLocaleDateString() : null} />
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// A label/value line used by the application-details modal above.
+function Row({ label, value }) {
+  return (
+    <div className="flex justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-2">
+      <span className="text-slate-400 dark:text-slate-500">{label}</span>
+      <span className="text-slate-800 dark:text-slate-100 font-medium text-right">{value || "—"}</span>
     </div>
   );
 }
