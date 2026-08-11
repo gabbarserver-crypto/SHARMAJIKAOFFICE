@@ -1248,7 +1248,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   </td>
                 )}
                 {visibleCols.dealer && (
-                  <td className={`px-3 py-2 whitespace-nowrap ${dealerHold[r.dealer_id] ? "text-rose-600 font-bold" : "text-slate-600 dark:text-slate-300"}`}>
+                  <td
+                    className={`px-3 py-2 whitespace-nowrap ${dealerHold[r.dealer_id] ? "text-rose-600 font-bold" : "text-slate-600 dark:text-slate-300"}`}
+                    title={dealerHold[r.dealer_id] ? "This dealer is out of usable credit" : undefined}
+                  >
                     {r.status === "Draft Submitted" ? (
                       <EditableSelect
                         width="w-36"
@@ -1259,14 +1262,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       />
                     ) : (
                       dealerLabel(r.dealers)
-                    )}
-                    {dealerHold[r.dealer_id] && (
-                      <span
-                        title="This dealer is out of usable credit"
-                        className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-600 border border-rose-200 align-middle"
-                      >
-                        HOLD
-                      </span>
                     )}
                   </td>
                 )}

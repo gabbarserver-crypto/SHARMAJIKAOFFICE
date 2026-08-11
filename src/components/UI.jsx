@@ -51,12 +51,19 @@ const STATUS_ICONS = {
   Accepted: CheckCircle2,
 };
 
+// Statuses shown as icon-only (no text label) in the badge.
+const ICON_ONLY_STATUSES = new Set(["Under Review"]);
+
 export function StatusBadge({ status }) {
   const Icon = STATUS_ICONS[status];
+  const iconOnly = ICON_ONLY_STATUSES.has(status);
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${STATUS_STYLES[status] || "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"}`}>
+    <span
+      title={iconOnly ? (STATUS_DISPLAY_LABELS[status] || status) : undefined}
+      className={`inline-flex items-center gap-1 ${iconOnly ? "px-1.5 py-1" : "px-2.5 py-1"} rounded-full text-xs font-semibold ${STATUS_STYLES[status] || "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"}`}
+    >
       {Icon && <Icon size={12} />}
-      {STATUS_DISPLAY_LABELS[status] || status}
+      {!iconOnly && (STATUS_DISPLAY_LABELS[status] || status)}
     </span>
   );
 }
