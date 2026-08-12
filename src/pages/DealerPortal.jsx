@@ -1457,6 +1457,7 @@ function DealerLedger({ dealerId }) {
   const [txns, setTxns] = useState([]);
   const [appsByCode, setAppsByCode] = useState({}); // draft/application_no -> { applicant_name, services }
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [sortKey, setSortKey] = useState("created_at");
   const [sortDir, setSortDir] = useState("desc");
   const toggleSort = (key) => {
@@ -1473,11 +1474,25 @@ function DealerLedger({ dealerId }) {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("ledger_transactions")
         .select("id, type, amount, description, remarks, voucher_no, created_at")
         .eq("dealer_id", dealerId)
         .order("created_at", { ascending: false });
+      if (error) {
+        // Same trap the summary card above hit before it was fixed: don't
+        // let a failed fetch fall through to `data || []` — an empty array
+        // here renders as a confident "No ledger entries yet" / ₹0, which
+        // looks identical to a genuinely empty ledger even though the
+        // dealer's actual balance (shown correctly in the card above, from
+        // its own separate query) says otherwise. Surface the failure
+        // instead of hiding it behind a wrong-but-plausible empty state.
+        console.error("Couldn't load ledger:", error.message);
+        setLoadError(error.message);
+        setLoading(false);
+        return;
+      }
+      setLoadError(null);
       const rows = data || [];
       setTxns(rows);
 
@@ -1651,6 +1666,8 @@ function DealerLedger({ dealerId }) {
       </div>
       {loading ? (
         <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
+      ) : loadError ? (
+        <p className="text-center text-rose-600 py-8">Couldn't load your ledger — please refresh and try again.</p>
       ) : txns.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No ledger entries yet</p>
       ) : (
