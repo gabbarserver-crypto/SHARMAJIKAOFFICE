@@ -77,7 +77,18 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   // here too so it's visible without switching tabs.
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("ledger_transactions").select("type, amount").eq("dealer_id", dealer.id);
+      const { data, error } = await supabase.from("ledger_transactions").select("type, amount").eq("dealer_id", dealer.id);
+      if (error) {
+        // Leave runningBalance as-is (null on first load shows "…", a
+        // stale-but-real number on refresh stays put) rather than falling
+        // through to `(data || [])` → an empty array → a confidently wrong
+        // ₹0. That silent fallback is what made this card show ₹0 while
+        // the Ledger tab's own fetch (a separate query) succeeded and
+        // showed the real -₹1,02,350 — same underlying number, just one
+        // of the two fetches quietly failed with no visible error.
+        console.error("Couldn't load running balance:", error.message);
+        return;
+      }
       const balance = (data || []).reduce((acc, t) => acc + (t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0)), 0);
       setRunningBalance(balance);
     })();
