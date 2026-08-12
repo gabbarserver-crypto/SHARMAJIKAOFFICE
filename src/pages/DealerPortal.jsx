@@ -20,13 +20,15 @@ import { ageHighlightClass, validateAgeForService } from "../lib/age";
 import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
 import { scanAadhaarImage } from "../lib/aadhaarOcr";
 import { useDarkMode } from "../lib/theme";
-import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText } from "lucide-react";
+import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText, Gamepad2 } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
 import { stripTypeFromDescription, deriveTxnType } from "./Ledger";
+import { Capacitor } from "@capacitor/core";
+import { Browser } from "@capacitor/browser";
 
 // Same file the Dashboard's "Download App" card points to (see
 // src/pages/Dashboard.jsx) — one APK, linked from every portal.
@@ -37,6 +39,30 @@ import { stripTypeFromDescription, deriveTxnType } from "./Ledger";
 // up bundled INSIDE the app itself, ballooning its size with every build
 // (this is what caused the app to balloon to ~100MB+ before).
 const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
+
+// SJO Games — same standalone games site linked from the staff Dashboard
+// (see src/pages/Dashboard.jsx), handing off the current Supabase session
+// so a dealer who's already logged in here doesn't have to log in again
+// there. Tokens travel in the URL only once and are stripped immediately
+// on arrival — see sjo-supabase-sync.js on the games site.
+const GAMES_URL = "https://sjo-games-vercel-app.vercel.app/games/index.html";
+const openGames = async () => {
+  const { data: { session } } = await supabase.auth.getSession();
+  let url = GAMES_URL;
+  if (session) {
+    const params = new URLSearchParams({
+      at: session.access_token,
+      rt: session.refresh_token,
+    });
+    url = `${GAMES_URL}?${params.toString()}`;
+  }
+
+  if (Capacitor.isNativePlatform()) {
+    await Browser.open({ url, presentationStyle: "popover" });
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+};
 
 const TABS = ["Applications", "Call/Chat", "Ledger"];
 
@@ -240,6 +266,14 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           >
             <Download size={16} />
           </a>
+          <button
+            onClick={openGames}
+            title="SJO Games"
+            aria-label="SJO Games"
+            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+          >
+            <Gamepad2 size={16} />
+          </button>
           <button
             onClick={setUpPasskey}
             title="Set up Fingerprint / Face ID login on this device"
@@ -1441,7 +1475,7 @@ function DealerLedger({ dealerId }) {
       setLoading(true);
       const { data } = await supabase
         .from("ledger_transactions")
-        .select("*")
+        .select("id, type, amount, description, remarks, voucher_no, created_at")
         .eq("dealer_id", dealerId)
         .order("created_at", { ascending: false });
       const rows = data || [];
