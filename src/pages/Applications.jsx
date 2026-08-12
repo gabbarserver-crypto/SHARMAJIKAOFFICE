@@ -3137,10 +3137,21 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                   <div key={d.id}>
                     {/learn/i.test(d.name) && app.application_no && (
                       <button
-                        onClick={() => window.open(
-                          `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
-                          "sarathi_popup", "width=900,height=700,noopener,noreferrer"
-                        )}
+                        onClick={async () => {
+                          const learnerNo = app.service_answers?.["Learner No"] || "";
+                          if (learnerNo) {
+                            try {
+                              await navigator.clipboard.writeText(learnerNo);
+                              setToast("Learner No copied: " + learnerNo);
+                            } catch {
+                              // clipboard may be blocked; ignore silently
+                            }
+                          }
+                          window.open(
+                            `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                            "_blank", "noopener,noreferrer"
+                          );
+                        }}
                         className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
                       >
                         ↗ Download Learning (opens Sarathi)
@@ -3333,10 +3344,21 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               <div key={d.id}>
                 {/learn/i.test(d.name) && app.application_no && (
                   <button
-                    onClick={() => window.open(
-                      `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
-                      "sarathi_popup", "width=900,height=700,noopener,noreferrer"
-                    )}
+                    onClick={async () => {
+                      const learnerNo = app.service_answers?.["Learner No"] || "";
+                      if (learnerNo) {
+                        try {
+                          await navigator.clipboard.writeText(learnerNo);
+                          setToast("Learner No copied: " + learnerNo);
+                        } catch {
+                          // clipboard may be blocked; ignore silently
+                        }
+                      }
+                      window.open(
+                        `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                        "_blank", "noopener,noreferrer"
+                      );
+                    }}
                     className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
                   >
                     ↗ Download Learning (opens Sarathi)
