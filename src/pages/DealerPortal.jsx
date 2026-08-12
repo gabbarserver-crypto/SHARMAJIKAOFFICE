@@ -1476,7 +1476,7 @@ function DealerLedger({ dealerId }) {
       setLoading(true);
       const { data, error } = await supabase
         .from("ledger_transactions")
-        .select("id, type, amount, description, remarks, voucher_no, created_at")
+        .select("id, type, amount, description, voucher_no, created_at")
         .eq("dealer_id", dealerId)
         .order("created_at", { ascending: false });
       if (error) {
@@ -1527,7 +1527,7 @@ function DealerLedger({ dealerId }) {
     const isPayment = !matched && deriveTxnType(t.description) === "PAYMENT";
     return {
       ...t,
-      serviceCell: matched?.service || (isPayment ? "Payment" : (t.description || t.remarks || "—")),
+      serviceCell: matched?.service || (isPayment ? "Payment" : (t.description || "—")),
       applicantCell: matched?.applicant_name || (isPayment ? (stripTypeFromDescription(t.description) || "—") : "—"),
     };
   });
