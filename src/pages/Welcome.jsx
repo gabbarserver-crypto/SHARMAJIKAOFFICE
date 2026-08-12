@@ -8,9 +8,41 @@
 // prospective customer — hence the one-line service list, even though the
 // screen itself stays intentionally simple (logo + Continue).
 import React from "react";
+import { Gamepad2 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { Browser } from "@capacitor/browser";
+import { supabase } from "../lib/supabase";
 import logo from "../assets/sjo-logo-full.png";
 
 export default function Welcome({ onContinue }) {
+  // Opens the standalone SJO Games site. On native, a plain <a target="_blank">
+  // would hand off to the system browser (Chrome) instead of staying inside
+  // the app, so it goes through an in-app Custom Tab instead (same reasoning
+  // as submitWithGoogle in Login.jsx).
+  const GAMES_URL = "https://sjo-games-vercel-app.vercel.app/games/index.html";
+  const openGames = async () => {
+    // Hand off the current session so someone already logged into the
+    // portal doesn't have to log in again on the games site. Both apps
+    // share the same Supabase project, so the games site can adopt this
+    // session directly via supabase.auth.setSession(). Tokens travel in
+    // the URL only once and are stripped immediately by the games site.
+    const { data: { session } } = await supabase.auth.getSession();
+    let url = GAMES_URL;
+    if (session) {
+      const params = new URLSearchParams({
+        at: session.access_token,
+        rt: session.refresh_token,
+      });
+      url = `${GAMES_URL}?${params.toString()}`;
+    }
+
+    if (Capacitor.isNativePlatform()) {
+      await Browser.open({ url, presentationStyle: "popover" });
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
   return (
     <div className="min-h-screen bg-[#0f1b3d] flex flex-col">
       <div className="flex-1 flex items-center justify-center p-4">
@@ -33,6 +65,15 @@ export default function Welcome({ onContinue }) {
               </a>
               <button onClick={onContinue} className="w-full btn-accent text-white font-semibold py-3 rounded-xl">
                 Backend
+              </button>
+
+              <button
+                type="button"
+                onClick={openGames}
+                className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl mt-3"
+              >
+                <Gamepad2 size={18} />
+                SJO Games
               </button>
             </div>
           </div>
