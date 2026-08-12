@@ -23,7 +23,7 @@
 // there's no shared code path that could ever leak another dealer into
 // it. Admin staff, on the other hand, can call/chat with any dealer or
 // dealer_staff — that's the whole point of the support desk.
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useImperativeHandle, useMemo, useState, forwardRef } from "react";
 import { MessageCircle, MessageSquare, Users, UserPlus, Phone, Video, PhoneMissed, PhoneOff, Search, X, Plus, Filter, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import ChatPanel from "./ChatPanel";
@@ -101,7 +101,7 @@ const TABS = [
 
 const TAB_TITLE = { chats: "Recent Chats", calls: "Recent Call Logs", new: "New Call", customer: "Customer Chat" };
 
-export default function CommsWindow({ variant, identity, call, dealerId, dealerName, staff, pendingCount = 0, onExpand }) {
+const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, dealerId, dealerName, staff, pendingCount = 0, onExpand }, ref) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("chats");
   const [selectedThread, setSelectedThread] = useState(null); // { dealerId, applicationId, label } | null
@@ -157,6 +157,12 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
 
   const openWindow = () => setOpen(true);
   const closeWindow = () => { setOpen(false); setSelectedThread(null); };
+
+  useImperativeHandle(ref, () => ({
+    open: openWindow,
+    close: closeWindow,
+    isOpen: () => open,
+  }));
 
   // Marks a thread as viewed right now, so its unread badge clears — this
   // is what fixes "I opened it, but it still shows as a new message": the
@@ -363,12 +369,12 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
         </Modal>
       )}
 
-      {/* FAB — hidden while the window is open on any screen size (mobile's
-          full-screen panel has its own Back button, and desktop's popup has
-          its own header Close (X) button — so this floating button would
-          just be a redundant second close control sitting on top of it). */}
+      {/* FAB — mobile no longer shows this at all; opening the chat window
+          is now done from the app's own bottom tab bar (Call/Chat), so a
+          second floating button would be redundant. Kept for desktop/
+          tablet, where there's no bottom tab bar to fold this into. */}
       <div
-        className={`no-print fixed z-50 flex-col items-end ${open ? "hidden" : "flex"}`}
+        className={`no-print fixed z-50 flex-col items-end ${open ? "hidden" : "hidden md:flex"}`}
         style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
       >
         <button
@@ -386,7 +392,9 @@ export default function CommsWindow({ variant, identity, call, dealerId, dealerN
       </div>
     </>
   );
-}
+});
+
+export default CommsWindow;
 
 // ============================================================
 // Threads tab — powers BOTH "Recent Chats" (scope="general", the dealer's

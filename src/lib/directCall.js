@@ -25,6 +25,7 @@ import { fetchAgoraToken, sendPush } from "./serverApi";
 import { notify, startRingtone, stopRingtone } from "./notify";
 import { logCallStart, logCallOutcome } from "./callLog";
 import { friendlyCallError } from "./callErrors";
+import { setSpeakerphone, resetSpeakerphone } from "./speakerMode";
 
 const RING_TIMEOUT_MS = 30000;
 
@@ -40,6 +41,7 @@ export function useDirectCall({ identity }) {
   const [remoteIdentity, setRemoteIdentity] = useState(null); // { type, id }
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(false);
   const [callError, setCallError] = useState(null);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   // Mirrors answeredAtRef below, purely so the UI (the live call-duration
@@ -101,6 +103,8 @@ export function useDirectCall({ identity }) {
     setRemoteIdentity(null);
     setMuted(false);
     setCameraOff(false);
+    setSpeakerOn(false);
+    resetSpeakerphone();
   }, [cleanupMedia]);
 
   // One-shot send to the OTHER party's personal channel. `to` is their
@@ -209,6 +213,9 @@ export function useDirectCall({ identity }) {
           answeredAtRef.current = new Date();
           setAnsweredAt(answeredAtRef.current);
           setStatus("in-call");
+          const startWithSpeaker = callType === "video";
+          setSpeakerOn(startWithSpeaker);
+          setSpeakerphone(startWithSpeaker);
         }
       } catch (e) {
         if (!cancelled) {
@@ -318,14 +325,20 @@ export function useDirectCall({ identity }) {
     setCameraOff(next);
   }, [cameraOff]);
 
+  const toggleSpeaker = useCallback(() => {
+    const next = !speakerOn;
+    setSpeakerOn(next);
+    setSpeakerphone(next);
+  }, [speakerOn]);
+
   // Hang up if this hook ever unmounts (e.g. sign-out) — never leave a call
   // running silently.
   useEffect(() => () => { cleanupMedia(); stopRingtone(); }, [cleanupMedia]);
 
   return {
-    status, callType, remoteName, remoteIdentity, muted, cameraOff, callError, hasRemoteVideo, answeredAt,
+    status, callType, remoteName, remoteIdentity, muted, cameraOff, speakerOn, callError, hasRemoteVideo, answeredAt,
     localVideoElRef, remoteVideoElRef,
-    startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
+    startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera, toggleSpeaker,
     dismissError: () => setCallError(null),
   };
 }

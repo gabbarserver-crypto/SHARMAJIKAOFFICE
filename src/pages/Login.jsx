@@ -1,6 +1,6 @@
 // src/pages/Login.jsx
 import React, { useState } from "react";
-import { Eye, EyeOff, Fingerprint } from "lucide-react";
+import { Eye, EyeOff, Fingerprint, Gamepad2 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { Browser } from "@capacitor/browser";
 import { supabase } from "../lib/supabase";
@@ -140,6 +140,20 @@ export default function Login({ authError }) {
   };
 
   const displayError = error || authError;
+
+  // Opens the standalone SJO Games site. Same reasoning as submitWithGoogle's
+  // Browser.open() above: on native, a plain <a target="_blank"> would hand
+  // off to the system browser (Chrome) instead of staying inside the app,
+  // so it goes through the in-app Custom Tab there too.
+  // TODO: replace with your real games deployment URL once it's live.
+  const GAMES_URL = "https://sjo-games.vercel.app/";
+  const openGames = async () => {
+    if (Capacitor.isNativePlatform()) {
+      await Browser.open({ url: GAMES_URL, presentationStyle: "popover" });
+      return;
+    }
+    window.open(GAMES_URL, "_blank", "noopener,noreferrer");
+  };
 
   if (showForgot) {
     return (
@@ -282,6 +296,15 @@ export default function Login({ authError }) {
         >
           <Fingerprint size={18} />
           {passkeyLoading ? "Waiting for fingerprint / Face ID…" : "Sign in with Fingerprint / Face ID"}
+        </button>
+
+        <button
+          type="button"
+          onClick={openGames}
+          className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl mt-3"
+        >
+          <Gamepad2 size={18} />
+          SJO Games
         </button>
 
         {/* This portal is dealer/staff-only. Anyone landing here without a

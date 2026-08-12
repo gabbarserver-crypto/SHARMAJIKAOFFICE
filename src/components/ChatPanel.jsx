@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck, Reply, X } from "lucide-react";
+import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck, Reply, X, Volume2, Volume1 } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
 import { sendPush, chatReadReceipt } from "../lib/serverApi";
 import { useCall } from "../lib/call";
@@ -340,6 +340,15 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                 className={`w-11 h-11 rounded-full flex items-center justify-center ${call.muted ? "bg-white text-slate-900" : "bg-white/10 hover:bg-white/20"}`}
               >
                 {call.muted ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+            )}
+            {call.status === "in-call" && (
+              <button
+                onClick={call.toggleSpeaker}
+                title="Handsfree / Speaker"
+                className={`w-11 h-11 rounded-full flex items-center justify-center ${call.speakerOn ? "bg-white text-slate-900" : "bg-white/10 hover:bg-white/20"}`}
+              >
+                {call.speakerOn ? <Volume2 size={18} /> : <Volume1 size={18} />}
               </button>
             )}
             {call.status === "in-call" && call.callType === "video" && (

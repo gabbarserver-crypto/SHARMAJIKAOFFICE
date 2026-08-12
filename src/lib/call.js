@@ -24,6 +24,7 @@ import { fetchAgoraToken, sendPush } from "./serverApi";
 import { notify, startRingtone, stopRingtone } from "./notify";
 import { logCallStart, logCallOutcome } from "./callLog";
 import { friendlyCallError } from "./callErrors";
+import { setSpeakerphone, resetSpeakerphone } from "./speakerMode";
 
 const RING_TIMEOUT_MS = 30000;
 
@@ -34,6 +35,7 @@ export function useCall({ threadId, dealerId, identity }) {
   const [remoteName, setRemoteName] = useState("");
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(false);
   const [callError, setCallError] = useState(null);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   // Mirrors answeredAtRef below, purely so the UI (live call-duration timer)
@@ -102,6 +104,8 @@ export function useCall({ threadId, dealerId, identity }) {
     setRemoteName("");
     setMuted(false);
     setCameraOff(false);
+    setSpeakerOn(false);
+    resetSpeakerphone();
   }, [cleanupMedia]);
 
   const send = useCallback((event, payload = {}) => {
@@ -204,6 +208,9 @@ export function useCall({ threadId, dealerId, identity }) {
           answeredAtRef.current = new Date();
           setAnsweredAt(answeredAtRef.current);
           setStatus("in-call");
+          const startWithSpeaker = callType === "video";
+          setSpeakerOn(startWithSpeaker);
+          setSpeakerphone(startWithSpeaker);
         }
       } catch (e) {
         if (!cancelled) {
@@ -304,14 +311,20 @@ export function useCall({ threadId, dealerId, identity }) {
     setCameraOff(next);
   }, [cameraOff]);
 
+  const toggleSpeaker = useCallback(() => {
+    const next = !speakerOn;
+    setSpeakerOn(next);
+    setSpeakerphone(next);
+  }, [speakerOn]);
+
   // Hang up if the thread changes or the component using this hook unmounts
   // (e.g. the chat panel/modal closes) — never leave a call running silently.
   useEffect(() => () => { cleanupMedia(); stopRingtone(); }, [threadId, cleanupMedia]);
 
   return {
-    status, callType, remoteName, muted, cameraOff, callError, hasRemoteVideo, answeredAt,
+    status, callType, remoteName, muted, cameraOff, speakerOn, callError, hasRemoteVideo, answeredAt,
     localVideoElRef, remoteVideoElRef,
-    startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera,
+    startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera, toggleSpeaker,
     dismissError: () => setCallError(null),
   };
 }

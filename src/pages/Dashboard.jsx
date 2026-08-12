@@ -41,7 +41,7 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("dashboard_counts").select("*").maybeSingle();
+      const { data } = await supabase.rpc("get_dashboard_counts").maybeSingle();
       setCounts(data);
     })();
     (async () => {

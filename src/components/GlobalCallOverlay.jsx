@@ -8,7 +8,7 @@
 // one panel.
 import React from "react";
 import { Capacitor } from "@capacitor/core";
-import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
+import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, Volume2, Volume1 } from "lucide-react";
 import CallTimer from "./CallTimer";
 
 // Full-screen ringing UI — used on the native Android app, where there's no
@@ -133,6 +133,15 @@ export default function GlobalCallOverlay({ call }) {
                 className={`w-12 h-12 rounded-full flex items-center justify-center ${call.muted ? "bg-white text-slate-900" : "bg-white/10 hover:bg-white/20"}`}
               >
                 {call.muted ? <MicOff size={19} /> : <Mic size={19} />}
+              </button>
+            )}
+            {call.status === "in-call" && (
+              <button
+                onClick={call.toggleSpeaker}
+                title="Handsfree / Speaker"
+                className={`w-12 h-12 rounded-full flex items-center justify-center ${call.speakerOn ? "bg-white text-slate-900" : "bg-white/10 hover:bg-white/20"}`}
+              >
+                {call.speakerOn ? <Volume2 size={19} /> : <Volume1 size={19} />}
               </button>
             )}
             {call.status === "in-call" && call.callType === "video" && (

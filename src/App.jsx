@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
@@ -104,6 +104,7 @@ export default function App() {
   // straight on that dealer/agency's ledger instead of the dashboard.
   const initialUrlParams = React.useMemo(() => new URLSearchParams(window.location.search), []);
   const [active, setActive] = useState(initialUrlParams.get("nav") || "dashboard");
+  const commsWindowRef = useRef(null);
   const initialEntityId = initialUrlParams.get("entity") || null;
   const [pendingChatCount, setPendingChatCount] = useState(0);
   const [permMap, setPermMap] = useState({}); // { [module]: permissions row } for the staff member's role
@@ -342,6 +343,25 @@ export default function App() {
     StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const sub = CapacitorApp.addListener("backButton", () => {
+      if (commsWindowRef.current?.isOpen?.()) {
+        commsWindowRef.current.close();
+        return;
+      }
+      setActive((current) => {
+        if (current !== "dashboard") return "dashboard";
+        // Already at Dashboard with nothing else open — let Android do its
+        // normal thing (minimize the app) rather than exiting outright,
+        // which is what CapacitorApp.exitApp() would do.
+        CapacitorApp.minimizeApp?.().catch(() => {});
+        return current;
+      });
+    });
+    return () => { sub.then((s) => s.remove()); };
+  }, []);
+
   // Catches Google sign-in's redirect back into the app (see
   // submitWithGoogle in Login.jsx, which opens the Google login as an
   // in-app Custom Tab rather than switching to Chrome). Once Google
@@ -482,10 +502,15 @@ export default function App() {
       <BottomTabBar
         nav={visibleNav}
         active={active}
-        onNavigate={(key) => { setActive(key); refreshPendingChatCount(); }}
+        onNavigate={(key) => {
+          if (key === "chats") { commsWindowRef.current?.open(); return; }
+          setActive(key);
+          refreshPendingChatCount();
+        }}
         badges={{ chats: pendingChatCount }}
       />
       <CommsWindow
+        ref={commsWindowRef}
         variant="staff"
         staff={staff}
         identity={myIdentity}

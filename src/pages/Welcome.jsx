@@ -32,7 +32,7 @@ export default function Welcome({ onContinue }) {
                 Stamps &amp; Prints
               </a>
               <button onClick={onContinue} className="w-full btn-accent text-white font-semibold py-3 rounded-xl">
-                RTO Services
+                Backend
               </button>
             </div>
           </div>

@@ -21,7 +21,7 @@ public class MainActivity extends BridgeActivity {
   // once the (async) native permission dialog actually returns a result —
   // see onRequestPermissionsResult below.
   private PermissionRequest pendingWebPermissionRequest;
-
+  registerPlugin(SpeakerModePlugin.class);
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
