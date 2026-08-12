@@ -84,7 +84,7 @@ function exportLedgerCSV(entityName, txns) {
 // ledger below. Add/Edit for dealers & agencies lives here too (reusing the
 // same forms Masters used to use) — Masters no longer has Dealer/Agency
 // tabs, this page is now the only place to manage them.
-export default function Ledger({ only, initialEntityId } = {}) {
+export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) {
   const [entityId, setEntityId] = useState(initialEntityId || "");
   const [entityMode, setEntityMode] = useState(only === "agency" ? "agency" : "dealer"); // "dealer" | "agency" — mode of the currently open ledger detail
   const [summary, setSummary] = useState(null);
@@ -165,6 +165,25 @@ export default function Ledger({ only, initialEntityId } = {}) {
     setAppDetailTxn((t) => ({ ...t, amount: newAmount }));
     setAppDetail((a) => ({ ...a, amount: newAmount }));
   }, [appDetailTxn, appDetail, editAmount, entityMode]);
+
+  // Admin-only: removes a single ledger transaction row outright — for
+  // correcting mistakes like a duplicate debit (e.g. from a double-clicked
+  // Approve) without having to touch the application it came from. This
+  // only removes the ledger row; it does not change the linked
+  // application's status or amount.
+  const [deletingTxnId, setDeletingTxnId] = useState(null);
+  const deleteTxn = useCallback(async (txn) => {
+    if (!window.confirm(`Delete this ${txn.type} entry of ₹${Number(txn.amount).toLocaleString("en-IN")} (Voucher ${txn.voucher_no})? This cannot be undone.`)) return;
+    setDeletingTxnId(txn.id);
+    const table = entityMode === "dealer" ? "ledger_transactions" : "agency_ledger_transactions";
+    const { error } = await supabase.from(table).delete().eq("id", txn.id);
+    setDeletingTxnId(null);
+    if (error) {
+      alert("Failed to delete: " + error.message);
+      return;
+    }
+    setTxns((prev) => prev.filter((t) => t.id !== txn.id));
+  }, [entityMode]);
 
   // Running balance is a property of *when* a transaction happened, not of
   // whatever order it's currently displayed in — so it's always computed by
@@ -426,6 +445,7 @@ export default function Ledger({ only, initialEntityId } = {}) {
                   <SortableTh label="Debit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   <SortableTh label="Credit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   <SortableTh label="Running Balance" sortKeyName="running_balance" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                  {isAdmin && <th className="px-3 py-2 text-right">Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -457,10 +477,23 @@ export default function Ledger({ only, initialEntityId } = {}) {
                     <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.running_balance < 0 ? "text-rose-600" : "text-slate-700 dark:text-slate-300"}`}>
                       ₹{Number(t.running_balance).toLocaleString("en-IN")}
                     </td>
+                    {isAdmin && (
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => deleteTxn(t)}
+                          disabled={deletingTxnId === t.id}
+                          className="text-rose-600 hover:text-rose-700 text-xs font-medium disabled:opacity-50"
+                          title="Delete this ledger entry"
+                        >
+                          {deletingTxnId === t.id ? "Deleting…" : "Delete"}
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
                 {periodTxns.length === 0 && (
-                  <tr><td colSpan={7} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
+                  <tr><td colSpan={isAdmin ? 8 : 7} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
                 )}
               </tbody>
             </table>

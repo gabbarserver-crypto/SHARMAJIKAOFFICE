@@ -49,8 +49,8 @@ const LEGAL_ROUTES = {
 // Thin wrappers so "Dealer" and "Agency" can be their own sidebar entries
 // (each scoped to just that one head + its transaction ledger) while still
 // sharing the same Ledger page code and the same "ledger" permission.
-function DealerLedgerPage({ initialEntityId }) { return <Ledger only="dealer" initialEntityId={initialEntityId} />; }
-function AgencyLedgerPage({ initialEntityId }) { return <Ledger only="agency" initialEntityId={initialEntityId} />; }
+function DealerLedgerPage({ initialEntityId, isAdmin }) { return <Ledger only="dealer" initialEntityId={initialEntityId} isAdmin={isAdmin} />; }
+function AgencyLedgerPage({ initialEntityId, isAdmin }) { return <Ledger only="agency" initialEntityId={initialEntityId} isAdmin={isAdmin} />; }
 
 const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
@@ -497,6 +497,7 @@ export default function App() {
           visibleNav={visibleNav}
           onNavigate={(key) => { setActive(key); refreshPendingChatCount(); }}
           active={active}
+          isAdmin={isAdmin}
         />
       </main>
       <BottomTabBar
