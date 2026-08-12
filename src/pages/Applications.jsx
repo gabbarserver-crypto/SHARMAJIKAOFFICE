@@ -14,6 +14,7 @@ import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import PCCLetterModal from "../components/PCCLetterModal";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { ageHighlightClass, validateAgeForService } from "../lib/age";
+import DocUploadDropzone from "../components/DocUploadDropzone";
 
 
 const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted"];
@@ -670,6 +671,27 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
+  // Amount is special-cased: if this application has already been
+  // Accepted, a matching debit already sits in ledger_transactions
+  // (posted by approveApplication below). Editing Amount here needs to
+  // keep that ledger row in sync too, same as editing it from the Ledger
+  // page already keeps the application in sync (see
+  // update_dealer_ledger_amount / 013_atomic_ledger_amount_update.sql).
+  // update_application_amount does both writes in one atomic function
+  // call so they can't drift from a half-completed save.
+  const updateApplicationAmount = async (id, value) => {
+    const newAmount = value === "" || value === null ? 0 : value;
+    const { error } = await supabase.rpc("update_application_amount", {
+      p_application_id: id,
+      p_new_amount: newAmount,
+    });
+    if (error) {
+      setToast("Failed to update amount: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, amount: newAmount } : r)));
+  };
+
   // Keeps the Agency's ledger in sync with an application's Agency Fee —
   // posts as a debit (it's a cost we owe the agency), independent of the
   // application's status. voucher_no is suffixed so it never collides with
@@ -1263,7 +1285,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.amount && (
                   <td className="px-3 py-2">
-                    <EditableCell type="number" width="w-14" noSpinner value={r.amount} onSave={(v) => updateRowField(r.id, "amount", v === "" ? null : parseFloat(v))} />
+                    <EditableCell type="number" width="w-14" noSpinner value={r.amount} onSave={(v) => updateApplicationAmount(r.id, v === "" ? null : parseFloat(v))} />
                   </td>
                 )}
                 {visibleCols.dealer && (
@@ -2501,6 +2523,18 @@ function UpdateApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
         } else {
           const { error: updErr } = await supabase.from("applications").update(fields).eq("id", r.target.id);
           if (updErr) throw updErr;
+
+          // Row was already Accepted before this import (not becoming
+          // Accepted just now, that path above already posts the ledger
+          // row fresh). If Amount changed, the existing ledger debit needs
+          // to move with it — same sync as the inline table edit uses.
+          if (fields.amount !== undefined && r.target.status === "Accepted") {
+            const { error: syncErr } = await supabase.rpc("update_application_amount", {
+              p_application_id: r.target.id,
+              p_new_amount: fields.amount || 0,
+            });
+            if (syncErr) throw new Error("Saved, but ledger sync failed: " + syncErr.message);
+          }
         }
 
         // Keep the agency ledger in sync — same delete-then-insert pattern
@@ -3128,7 +3162,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                         ↗ Download PCC Certificate
                       </button>
                     )}
-                    <DocumentRow doc={d} onChanged={onDocsChanged} />
+                    <DocumentRow doc={d} applicationId={app.id} onChanged={onDocsChanged} />
                   </div>
                 ))}
             </Card>
@@ -3359,8 +3393,10 @@ const DOC_STATUS_STYLES = {
   Rejected: "bg-rose-50 text-rose-700",
 };
 
-function DocumentRow({ doc, onChanged }) {
+function DocumentRow({ doc, applicationId, onChanged }) {
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
 
   const setStatus = async (status) => {
     let reject_reason = doc.reject_reason;
@@ -3375,6 +3411,39 @@ function DocumentRow({ doc, onChanged }) {
       .update({ status, reject_reason, verified_by: staffRow?.id || null, verified_at: new Date().toISOString() })
       .eq("id", doc.id);
     setBusy(false);
+    onChanged?.();
+  };
+
+  // Same bucket + path convention as the dealer portal's own upload (see
+  // DealerPortal.jsx's `upload`), so a file uploaded from either side lands
+  // in the same place and neither side has to guess at the other's layout.
+  // Lets staff/admin upload directly here too — e.g. the Learning Licence
+  // PDF just downloaded from the Sarathi popup above — instead of only
+  // being able to Verify/Reject whatever the dealer already sent.
+  const uploadFile = async (file) => {
+    if (!file || !applicationId) return;
+    setUploading(true);
+    setUploadError("");
+    const path = `${applicationId}/${doc.id}-${file.name}`;
+    const { error: uploadErr } = await supabase
+      .storage
+      .from("application-documents")
+      .upload(path, file, { upsert: true });
+    if (uploadErr) {
+      setUploading(false);
+      setUploadError("Upload failed: " + uploadErr.message);
+      return;
+    }
+    const { data: urlData } = supabase.storage.from("application-documents").getPublicUrl(path);
+    const { error: updateErr } = await supabase
+      .from("application_documents")
+      .update({ file_url: urlData.publicUrl, status: "Pending", reject_reason: null })
+      .eq("id", doc.id);
+    setUploading(false);
+    if (updateErr) {
+      setUploadError("Saved file but failed to update record: " + updateErr.message);
+      return;
+    }
     onChanged?.();
   };
 
@@ -3401,6 +3470,15 @@ function DocumentRow({ doc, onChanged }) {
       )}
       {doc.status === "Rejected" && doc.reject_reason && (
         <p className="text-xs text-rose-500 mt-1">Reason: {doc.reject_reason}</p>
+      )}
+      {/* Verified docs are locked to avoid an accidental overwrite of an
+          already-approved file — Reject it first (above) if it genuinely
+          needs replacing. */}
+      {doc.status !== "Verified" && (
+        <div className="mt-2">
+          <DocUploadDropzone busy={uploading} onFile={uploadFile} />
+          {uploadError && <p className="text-rose-500 text-xs mt-1">{uploadError}</p>}
+        </div>
       )}
     </div>
   );

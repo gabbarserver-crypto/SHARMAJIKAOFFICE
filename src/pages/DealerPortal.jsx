@@ -25,6 +25,7 @@ import SearchableSelect from "../components/SearchableSelect";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
+import DocUploadDropzone from "../components/DocUploadDropzone";
 import { stripTypeFromDescription, deriveTxnType } from "./Ledger";
 
 // Same file the Dashboard's "Download App" card points to (see
@@ -1055,14 +1056,10 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
                 <p className="text-xs text-rose-500 mt-1">Reason: {d.reject_reason}</p>
               )}
               <div className="mt-2">
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  disabled={busyId === d.id}
-                  onChange={(e) => onFilePicked(d, e.target.files?.[0])}
-                  className="text-xs"
+                <DocUploadDropzone
+                  busy={busyId === d.id}
+                  onFile={(file) => onFilePicked(d, file)}
                 />
-                {busyId === d.id && <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">Uploading…</span>}
               </div>
             </div>
           ))}
