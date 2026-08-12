@@ -21,9 +21,10 @@ public class MainActivity extends BridgeActivity {
   // once the (async) native permission dialog actually returns a result —
   // see onRequestPermissionsResult below.
   private PermissionRequest pendingWebPermissionRequest;
-  registerPlugin(SpeakerModePlugin.class);
+
   @Override
   public void onCreate(Bundle savedInstanceState) {
+    registerPlugin(SpeakerModePlugin.class);
     super.onCreate(savedInstanceState);
 
     // Capacitor only turns on WebView debugging (chrome://inspect) when

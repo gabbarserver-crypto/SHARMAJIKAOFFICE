@@ -15,7 +15,14 @@ function getInitial() {
   if (typeof window === "undefined") return false;
   const stored = window.localStorage.getItem(STORAGE_KEY);
   if (stored) return stored === "dark";
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches || false;
+  // No saved preference yet (first load on this device/browser) — default
+  // to dark. Dealer and admin share this same module/localStorage key, so
+  // previously a dealer's first-ever visit fell back to light (unless
+  // their OS happened to be in dark mode) while an admin who'd already
+  // toggled once stayed dark. Defaulting dark here means a dealer opening
+  // the portal for the first time sees the same theme admin does, with
+  // the toggle still there for anyone who prefers light.
+  return true;
 }
 
 let dark = getInitial();
