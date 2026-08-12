@@ -82,18 +82,40 @@ function playTonePattern(notes) {
 }
 let audioCtx = null;
 
+// Plays a bundled audio file tone (NOTIFICATION_TONES entries with an
+// `audioSrc`). A fresh Audio() each call so overlapping/rapid notifications
+// (e.g. the ringtone loop below) don't get cut off restarting the same
+// element.
+function playAudioFile(src) {
+  try {
+    const el = new Audio(src);
+    el.volume = 1.0;
+    el.play().catch(() => {
+      // Autoplay can be blocked before the first user gesture — same
+      // primeAudioOnFirstInteraction() story as the WebAudio path above.
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+function playTone(toneDef) {
+  if (toneDef?.audioSrc) playAudioFile(toneDef.audioSrc);
+  else playTonePattern(toneDef?.notes || []);
+}
+
 // Plays the user's currently-selected notification tone (Settings ->
 // Notifications), unless they've muted notification sound entirely.
 export function playPing() {
   if (!isSoundEnabled()) return;
-  playTonePattern(getSelectedTone().notes);
+  playTone(getSelectedTone());
 }
 
 // Plays a specific tone regardless of the mute setting — used by the
 // Settings page's "preview" buttons so users can hear a tone before
 // choosing it, even while sound is currently muted.
 export function previewTone(toneDef) {
-  playTonePattern(toneDef.notes);
+  playTone(toneDef);
 }
 
 // A repeating ringtone (reuses the same ping, looped) for incoming calls —
@@ -107,7 +129,10 @@ let ringtoneTimer = null;
 export function startRingtone() {
   if (ringtoneTimer) return; // already ringing
   playPing();
-  ringtoneTimer = setInterval(playPing, 2000);
+  // 3s gap — long enough that the bundled custom tune (~2.5s) finishes
+  // before the next one starts; still snappy for the short synthesized
+  // tones.
+  ringtoneTimer = setInterval(playPing, 3000);
 }
 export function stopRingtone() {
   if (ringtoneTimer) { clearInterval(ringtoneTimer); ringtoneTimer = null; }

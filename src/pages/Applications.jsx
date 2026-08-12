@@ -594,9 +594,9 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return { ok: false, message: "Already accepted" };
     }
 
-    const serviceAndName = [serviceLabel(app.services), app.applicant_name].filter(Boolean).join(" ");
     const descriptionParts = [
-      serviceAndName || null,
+      app.applicant_name || null,
+      serviceLabel(app.services) ? `Service: ${serviceLabel(app.services)}` : null,
       app.application_no ? `App No: ${app.application_no}` : null,
       app.date_of_birth ? `DOB: ${isoToDDMMYYYY(app.date_of_birth)}` : null,
     ].filter(Boolean);
@@ -2531,7 +2531,8 @@ function UpdateApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
           const finalApplicationNo = fields.application_no !== undefined ? fields.application_no : r.target.application_no;
           const service = serviceList.find((s) => s.id === finalServiceId);
           const descriptionParts = [
-            [serviceLabel(service), finalApplicantName].filter(Boolean).join(" ") || null,
+            finalApplicantName || null,
+            serviceLabel(service) ? `Service: ${serviceLabel(service)}` : null,
             finalApplicationNo ? `App No: ${finalApplicationNo}` : null,
           ].filter(Boolean);
 

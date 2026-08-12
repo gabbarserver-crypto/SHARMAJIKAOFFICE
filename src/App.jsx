@@ -260,7 +260,7 @@ export default function App() {
 
     const { data: dealerRow, error: dealerError } = await supabase
       .from("dealers")
-      .select("id, name, short_name, code, credit_limit, wallet_balance")
+      .select("id, name, short_name, code, credit_limit, wallet_balance, contact_name")
       .eq("auth_user_id", session.user.id)
       .maybeSingle();
 
@@ -286,7 +286,7 @@ export default function App() {
     // scoped to the parent dealer, but messages/identity are their own.
     const { data: dealerStaffRow, error: dealerStaffError } = await supabase
       .from("dealer_staff")
-      .select("id, full_name, dealer_id, active, dealers(id, name, short_name, code, credit_limit, wallet_balance)")
+      .select("id, full_name, dealer_id, active, dealers(id, name, short_name, code, credit_limit, wallet_balance, contact_name)")
       .eq("auth_user_id", session.user.id)
       .maybeSingle();
 

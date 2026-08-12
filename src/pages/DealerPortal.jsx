@@ -252,7 +252,8 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           <div>
             <p className="font-bold text-lg">{dealer.name}</p>
             <p className="text-slate-300 text-xs">
-              Dealer Portal · Code {dealer.code}{identity?.type === "dealer_staff" ? ` · ${identity.name}` : ""}
+              Dealer Portal · Code {dealer.code}
+              {identity?.type === "dealer_staff" ? ` · ${identity.name}` : (dealer.contact_name ? ` · ${dealer.contact_name}` : "")}
             </p>
           </div>
         </div>
@@ -1499,18 +1500,37 @@ function DealerLedger({ dealerId }) {
       // Ledger entries reference the application via voucher_no (== draft_code
       // at the time it was accepted). Resolve those back to a service +
       // applicant name to display, instead of parsing the free-text description.
+      //
+      // A dealer with a long history can easily have 1000+ distinct vouchers
+      // (BBH0001, BBH0002, ... BBH1725, ...). Building one giant .or() filter
+      // with two eq() clauses per voucher produced a URL well past what the
+      // browser/server allow, so the request failed outright with
+      // net::ERR_FAILED before a response ever came back — that's why
+      // Service/Applicant Name showed blank even though the ledger entries
+      // themselves loaded fine. Fixed by using .in() (much shorter per code)
+      // and chunking into batches, so this keeps working no matter how many
+      // vouchers a dealer accumulates over time.
       const codes = [...new Set(rows.map((t) => t.voucher_no).filter(Boolean))];
       if (codes.length) {
-        const { data: apps } = await supabase
-          .from("applications")
-          .select("draft_code, application_no, applicant_name, services(parent_service, short_name)")
-          .eq("dealer_id", dealerId)
-          .or(codes.map((c) => `draft_code.eq.${c},application_no.eq.${c}`).join(","));
+        const CHUNK_SIZE = 150;
+        const chunks = [];
+        for (let i = 0; i < codes.length; i += CHUNK_SIZE) chunks.push(codes.slice(i, i + CHUNK_SIZE));
+        const results = await Promise.all(
+          chunks.map((chunk) =>
+            supabase
+              .from("applications")
+              .select("draft_code, application_no, applicant_name, services(parent_service, short_name)")
+              .eq("dealer_id", dealerId)
+              .or(`draft_code.in.(${chunk.join(",")}),application_no.in.(${chunk.join(",")})`)
+          )
+        );
         const map = {};
-        (apps || []).forEach((a) => {
-          const label = a.services ? (a.services.short_name || a.services.parent_service) : null;
-          if (a.draft_code) map[a.draft_code] = { applicant_name: a.applicant_name, service: label };
-          if (a.application_no) map[a.application_no] = { applicant_name: a.applicant_name, service: label };
+        results.forEach(({ data: apps }) => {
+          (apps || []).forEach((a) => {
+            const label = a.services ? (a.services.short_name || a.services.parent_service) : null;
+            if (a.draft_code) map[a.draft_code] = { applicant_name: a.applicant_name, service: label };
+            if (a.application_no) map[a.application_no] = { applicant_name: a.applicant_name, service: label };
+          });
         });
         setAppsByCode(map);
       } else {

@@ -6,14 +6,21 @@
 // isSoundEnabled() / getSelectedTone() at play time).
 
 import { useEffect, useState } from "react";
+import customToneUrl from "../assets/notification-tone.mp3";
 
 const ENABLED_KEY = "sjo-notif-sound-enabled";
 const TONE_KEY = "sjo-notif-sound-tone";
 
-// Each tone is a short sequence of notes for playTonePattern() in
+// Each tone is EITHER a short sequence of notes for playTonePattern() in
 // lib/notify.js: freq (Hz), start (seconds after the pattern begins),
-// dur (seconds until the note is fully faded), peak (max gain, 0–1).
+// dur (seconds until the note is fully faded), peak (max gain, 0–1) —
+// OR an `audioSrc` pointing at a bundled audio file, played as-is instead
+// of being synthesized. notify.js checks for `audioSrc` first.
 export const NOTIFICATION_TONES = {
+  custom: {
+    label: "Your Tune",
+    audioSrc: customToneUrl,
+  },
   classic: {
     label: "Classic Ping",
     notes: [
@@ -44,7 +51,7 @@ export const NOTIFICATION_TONES = {
   },
 };
 
-const DEFAULT_TONE = "classic";
+const DEFAULT_TONE = "custom";
 
 const listeners = new Set();
 
