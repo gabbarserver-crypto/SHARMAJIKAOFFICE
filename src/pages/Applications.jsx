@@ -305,6 +305,17 @@ function SortableTh({ column, label, sortKey, sortDir, onSort }) {
   );
 }
 
+// Service-answer keys are free text (typed by staff), so "Learner No",
+// "learner no", "Learner No.", " Learner No" etc. can all occur — match
+// loosely instead of requiring an exact key.
+function getLearnerNo(answers) {
+  if (!answers) return "";
+  const entry = Object.entries(answers).find(([k]) =>
+    k.replace(/[^a-z]/gi, "").toLowerCase().includes("learnerno")
+  );
+  return entry ? entry[1] || "" : "";
+}
+
 export default function Applications({ restricted = false, canEdit = true, canApprove = true, staff } = {}) {
   const isAdmin = staff?.roles?.role_name === "Admin";
   const [tab, setTab] = useState("All");
@@ -3138,7 +3149,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                     {/learn/i.test(d.name) && app.application_no && (
                       <button
                         onClick={async () => {
-                          const learnerNo = app.service_answers?.["Learner No"] || "";
+                          const learnerNo = getLearnerNo(app.service_answers);
                           if (learnerNo) {
                             try {
                               await navigator.clipboard.writeText(learnerNo);
@@ -3345,7 +3356,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                 {/learn/i.test(d.name) && app.application_no && (
                   <button
                     onClick={async () => {
-                      const learnerNo = app.service_answers?.["Learner No"] || "";
+                      const learnerNo = getLearnerNo(app.service_answers);
                       if (learnerNo) {
                         try {
                           await navigator.clipboard.writeText(learnerNo);
