@@ -1,7 +1,9 @@
 // src/pages/Dashboard.jsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone, CreditCard, BarChart2, Settings as SettingsIcon, LayoutGrid, Wallet, Landmark } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { Browser } from "@capacitor/browser";
+import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone, CreditCard, BarChart2, Settings as SettingsIcon, LayoutGrid, Wallet, Landmark, Gamepad2 } from "lucide-react";
 import { BOTTOM_TAB_KEYS } from "../components/BottomTabBar";
 
 // Icons for whichever nav items land in the mobile-only overflow row below
@@ -20,6 +22,31 @@ const OVERFLOW_ICONS = { payments: CreditCard, reports: BarChart2, settings: Set
 // (this is what caused the app to balloon to ~100MB+ before).
 const APP_VERSION = "1.0.0";
 const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
+
+// SJO Games — opens the standalone games site, handing off the current
+// Supabase session so a staff member who's already logged in here doesn't
+// have to log in again there. Both apps share the same Supabase project,
+// so the games site adopts this session via supabase.auth.setSession().
+// Tokens travel in the URL only once and are stripped immediately on
+// arrival — see sjo-supabase-sync.js on the games site.
+const GAMES_URL = "https://sjo-games-vercel-app.vercel.app/games/index.html";
+const openGames = async () => {
+  const { data: { session } } = await supabase.auth.getSession();
+  let url = GAMES_URL;
+  if (session) {
+    const params = new URLSearchParams({
+      at: session.access_token,
+      rt: session.refresh_token,
+    });
+    url = `${GAMES_URL}?${params.toString()}`;
+  }
+
+  if (Capacitor.isNativePlatform()) {
+    await Browser.open({ url, presentationStyle: "popover" });
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+};
 
 // Each tile gets its own solid color fill (point 16) instead of a plain
 // white card with just the number colored — makes the dashboard scannable
@@ -160,6 +187,28 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
           <Download size={16} />
           Download App
         </a>
+      </div>
+
+      <div className="mt-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-900 dark:bg-slate-700 text-white rounded-xl p-3">
+            <Gamepad2 size={22} />
+          </div>
+          <div>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">SJO Games</p>
+            <p className="text-sm text-slate-400 dark:text-slate-500">
+              Take a break — play a quick round, no extra login needed
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={openGames}
+          className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors"
+        >
+          <Gamepad2 size={16} />
+          Play Now
+        </button>
       </div>
     </div>
   );
