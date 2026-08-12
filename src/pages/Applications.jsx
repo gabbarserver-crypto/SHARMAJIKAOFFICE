@@ -573,12 +573,25 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     const updatePayload = { status: "Accepted", remarks, application_date: applicationDate };
     if (!app.completed_at) updatePayload.completed_at = new Date().toISOString();
 
-    const { error } = await supabase
+    // .neq("status", "Accepted") makes this update itself the atomic race
+    // guard: the `app.status` check above only catches a double-click if
+    // the first click's local state already re-rendered — it can't catch
+    // two near-simultaneous calls (fast double-click, or two staff members
+    // approving the same application). If a concurrent call already flipped
+    // the status, this matches zero rows and returns an empty array instead
+    // of updating again — so at most one caller ever proceeds to the ledger
+    // insert below, however tight the timing.
+    const { data: updatedRows, error } = await supabase
       .from("applications")
       .update(updatePayload)
-      .eq("id", app.id);
+      .eq("id", app.id)
+      .neq("status", "Accepted")
+      .select("id");
     if (error) {
       return { ok: false, message: "Failed: " + error.message };
+    }
+    if (!updatedRows || updatedRows.length === 0) {
+      return { ok: false, message: "Already accepted" };
     }
 
     const serviceAndName = [serviceLabel(app.services), app.applicant_name].filter(Boolean).join(" ");
@@ -2928,6 +2941,22 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
   const [applicantAgeError, setApplicantAgeError] = useState("");
   const setApplicantField = (k) => (e) => setApplicant((s) => ({ ...s, [k]: e.target.value }));
 
+  // Guards against double-clicking "Approve" (or Move to Review / On Hold /
+  // Reject) before the first click's request finishes — without this, a
+  // fast double-click fires onStatusChange twice with the same stale `app`,
+  // and Approve in particular ends up inserting two ledger debits for one
+  // approval. Disables the status buttons for the duration of the call.
+  const [statusChanging, setStatusChanging] = useState(false);
+  const handleStatusChange = async (newStatus, r) => {
+    if (statusChanging) return;
+    setStatusChanging(true);
+    try {
+      await onStatusChange(newStatus, r);
+    } finally {
+      setStatusChanging(false);
+    }
+  };
+
   const saveApplicant = async () => {
     const dobIso = ddmmyyyyToISO(applicant.date_of_birth);
     const err = validateAgeForService(dobIso, app.services);
@@ -3004,17 +3033,17 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                 />
               </Field>
               <div className="flex flex-wrap gap-2">
-                <PrimaryButton onClick={() => onStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
-                <GhostButton onClick={() => onStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                <PrimaryButton disabled={statusChanging} onClick={() => handleStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
+                <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
                 <PrimaryButton
-                  onClick={() => onStatusChange("Accepted", remarks)}
+                  onClick={() => handleStatusChange("Accepted", remarks)}
                   className="!bg-emerald-600 hover:!bg-emerald-700"
-                  disabled={!canApprove}
+                  disabled={!canApprove || statusChanging}
                   title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
                 >
                   Approve
                 </PrimaryButton>
-                <DangerButton onClick={() => onStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                <DangerButton disabled={statusChanging} onClick={() => handleStatusChange("Rejected", remarks)}>Reject</DangerButton>
                 {isAdmin && (
                   <DangerButton
                     onClick={() => onDelete(app)}
@@ -3240,17 +3269,17 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                 />
               </Field>
               <div className="flex flex-wrap gap-2">
-                <PrimaryButton onClick={() => onStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
-                <GhostButton onClick={() => onStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                <PrimaryButton disabled={statusChanging} onClick={() => handleStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
+                <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
                 <PrimaryButton
-                  onClick={() => onStatusChange("Accepted", remarks)}
+                  onClick={() => handleStatusChange("Accepted", remarks)}
                   className="!bg-emerald-600 hover:!bg-emerald-700"
-                  disabled={!canApprove}
+                  disabled={!canApprove || statusChanging}
                   title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
                 >
                   Approve
                 </PrimaryButton>
-                <DangerButton onClick={() => onStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                <DangerButton disabled={statusChanging} onClick={() => handleStatusChange("Rejected", remarks)}>Reject</DangerButton>
                 <DangerButton
                   onClick={() => onDelete(app)}
                   className="!bg-transparent !text-rose-600 border border-rose-300 hover:!bg-rose-50 dark:hover:!bg-rose-950"
