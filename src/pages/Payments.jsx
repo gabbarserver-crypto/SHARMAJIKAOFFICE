@@ -33,6 +33,10 @@ export default function Payments({ staff } = {}) {
   const [recentSortDir, setRecentSortDir] = useState("desc");
   const [bankFeeDeducted, setBankFeeDeducted] = useState(0); // sum of every application's RTO/govt fee — always paid out of the bank
   const [bankBalanceLoading, setBankBalanceLoading] = useState(true);
+  const [feeRows, setFeeRows] = useState([]); // application fee rows powering the Bank Transactions table
+  const [bankQuery, setBankQuery] = useState("");
+  const [bankDateFrom, setBankDateFrom] = useState("");
+  const [bankDateTo, setBankDateTo] = useState("");
 
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.tagName === "SELECT" ? e.target.value : e.target.value.toUpperCase() }));
 
@@ -48,40 +52,101 @@ export default function Payments({ staff } = {}) {
     })();
   }, []);
 
-  // Bank Balance = every UPI payment received (lands straight in the bank)
-  // minus every application's RTO/govt fee (always paid out of the bank as
-  // an online challan) — regardless of how the fee-paying dealer's payment
-  // itself was collected (cash, cheque, card, etc. don't touch the bank).
-  // Fee total is paginated the same way loadAllPayments is, since a plain
+  // Bank Balance = every UPI payment received from a dealer (lands straight
+  // in the bank) minus every application's RTO/govt fee (always paid out of
+  // the bank as an online challan) minus every agency payment sent by
+  // Bank/UPI/Cheque (Cash paid to an agency never touches the bank).
+  // Fee rows are paginated the same way loadAllPayments is, since a plain
   // .select("rto_fee") would otherwise get silently capped at the
-  // project's "Max Rows" setting.
+  // project's "Max Rows" setting. We keep the full rows (not just the sum)
+  // because the Bank Transactions table below needs the date + application
+  // each fee belongs to.
   const loadBankBalance = async () => {
     setBankBalanceLoading(true);
     const pageSize = 1000;
     const maxPages = 50;
-    let total = 0;
+    let all = [];
     for (let page = 0; page < maxPages; page++) {
       const from = page * pageSize;
       const { data, error } = await supabase
         .from("applications")
-        .select("rto_fee")
+        .select("id, draft_code, applicant_name, rto_fee, fee_entered_at, application_date, submitted_at")
         .not("rto_fee", "is", null)
         .range(from, from + pageSize - 1);
       if (error) {
         console.error("loadBankBalance:", error);
         break;
       }
-      total += (data || []).reduce((acc, r) => acc + Number(r.rto_fee || 0), 0);
+      all = all.concat(data || []);
       if (!data || data.length < pageSize) break;
     }
-    setBankFeeDeducted(total);
+    setFeeRows(all);
+    setBankFeeDeducted(all.reduce((acc, r) => acc + Number(r.rto_fee || 0), 0));
     setBankBalanceLoading(false);
   };
 
+  // Money IN: dealer payments collected via UPI (UPI lands straight in the
+  // bank; Cash/Bank-transfer-at-counter/Cheque from a dealer don't).
   const bankUpiReceived = allPayments
-    .filter((p) => p.payment_mode === "UPI")
+    .filter((p) => p.dealer_id && p.payment_mode === "UPI")
     .reduce((acc, p) => acc + Number(p.amount || 0), 0);
-  const bankBalance = bankUpiReceived - bankFeeDeducted;
+  // Money OUT to agencies: a direct agency payment (no dealer involved)
+  // sent by Bank/UPI/Cheque comes straight out of the bank; Cash paid at
+  // the counter doesn't.
+  const bankAgencyPaidOut = allPayments
+    .filter((p) => !p.dealer_id && p.paid_at_agency_id && p.payment_mode !== "Cash")
+    .reduce((acc, p) => acc + Number(p.amount || 0), 0);
+  const bankBalance = bankUpiReceived - bankFeeDeducted - bankAgencyPaidOut;
+
+  // Unified Bank Transactions feed: application-fee debits (dated by the
+  // day the fee was entered, falling back to the application's approval
+  // date and then its submitted date), dealer-UPI credits, and agency
+  // Bank/UPI/Cheque debits — the exact three flows that make up
+  // bankBalance above, laid out as a chronological ledger.
+  const bankTransactions = React.useMemo(() => {
+    const rows = [];
+    feeRows.forEach((r) => {
+      const date = r.fee_entered_at || r.application_date || r.submitted_at;
+      if (!date || !Number(r.rto_fee)) return;
+      rows.push({
+        id: `fee-${r.id}`,
+        date,
+        label: `RTO Fee — ${r.draft_code || "Application"}${r.applicant_name ? ` (${r.applicant_name})` : ""}`,
+        mode: "Challan",
+        type: "debit",
+        amount: Number(r.rto_fee),
+      });
+    });
+    allPayments.forEach((p) => {
+      if (p.dealer_id && p.payment_mode === "UPI") {
+        rows.push({
+          id: `dealer-${p.id}`,
+          date: p.created_at,
+          label: `Received from ${p.dealers?.name || "Dealer"}${p.applications?.draft_code ? ` — ${p.applications.draft_code}` : ""}`,
+          mode: p.payment_mode,
+          type: "credit",
+          amount: Number(p.amount || 0),
+        });
+      } else if (!p.dealer_id && p.paid_at_agency_id && p.payment_mode !== "Cash") {
+        rows.push({
+          id: `agency-${p.id}`,
+          date: p.created_at,
+          label: `Paid to ${p.paid_at_agency?.name || "Agency"}`,
+          mode: p.payment_mode,
+          type: "debit",
+          amount: Number(p.amount || 0),
+        });
+      }
+    });
+    // Oldest first so a running balance can be accumulated correctly.
+    rows.sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id.localeCompare(b.id));
+    let running = 0;
+    rows.forEach((r) => {
+      running += r.type === "credit" ? r.amount : -r.amount;
+      r.balance = running;
+    });
+    return rows.reverse(); // newest first for display
+  }, [feeRows, allPayments]);
 
   useEffect(() => {
     (async () => {
@@ -356,7 +421,7 @@ export default function Payments({ staff } = {}) {
             {bankBalanceLoading ? "…" : `₹${bankBalance.toLocaleString("en-IN")}`}
           </p>
           <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-            UPI received ₹{bankUpiReceived.toLocaleString("en-IN")} − Application fee paid ₹{bankFeeDeducted.toLocaleString("en-IN")}
+            UPI received ₹{bankUpiReceived.toLocaleString("en-IN")} − Application fee paid ₹{bankFeeDeducted.toLocaleString("en-IN")} − Agency payouts ₹{bankAgencyPaidOut.toLocaleString("en-IN")}
           </p>
         </Card>
         <div className="flex gap-2">
@@ -432,6 +497,17 @@ export default function Payments({ staff } = {}) {
           {saving ? "Saving..." : "Save Payment & Generate Receipt"}
         </PrimaryButton>
       </Card>
+
+      <BankTransactionsTable
+        transactions={bankTransactions}
+        loading={bankBalanceLoading || allLoading}
+        query={bankQuery}
+        setQuery={setBankQuery}
+        dateFrom={bankDateFrom}
+        setDateFrom={setBankDateFrom}
+        dateTo={bankDateTo}
+        setDateTo={setBankDateTo}
+      />
 
       <AllPaymentsTable
         payments={allPayments}
@@ -648,6 +724,88 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                         <button onClick={() => onDelete(p)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
                       </td>
                     )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// Bank Transactions — a chronological feed of every rupee that actually
+// moves through the bank account, built straight from the application and
+// payment data already loaded on this page (no separate table to keep in
+// sync). Three kinds of rows only:
+//   • RTO Fee (debit)   — an application's rto_fee, dated by the day the
+//     fee was entered (fee_entered_at), falling back to application_date
+//     and then submitted_at when the fee was recorded before those existed.
+//   • Received (credit) — a dealer payment collected via UPI.
+//   • Paid to Agency (debit) — a direct agency payment sent by
+//     Bank/UPI/Cheque (Cash paid at the counter never touches the bank).
+function BankTransactionsTable({ transactions, loading, query, setQuery, dateFrom, setDateFrom, dateTo, setDateTo }) {
+  const filtered = transactions.filter((t) => {
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      if (!`${t.label} ${t.mode}`.toLowerCase().includes(q)) return false;
+    }
+    const d = t.date?.slice(0, 10);
+    if (dateFrom && d < dateFrom) return false;
+    if (dateTo && d > dateTo) return false;
+    return true;
+  });
+
+  const credits = filtered.filter((t) => t.type === "credit").reduce((s, t) => s + t.amount, 0);
+  const debits = filtered.filter((t) => t.type === "debit").reduce((s, t) => s + t.amount, 0);
+
+  return (
+    <Card title="Bank Transactions">
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <Field label="Search">
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Application, dealer, agency…" />
+        </Field>
+        <Field label="From">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        </Field>
+        <Field label="To">
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </Field>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-6 text-center">Loading…</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-6 text-center">No bank transactions match this filter.</p>
+      ) : (
+        <>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mb-2">
+            {filtered.length} transaction{filtered.length !== 1 ? "s" : ""} · +₹{credits.toLocaleString("en-IN")} in · −₹{debits.toLocaleString("en-IN")} out
+          </p>
+          <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-lg max-h-[480px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500 sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left whitespace-nowrap">Date</th>
+                  <th className="px-3 py-2 text-left">Description</th>
+                  <th className="px-3 py-2 text-left whitespace-nowrap">Mode</th>
+                  <th className="px-3 py-2 text-right whitespace-nowrap">Amount</th>
+                  <th className="px-3 py-2 text-right whitespace-nowrap">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((t) => (
+                  <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{new Date(t.date).toLocaleDateString()}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{t.label}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{t.mode}</td>
+                    <td className={`px-3 py-2 whitespace-nowrap text-right font-semibold ${t.type === "credit" ? "text-emerald-600" : "text-rose-500"}`}>
+                      {t.type === "credit" ? "+" : "−"}₹{t.amount.toLocaleString("en-IN")}
+                    </td>
+                    <td className={`px-3 py-2 whitespace-nowrap text-right ${t.balance < 0 ? "text-rose-600" : "text-slate-500 dark:text-slate-500"}`}>
+                      ₹{t.balance.toLocaleString("en-IN")}
+                    </td>
                   </tr>
                 ))}
               </tbody>

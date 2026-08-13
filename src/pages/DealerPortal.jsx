@@ -66,7 +66,7 @@ const openGames = async () => {
   window.open(url, "_blank", "noopener,noreferrer");
 };
 
-const TABS = ["Applications", "Call/Chat", "Ledger", "Payments"];
+const TABS = ["Applications", "Call/Chat", "Ledger", "Service", "Payments"];
 
 // Small reusable sortable <th> — click toggles asc/desc on that column,
 // clicking a different column switches to it (asc first). Shared by the
@@ -371,6 +371,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           </div>
         )}
         {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
+        {tab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
         {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} />}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
@@ -437,9 +438,14 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
   const [f, setF] = useState({
     service_id: "", applicant_name: "", father_husband_name: "",
     date_of_birth: "", mobile: "", address: "", police_station: "", stay_since: "",
+    already_has_dl_ll: "",
   });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const selectedService = services.find((s) => s.id === f.service_id);
+  // "Learner" service = anything whose name mentions Learner Licence (LL) —
+  // that's the only place we ask whether the applicant already holds a
+  // licence, since it changes which service they actually need.
+  const isLearnerService = !!selectedService && /learner|\bll\b/i.test(`${selectedService.parent_service || ""} ${selectedService.short_name || ""}`);
 
   const scanAadhaar = async (file) => {
     if (!file) return;
@@ -540,6 +546,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
         police_station: f.police_station || null,
         stay_since: f.stay_since || null,
         status: "Draft Submitted",
+        ...(isLearnerService && f.already_has_dl_ll ? { service_answers: { "Already has DL/LL": f.already_has_dl_ll } } : {}),
       })
       .select()
       .single();
@@ -618,6 +625,16 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
           placeholder="Search or select a service…"
         />
       </Field>
+      {isLearnerService && (
+        <Field label="Applicant already has a Driving Licence or Learner Licence?">
+          <Select value={f.already_has_dl_ll} onChange={set("already_has_dl_ll")}>
+            <option value="">Select…</option>
+            <option value="No">No</option>
+            <option value="Yes — has Learner Licence">Yes — has Learner Licence</option>
+            <option value="Yes — has Driving Licence">Yes — has Driving Licence</option>
+          </Select>
+        </Field>
+      )}
       <Field label="Applicant Name" required><Input value={f.applicant_name} onChange={set("applicant_name")} /></Field>
       <Field label="Father / Husband Name"><Input value={f.father_husband_name} onChange={set("father_husband_name")} /></Field>
       <Field label="Date of Birth">
@@ -1494,6 +1511,130 @@ function monthLabelOf(key) {
 }
 
 // Payments-only view for the dealer portal — same dealer_ledger view as
+// "Service" tab — the application-side counterpart to "Payments": that tab
+// shows only what's been paid, this one shows only what's been charged —
+// every application's service amount alongside the applicant's own
+// details, straight from the applications table (no ledger join needed).
+function DealerServiceAmounts({ dealerId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("applications")
+        .select("id, draft_code, applicant_name, mobile, amount, submitted_at, status, services(parent_service, short_name)")
+        .eq("dealer_id", dealerId)
+        .order("submitted_at", { ascending: false });
+      if (error) {
+        console.error("Couldn't load service amounts:", error.message);
+        setLoadError(error.message);
+        setLoading(false);
+        return;
+      }
+      setLoadError(null);
+      setRows(data || []);
+      setLoading(false);
+    })();
+  }, [dealerId]);
+
+  const filteredRows = rows.filter((r) => {
+    const d = r.submitted_at?.slice(0, 10);
+    if (rangeFrom && d < rangeFrom) return false;
+    if (rangeTo && d > rangeTo) return false;
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      const haystack = [r.draft_code, r.applicant_name, r.mobile, r.services?.parent_service, r.services?.short_name].filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const totalAmount = filteredRows.reduce((acc, r) => acc + Number(r.amount || 0), 0);
+
+  return (
+    <Card title="Service Amounts">
+      <p className="text-sm text-slate-500 dark:text-slate-500 mb-4">
+        Total{(rangeFrom || rangeTo || query) ? " (filtered)" : ""}: <span className="font-bold text-slate-800 dark:text-slate-100">₹{totalAmount.toLocaleString("en-IN")}</span> across {filteredRows.length} application{filteredRows.length !== 1 ? "s" : ""}
+      </p>
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search name, mobile, draft ID, service…"
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-56"
+        />
+        <input
+          type="date"
+          value={rangeFrom}
+          onChange={(e) => setRangeFrom(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+        />
+        <span className="text-xs text-slate-400">to</span>
+        <input
+          type="date"
+          value={rangeTo}
+          onChange={(e) => setRangeTo(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+        />
+        {(rangeFrom || rangeTo || query) && (
+          <button onClick={() => { setRangeFrom(""); setRangeTo(""); setQuery(""); }} className="text-xs font-semibold text-slate-500 hover:text-blue-600">
+            Clear
+          </button>
+        )}
+      </div>
+      {loading ? (
+        <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
+      ) : loadError ? (
+        <p className="text-center text-rose-600 py-8">Couldn't load service amounts — please refresh and try again.</p>
+      ) : filteredRows.length === 0 ? (
+        <p className="text-center text-slate-400 dark:text-slate-500 py-8">No applications yet</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
+              <tr>
+                <th className="text-left font-medium px-3 py-2">Date</th>
+                <th className="text-left font-medium px-3 py-2">Draft ID</th>
+                <th className="text-left font-medium px-3 py-2">Applicant</th>
+                <th className="text-left font-medium px-3 py-2">Mobile</th>
+                <th className="text-left font-medium px-3 py-2">Service</th>
+                <th className="text-left font-medium px-3 py-2">Status</th>
+                <th className="text-right font-medium px-3 py-2">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((r) => (
+                <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">
+                    {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{r.draft_code}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.applicant_name}</td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{r.mobile || "—"}</td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">
+                    {r.services?.short_name || r.services?.parent_service || "—"}
+                  </td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{r.status}</td>
+                  <td className="px-3 py-2 text-right font-semibold whitespace-nowrap text-slate-800 dark:text-slate-100">
+                    {r.amount != null ? `₹${Number(r.amount).toLocaleString("en-IN")}` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // "My Ledger" but filtered to entry_type = PAYMENT, so a dealer can check
 // what they've paid without SERVICE charge rows mixed in. Running Balance
 // shown here is still the dealer's real overall balance at that point in
