@@ -27,6 +27,7 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   if (!supabaseAdmin) return res.status(500).json({ error: "Server isn't configured with SUPABASE_SERVICE_ROLE_KEY" });
   if (!cashfreeConfigured()) return res.status(500).json({ error: "Server isn't configured with Cashfree credentials" });
+  if (!process.env.PUBLIC_APP_URL) return res.status(500).json({ error: "Server isn't configured with PUBLIC_APP_URL" });
 
   try {
     const { accessToken, dealerId, applicationId, amount, minutesValid } = req.body || {};
