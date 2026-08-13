@@ -22,7 +22,7 @@
 // needing a separate env var per platform.
 import { supabase } from "./supabase";
 
-const REAL_BACKEND_ORIGIN = "https://sharmajikaoffice.vercel.app";
+const REAL_BACKEND_ORIGIN = "https://1infinity.online";
 
 function resolveServerApiBase() {
   const configured = import.meta.env.VITE_SERVER_API_BASE;
