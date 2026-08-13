@@ -664,6 +664,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const [search, setSearch] = useState("");
   const [serviceList, setServiceList] = useState([]);
   const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null
+  const [detailsApp, setDetailsApp] = useState(null); // row whose Father/Husband, Address & Application No. popup is open
   const [toast, setToast] = useState(null);
   const [sortKey, setSortKey] = useState("submitted_at");
   const [sortDir, setSortDir] = useState("desc");
@@ -797,12 +798,9 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
               <tr>
                 <SortableTh label="Ref No." sortKeyName="ref" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Applicant" sortKeyName="applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <th className="text-left font-medium px-3 py-2">Father/Husband</th>
-                <th className="text-left font-medium px-3 py-2">Mobile</th>
-                <th className="text-left font-medium px-3 py-2">Address</th>
-                <th className="text-left font-medium px-3 py-2">Application No.</th>
-                <SortableTh label="Service" sortKeyName="service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Submitted" sortKeyName="submitted_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Service" sortKeyName="service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th className="text-left font-medium px-3 py-2">Mobile</th>
                 <SortableTh label="Status" sortKeyName="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="text-left font-medium px-3 py-2">Chat</th>
                 <th className="text-left font-medium px-3 py-2">Appointment</th>
@@ -812,7 +810,13 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
               {sortedRows.map((r) => (
                 <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60">
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                    {r.application_no || r.draft_code}
+                    <button
+                      onClick={() => setDetailsApp(r)}
+                      title="View father/husband name, address & application no."
+                      className="hover:underline decoration-dotted underline-offset-2 text-left"
+                    >
+                      {r.application_no || r.draft_code}
+                    </button>
                   </td>
                   <td className="px-3 py-2">
                     <button
@@ -822,14 +826,11 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
                       {r.applicant_name}
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{r.father_husband_name || "—"}</td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.mobile || "—"}</td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 max-w-[220px] truncate" title={r.address || ""}>{r.address || "—"}</td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.application_no || "—"}</td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}</td>
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
                     {r.services?.short_name || r.services?.parent_service || "—"}
                   </td>
-                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.mobile || "—"}</td>
                   <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
                   <td className="px-3 py-2">
                     {r.services?.chat_in_app ? (
@@ -858,7 +859,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
                 </tr>
               ))}
               {visibleRows.length === 0 && (
-                <tr><td colSpan={11} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
+                <tr><td colSpan={8} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
               )}
             </tbody>
           </table>
@@ -871,6 +872,28 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
           onClose={() => setBookingApp(null)}
           onBooked={bookAppointment}
         />
+      )}
+      {detailsApp && (
+        <Modal title={`Details — ${detailsApp.application_no || detailsApp.draft_code}`} onClose={() => setDetailsApp(null)}>
+          <div className="space-y-3 text-sm">
+            <div>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Applicant</p>
+              <p className="text-slate-700 dark:text-slate-300 font-semibold">{detailsApp.applicant_name || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Father/Husband</p>
+              <p className="text-slate-700 dark:text-slate-300">{detailsApp.father_husband_name || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Address</p>
+              <p className="text-slate-700 dark:text-slate-300">{detailsApp.address || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Application No.</p>
+              <p className="text-slate-700 dark:text-slate-300">{detailsApp.application_no || "—"}</p>
+            </div>
+          </div>
+        </Modal>
       )}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </Card>
