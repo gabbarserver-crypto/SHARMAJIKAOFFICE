@@ -37,6 +37,10 @@ export function useCall({ threadId, dealerId, identity }) {
   const [cameraOff, setCameraOff] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
   const [callError, setCallError] = useState(null);
+  // Shown in place of "Calling…" on the full-screen call UI right before it
+  // auto-closes — mirrors WhatsApp's brief "Call declined" / "Not answered"
+  // message on the caller's own screen instead of an abrupt top-banner toast.
+  const [endedReason, setEndedReason] = useState(null);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   // Mirrors answeredAtRef below, purely so the UI (live call-duration timer)
   // can react to it — the ref stays the source of truth for logic inside
@@ -117,6 +121,21 @@ export function useCall({ threadId, dealerId, identity }) {
     });
   }, []);
 
+  // Stops the ring timer/ringtone right away but keeps the full-screen call
+  // UI up for a moment longer, showing `label` instead of "Calling…" — the
+  // WhatsApp-style beat before the screen closes on its own. The actual
+  // teardown (media, log row, status -> idle) still runs through reset(),
+  // just delayed so the message has time to be seen.
+  const ENDED_DISPLAY_MS = 1600;
+  const finishWithReason = useCallback((endReason, label) => {
+    clearRingTimer();
+    setEndedReason(label);
+    setTimeout(() => {
+      setEndedReason(null);
+      reset(endReason);
+    }, ENDED_DISPLAY_MS);
+  }, [reset]);
+
   const isFromMe = (payload) => {
     const id = identityRef.current;
     return id && payload?.from === id.id && payload?.fromType === id.type;
@@ -152,8 +171,7 @@ export function useCall({ threadId, dealerId, identity }) {
       })
       .on("broadcast", { event: "decline" }, ({ payload }) => {
         if (isFromMe(payload)) return;
-        setCallError({ friendly: "Call declined", raw: "" });
-        reset("declined");
+        finishWithReason("declined", "Call declined");
       })
       .on("broadcast", { event: "end" }, ({ payload }) => {
         if (isFromMe(payload)) return;
@@ -162,7 +180,7 @@ export function useCall({ threadId, dealerId, identity }) {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); signalRef.current = null; };
-  }, [threadId, reset]);
+  }, [threadId, reset, finishWithReason]);
 
   // Actually join Agora + publish tracks once we move into 'connecting' —
   // covers both "I just accepted an incoming call" and "the other side just
@@ -246,11 +264,10 @@ export function useCall({ threadId, dealerId, identity }) {
     if (status !== "ringing-outgoing") { clearRingTimer(); return undefined; }
     ringTimerRef.current = setTimeout(() => {
       send("end");
-      setCallError({ friendly: "No answer", raw: "" });
-      reset("timeout");
+      finishWithReason("timeout", "Not answered");
     }, RING_TIMEOUT_MS);
     return clearRingTimer;
-  }, [status, send, reset]);
+  }, [status, send, finishWithReason]);
 
   const startCall = useCallback((type = "audio") => {
     if (!threadId || !identityRef.current || status !== "idle") return;
@@ -322,7 +339,7 @@ export function useCall({ threadId, dealerId, identity }) {
   useEffect(() => () => { cleanupMedia(); stopRingtone(); }, [threadId, cleanupMedia]);
 
   return {
-    status, callType, remoteName, muted, cameraOff, speakerOn, callError, hasRemoteVideo, answeredAt,
+    status, callType, remoteName, muted, cameraOff, speakerOn, callError, endedReason, hasRemoteVideo, answeredAt,
     localVideoElRef, remoteVideoElRef,
     startCall, acceptCall, declineCall, endCall, toggleMute, toggleCamera, toggleSpeaker,
     dismissError: () => setCallError(null),

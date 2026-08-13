@@ -6,7 +6,7 @@ export default function PrivacyPolicy() {
   return (
     <LegalLayout title="Privacy Policy" updated="11 August 2026">
       <p>
-        Sharma Ji Ka Office ("we", "us", "our") provides Driving Licence, RC Transfer,
+        One Infinity ("we", "us", "our") provides Driving Licence, RC Transfer,
         Police Clearance Certificate (PCC) and other RTO-related documentation services
         through our dealer network and this website. This policy explains what
         information we collect from applicants and dealers, and how we use it.
@@ -43,7 +43,7 @@ export default function PrivacyPolicy() {
         Application and payment records are retained for as long as required to service
         your application and to meet accounting/regulatory retention requirements. We use
         reasonable technical and organisational measures to protect stored data, including
-        access controls limiting who at Sharma Ji Ka Office can view a given record.
+        access controls limiting who at One Infinity can view a given record.
       </p>
 
       <h2 className="text-lg font-semibold text-slate-800 pt-2">Your choices</h2>

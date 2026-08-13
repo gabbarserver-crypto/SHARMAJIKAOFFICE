@@ -2,10 +2,11 @@ import React, { useState, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import { useDarkMode } from "../lib/theme";
 import { useSidebarColor, SIDEBAR_COLORS } from "../lib/sidebarColor";
-import logoMark from "../assets/sjo-icon-mark.png";
+import logoMark from "../assets/one-infinity-icon-mark.png";
 import {
   LayoutGrid,
   FileOutput,
+  Inbox,
   Database,
   Receipt,
   IndianRupee,
@@ -28,6 +29,7 @@ const ICONS = {
   dashboard: LayoutGrid,
   applications: FileOutput,
   staffApplications: Users,
+  draftApplications: Inbox,
   chats: MessageSquare,
   masters: Database,
   payments: Receipt,
@@ -171,11 +173,11 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
       {/* Header */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b border-white/15">
         <div className="w-10 h-10 shrink-0 rounded-xl bg-white flex items-center justify-center overflow-hidden">
-          <img src={logoMark} alt="SJO" className="w-8 h-8 object-contain" />
+          <img src={logoMark} alt="One Infinity" className="w-8 h-8 object-contain" />
         </div>
         {!collapsed && (
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold truncate text-white">Sharma Ji Ka Office</p>
+            <p className="text-sm font-semibold truncate text-white">One Infinity</p>
             <p className="text-xs truncate text-white/60">RTO Services ERP</p>
           </div>
         )}

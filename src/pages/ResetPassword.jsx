@@ -1,7 +1,7 @@
 // src/pages/ResetPassword.jsx
 import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
-import logo from "../assets/sjo-logo-full.png";
+import logo from "../assets/one-infinity-logo-full.png";
 
 // Shown instead of the normal Dashboard/DealerPortal/Login when App.jsx
 // detects a PASSWORD_RECOVERY auth event — i.e. someone clicked the reset
@@ -41,7 +41,7 @@ export default function ResetPassword({ onDone }) {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-sm border border-slate-100">
         <div className="text-center mb-6">
-          <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[220px] mx-auto mb-2" />
+          <img src={logo} alt="One Infinity" className="w-full max-w-[220px] mx-auto mb-2" />
         </div>
 
         {done ? (

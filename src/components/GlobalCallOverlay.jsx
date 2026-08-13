@@ -103,7 +103,11 @@ export default function GlobalCallOverlay({ call }) {
             {call.callType === "video" ? (
               <>
                 <div ref={call.remoteVideoElRef} className="absolute inset-0 bg-slate-800" />
-                {!call.hasRemoteVideo && (
+                {call.endedReason ? (
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-rose-400 z-10">
+                    <PhoneOff size={14} /> {call.endedReason}
+                  </p>
+                ) : !call.hasRemoteVideo && (
                   <p className="text-sm text-slate-300 z-10">
                     {call.status === "in-call" ? "Waiting for their video…" : `Calling ${call.remoteName}…`}
                   </p>
@@ -119,10 +123,16 @@ export default function GlobalCallOverlay({ call }) {
                   {(call.remoteName || "?").split(" ").map((s) => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
                 </div>
                 <p className="text-base font-semibold mb-1">{call.remoteName}</p>
-                <p className="text-sm text-slate-300">
-                  {call.status === "ringing-outgoing" ? "Calling…" : call.status === "connecting" ? "Connecting…" : "On call"}
-                  {call.status === "in-call" && <CallTimer answeredAt={call.answeredAt} className="ml-1.5" />}
-                </p>
+                {call.endedReason ? (
+                  <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-rose-400">
+                    <PhoneOff size={14} /> {call.endedReason}
+                  </p>
+                ) : (
+                  <p className="text-sm text-slate-300">
+                    {call.status === "ringing-outgoing" ? "Calling…" : call.status === "connecting" ? "Connecting…" : "On call"}
+                    {call.status === "in-call" && <CallTimer answeredAt={call.answeredAt} className="ml-1.5" />}
+                  </p>
+                )}
               </div>
             )}
           </div>

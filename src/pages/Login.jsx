@@ -4,7 +4,7 @@ import { Eye, EyeOff, Fingerprint, Gamepad2 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { Browser } from "@capacitor/browser";
 import { supabase } from "../lib/supabase";
-import logo from "../assets/sjo-logo-full.png";
+import logo from "../assets/one-infinity-logo-full.png";
 
 // Google's four-color "G" glyph — not in lucide-react (it deliberately
 // excludes brand marks), so it's inlined here as a plain SVG.
@@ -141,7 +141,7 @@ export default function Login({ authError }) {
 
   const displayError = error || authError;
 
-  // Opens the standalone SJO Games site. Same reasoning as submitWithGoogle's
+  // Opens the standalone 1 Infinity Games site. Same reasoning as submitWithGoogle's
   // Browser.open() above: on native, a plain <a target="_blank"> would hand
   // off to the system browser (Chrome) instead of staying inside the app,
   // so it goes through the in-app Custom Tab there too.
@@ -174,7 +174,7 @@ export default function Login({ authError }) {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-sm border border-slate-100">
           <div className="text-center mb-6">
-            <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[240px] mx-auto mb-2" />
+            <img src={logo} alt="One Infinity" className="w-full max-w-[240px] mx-auto mb-2" />
           </div>
 
           {forgotSent ? (
@@ -232,7 +232,7 @@ export default function Login({ authError }) {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-sm border border-slate-100">
         <div className="text-center mb-6">
-          <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[240px] mx-auto mb-2" />
+          <img src={logo} alt="One Infinity" className="w-full max-w-[240px] mx-auto mb-2" />
         </div>
 
         <h1 className="text-2xl font-extrabold text-slate-900 text-center leading-tight">Login to your account.</h1>
@@ -318,7 +318,7 @@ export default function Login({ authError }) {
           className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl mt-3"
         >
           <Gamepad2 size={18} />
-          SJO Games
+          1 Infinity Games
         </button>
 
         {/* This portal is dealer/staff-only. Anyone landing here without a

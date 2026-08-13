@@ -15,7 +15,7 @@ import Avatar from "./Avatar";
 //   "open"      — full panel
 //   "minimized" — collapsed to a slim header bar (keeps the thread mounted,
 //                 so nothing is lost/reset), click it to reopen
-export default function ChatWidget({ dealerId, identity, title = "SJO Support" }) {
+export default function ChatWidget({ dealerId, identity, title = "1 Infinity Support" }) {
   const [state, setState] = useState("closed"); // "closed" | "open" | "minimized"
   const [unread, setUnread] = useState(0);
 

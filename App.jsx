@@ -78,7 +78,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-100 flex">
       <aside className="w-60 shrink-0 bg-[#0f1b3d] text-slate-300 flex flex-col">
         <div className="px-5 py-5 border-b border-white/10">
-          <p className="text-white font-bold text-lg leading-tight">Sharma Ji Ka Office</p>
+          <p className="text-white font-bold text-lg leading-tight">One Infinity</p>
           <p className="text-xs text-slate-400">RTO Services ERP — Admin</p>
         </div>
         <nav className="flex-1 py-3">

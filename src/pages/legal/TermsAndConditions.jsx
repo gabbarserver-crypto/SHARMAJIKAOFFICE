@@ -6,7 +6,7 @@ export default function TermsAndConditions() {
   return (
     <LegalLayout title="Terms &amp; Conditions" updated="11 August 2026">
       <p>
-        These terms govern use of the Sharma Ji Ka Office dealer portal and our Driving
+        These terms govern use of the One Infinity dealer portal and our Driving
         Licence, RC Transfer, PCC, and other RTO documentation services. By using our
         services or this website, you agree to the terms below.
       </p>
@@ -46,7 +46,7 @@ export default function TermsAndConditions() {
 
       <h2 className="text-lg font-semibold text-slate-800 pt-2">Limitation of liability</h2>
       <p>
-        To the extent permitted by law, Sharma Ji Ka Office is not liable for indirect or
+        To the extent permitted by law, One Infinity is not liable for indirect or
         consequential loss arising from use of our services, including delays caused by
         government departments outside our control.
       </p>

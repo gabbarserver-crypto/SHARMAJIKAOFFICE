@@ -80,9 +80,9 @@ function ddmmyyyyToISO(input) {
   return trimmed; // leave as-is, let DB flag invalid dates
 }
 
-function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false, noSpinner = false }) {
+function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false, readOnly = false, readOnlyTitle, noSpinner = false }) {
   const canEdit = useContext(CanEditContext);
-  const locked = disabled || !canEdit;
+  const locked = disabled || readOnly || !canEdit;
   const [val, setVal] = useState(value ?? "");
   useEffect(() => { setVal(value ?? ""); }, [value]);
   return (
@@ -91,7 +91,7 @@ function EditableCell({ value, onSave, type = "text", width = "w-24", placeholde
       value={locked ? (disabled ? "" : val) : val}
       placeholder={disabled ? "Not required" : (!canEdit ? "" : placeholder)}
       disabled={locked}
-      title={!canEdit && !disabled ? "You don't have edit access for this section" : undefined}
+      title={readOnly ? (readOnlyTitle || "Locked after approval") : (!canEdit && !disabled ? "You don't have edit access for this section" : undefined)}
       onChange={(e) => setVal(e.target.value)}
       onBlur={() => { if (String(val) !== String(value ?? "")) onSave(val); }}
       className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${noSpinner ? "no-spinner" : ""} ${
@@ -316,9 +316,9 @@ function getLearnerNo(answers) {
   return entry ? entry[1] || "" : "";
 }
 
-export default function Applications({ restricted = false, canEdit = true, canApprove = true, staff } = {}) {
+export default function Applications({ restricted = false, canEdit = true, canApprove = true, staff, onlyDraft = false } = {}) {
   const isAdmin = staff?.roles?.role_name === "Admin";
-  const [tab, setTab] = useState("All");
+  const [tab, setTab] = useState(onlyDraft ? "Draft Submitted" : "All");
   const [chatOnly, setChatOnly] = useState(false);
   const [compactView, setCompactView] = useState(false); // point 9
   // Defaults to current-year-only once the data set gets large (13k+ historical
@@ -392,7 +392,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       : "services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age)";
     let query = supabase
       .from("applications")
-      .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name)`)
+      .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name)`)
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
     // Dealer / RTO / Agency / Service filters used to run client-side after
@@ -500,7 +500,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // assignment — and was causing "assigned staff not showing" on reopen).
     const { data: freshRow } = await supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), fee_staff:fee_entered_by(full_name), appno_staff:application_no_entered_by(full_name), lldl_staff:ll_dl_no_entered_by(full_name), amount_staff:amount_entered_by(full_name)")
       .eq("id", row.id)
       .maybeSingle();
     let docs = (await supabase.from("application_documents").select("*").eq("application_id", row.id)).data || [];
@@ -677,6 +677,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (newStatus === "Under Review" && !selected.application_date) {
       updatePayload.application_date = new Date().toISOString().slice(0, 10);
     }
+    // "Accept" (Draft Submitted -> Under Review) has no separate assignment
+    // step anymore — staff just accept. Record who accepted separately from
+    // assigned_staff_id (which stays free for actual field/dealer assignment).
+    if (newStatus === "Under Review" && selected.status === "Draft Submitted" && staff?.id) {
+      updatePayload.accepted_by = staff.id;
+      updatePayload.accepted_at = new Date().toISOString();
+    }
 
     const { error } = await supabase
       .from("applications")
@@ -706,13 +713,27 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
+  // Fields where we additionally stamp who entered the value (and when),
+  // for the audit "Entry Log" — Fee, Application No, and LL/DL No.
+  const ENTRY_LOG_FIELDS = {
+    rto_fee: "fee",
+    application_no: "application_no",
+    ll_dl_no: "ll_dl_no",
+  };
+
   const updateRowField = async (id, field, value) => {
-    const { error } = await supabase.from("applications").update({ [field]: value }).eq("id", id);
+    const payload = { [field]: value };
+    const logKey = ENTRY_LOG_FIELDS[field];
+    if (logKey && value !== "" && value !== null && staff?.id) {
+      payload[`${logKey}_entered_by`] = staff.id;
+      payload[`${logKey}_entered_at`] = new Date().toISOString();
+    }
+    const { error } = await supabase.from("applications").update(payload).eq("id", id);
     if (error) {
       setToast("Failed to update: " + error.message);
       return;
     }
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
   };
 
   // Amount is special-cased: if this application has already been
@@ -722,7 +743,12 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // exists yet (not Completed), so it's always safe to call.
   const updateApplicationAmount = async (id, value) => {
     const newAmount = value === "" || value === null ? 0 : value;
-    const { error } = await supabase.from("applications").update({ amount: newAmount }).eq("id", id);
+    const payload = { amount: newAmount };
+    if (staff?.id) {
+      payload.amount_entered_by = staff.id;
+      payload.amount_entered_at = new Date().toISOString();
+    }
+    const { error } = await supabase.from("applications").update(payload).eq("id", id);
     if (error) {
       setToast("Failed to update amount: " + error.message);
       return;
@@ -731,7 +757,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (syncErr) {
       setToast("Amount saved, but ledger sync failed: " + syncErr.message);
     }
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, amount: newAmount } : r)));
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
   };
 
   // Agency Fee is a column on the SAME ledger_entries row as the rest of
@@ -941,6 +967,30 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // hides "Book Appointment" once it's been used, so it can't be clicked twice.
   const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
 
+  // Flags a row's Applicant Name as a repeat when another application already
+  // in the table has the exact same name + DOB and was submitted earlier —
+  // helps staff spot the same person applying again (or a re-entered
+  // duplicate) at a glance. Only the later record is flagged, not the
+  // original one it matches.
+  const duplicateApplicantIds = useMemo(() => {
+    const byKey = new Map(); // "name|dob" -> [{ id, submitted_at }]
+    for (const r of rows) {
+      const name = (r.applicant_name || "").trim().toLowerCase();
+      if (!name || !r.date_of_birth) continue;
+      const key = `${name}|${r.date_of_birth}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push({ id: r.id, submitted_at: r.submitted_at || "" });
+    }
+    const flagged = new Set();
+    for (const entries of byKey.values()) {
+      if (entries.length < 2) continue;
+      const sorted = [...entries].sort((a, b) => a.submitted_at.localeCompare(b.submitted_at) || a.id.localeCompare(b.id));
+      // Everything after the first (earliest) submission is a repeat.
+      sorted.slice(1).forEach((e) => flagged.add(e.id));
+    }
+    return flagged;
+  }, [rows]);
+
   const currentYear = new Date().getFullYear();
   // Dealer/RTO/Agency/Service and date-range filtering now happen in the
   // query itself (see load()) so a 15k-row table isn't fetched in full on
@@ -1064,7 +1114,18 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     <div>
       <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
         <div className="flex gap-2 flex-wrap items-center">
-          {STATUS_TABS.map((t) => {
+          {onlyDraft ? (
+            // Locked to Draft Submitted only — no tab switcher, so there's no
+            // way to accidentally wander into other statuses from this page.
+            <span className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-slate-900 text-white border-slate-900">
+              Draft Submitted
+              {rows.length > 0 && (
+                <span className="ml-1.5 inline-flex min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold items-center justify-center align-middle">
+                  {rows.length}
+                </span>
+              )}
+            </span>
+          ) : STATUS_TABS.map((t) => {
             const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
             return (
               <button
@@ -1334,7 +1395,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.applicant && (
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <button onClick={() => openDetail(r, isAdmin ? "admin" : "customer")} className="text-blue-600 font-semibold hover:underline text-left">
+                    <button
+                      onClick={() => openDetail(r, isAdmin ? "admin" : "customer")}
+                      title={duplicateApplicantIds.has(r.id) ? "Same name & DOB as an earlier application" : undefined}
+                      className={`font-semibold hover:underline text-left ${
+                        duplicateApplicantIds.has(r.id)
+                          ? "text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/40 px-1.5 py-0.5 rounded"
+                          : "text-blue-600"
+                      }`}
+                    >
                       {r.applicant_name}
                     </button>
                   </td>
@@ -1383,7 +1452,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 {visibleCols.application && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <EditableCell width="w-24" value={r.application_no} onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
+                      <EditableCell width="w-24" value={r.application_no} readOnly={r.status === "Accepted"} readOnlyTitle="Application No. is locked after approval" onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
                       <button
                         onClick={() => openSarathi(r)}
                         title="Open on Sarathi Parivahan and copy DOB"
@@ -1396,7 +1465,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.lldl && (
                   <td className="px-3 py-2">
-                    <EditableCell width="w-24" value={r.ll_dl_no} onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
+                    <EditableCell width="w-24" value={r.ll_dl_no} readOnly={r.status === "Accepted"} readOnlyTitle="LL/DL No. is locked after approval" onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
                   </td>
                 )}
                 {visibleCols.pccno && (
@@ -1498,7 +1567,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => openDetail(r, "status")}
-                      title="Assign staff, update status, view history"
+                      title={restricted ? "Accept or reject, view history" : "Assign staff, update status, view history"}
                       className="hover:opacity-80"
                     >
                       <StatusBadge status={r.status} />
@@ -1580,6 +1649,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           setPage={setPage}
           totalCount={sortedRows.length}
           pageSize={PAGE_SIZE}
+          duplicateApplicantIds={duplicateApplicantIds}
         />
       )}
 
@@ -1688,7 +1758,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 // PCC no, etc.) needs the full table's per-cell inputs, so switch back to
 // the normal view to edit — this view is for fast scanning across many
 // applications at once.
-function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rtoList, agencyList, page, totalPages, setPage, totalCount, pageSize }) {
+function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rtoList, agencyList, page, totalPages, setPage, totalCount, pageSize, duplicateApplicantIds }) {
   const fee = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
   const rtoName = (id) => rtoList.find((x) => x.id === id)?.name || "—";
   const agencyName = (id) => agencyList.find((x) => x.id === id)?.name || "—";
@@ -1730,7 +1800,7 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
                   </div>
                 </td>
                 <td className="px-3 py-2"><Pair top={fee(r.amount)} bottom={serviceLabel(r.services)} /></td>
-                <td className="px-3 py-2"><Pair top={dealerLabel(r.dealers)} bottom={r.applicant_name} /></td>
+                <td className="px-3 py-2"><Pair top={dealerLabel(r.dealers)} bottom={r.applicant_name} bottomClass={duplicateApplicantIds?.has(r.id) ? "text-amber-700 dark:text-amber-400 font-semibold" : ""} /></td>
                 <td className="px-3 py-2"><Pair top={r.application_no || "—"} bottom={r.pcc_no || "—"} /></td>
                 <td className="px-3 py-2"><Pair top={fee(r.rto_fee)} bottom={fee(r.pcc_fee)} /></td>
                 <td className="px-3 py-2"><Pair top={fee(r.agency_fee)} bottom={fee(profitOf(r))} /></td>
@@ -2842,6 +2912,41 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   );
 }
 
+// Small shared "who entered what" block — Accept, Fee, Application No,
+// LL/DL No, Amount — each only rendered once that field actually has a
+// value + a recorded staff. Used in both the staff Status modal and the
+// admin detail modal so the audit trail is visible in both places.
+function EntryLog({ app }) {
+  const rows = [
+    app.status !== "Draft Submitted" && app.accepted_staff?.full_name && {
+      label: "Accepted", name: app.accepted_staff.full_name, at: app.accepted_at,
+    },
+    app.rto_fee != null && app.fee_staff?.full_name && {
+      label: "Fee entered", name: app.fee_staff.full_name, at: app.fee_entered_at,
+    },
+    app.application_no && app.appno_staff?.full_name && {
+      label: "Application No entered", name: app.appno_staff.full_name, at: app.application_no_entered_at,
+    },
+    app.ll_dl_no && app.lldl_staff?.full_name && {
+      label: "LL/DL No entered", name: app.lldl_staff.full_name, at: app.ll_dl_no_entered_at,
+    },
+    app.amount != null && app.amount_staff?.full_name && {
+      label: "Amount entered", name: app.amount_staff.full_name, at: app.amount_entered_at,
+    },
+  ].filter(Boolean);
+  if (!rows.length) return null;
+  return (
+    <div className="mb-2 space-y-1">
+      {rows.map((r) => (
+        <p key={r.label} className="text-xs text-slate-500 dark:text-slate-500">
+          {r.label} by <span className="font-semibold text-slate-700 dark:text-slate-300">{r.name}</span>
+          {r.at && <span className="text-slate-400 dark:text-slate-500"> — {new Date(r.at).toLocaleString()}</span>}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, isAdmin = false, onClose, onStatusChange, onDelete, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
   const [remarks, setRemarks] = useState(app.remarks || "");
   const [staffId, setStaffId] = useState(app.assigned_staff_id || "");
@@ -2928,7 +3033,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
 
   if (mode === "status") {
     return (
-      <Modal title={`Status & Assignment — ${app.draft_code}`} onClose={onClose} wide>
+      <Modal title={restricted ? `Accept — ${app.draft_code}` : `Status & Assignment — ${app.draft_code}`} onClose={onClose} wide>
         <div className="flex items-center gap-2 mb-5">
           <span className="text-sm text-slate-500 dark:text-slate-500">Current status:</span>
           <StatusBadge status={app.status} />
@@ -2940,15 +3045,17 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </div>
         <div className="grid md:grid-cols-2 gap-6">
           <div>
-            <Card title="Assign Staff" className="mb-4">
-              <Field label="Responsible Staff">
-                <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
-                  <option value="">— Unassigned —</option>
-                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                </Select>
-              </Field>
-              <GhostButton onClick={() => onAssign(staffId || null)}>Save Assignment</GhostButton>
-            </Card>
+            {!restricted && (
+              <Card title="Assign Staff" className="mb-4">
+                <Field label="Responsible Staff">
+                  <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+                    <option value="">— Unassigned —</option>
+                    {staffList.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                  </Select>
+                </Field>
+                <GhostButton onClick={() => onAssign(staffId || null)}>Save Assignment</GhostButton>
+              </Card>
+            )}
 
             <Card title="Update Status">
               <Field label="Remarks (shown to dealer)">
@@ -2960,17 +3067,29 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                 />
               </Field>
               <div className="flex flex-wrap gap-2">
-                <PrimaryButton disabled={statusChanging} onClick={() => handleStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
-                <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
-                <PrimaryButton
-                  onClick={() => handleStatusChange("Accepted", remarks)}
-                  className="!bg-emerald-600 hover:!bg-emerald-700"
-                  disabled={!canApprove || statusChanging}
-                  title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
-                >
-                  Approve
-                </PrimaryButton>
-                <DangerButton disabled={statusChanging} onClick={() => handleStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                {restricted ? (
+                  <PrimaryButton
+                    disabled={statusChanging}
+                    onClick={() => handleStatusChange("Under Review", remarks)}
+                    className="!bg-emerald-600 hover:!bg-emerald-700"
+                  >
+                    Accept
+                  </PrimaryButton>
+                ) : (
+                  <>
+                    <PrimaryButton disabled={statusChanging} onClick={() => handleStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
+                    <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                    <PrimaryButton
+                      onClick={() => handleStatusChange("Accepted", remarks)}
+                      className="!bg-emerald-600 hover:!bg-emerald-700"
+                      disabled={!canApprove || statusChanging}
+                      title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
+                    >
+                      Approve
+                    </PrimaryButton>
+                    <DangerButton disabled={statusChanging} onClick={() => handleStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                  </>
+                )}
                 {isAdmin && (
                   <DangerButton
                     onClick={() => onDelete(app)}
@@ -2986,6 +3105,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
 
           <div>
             <Card title="Application History">
+              <EntryLog app={app} />
               {(app.history || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No history yet</p>}
               {(app.history || []).map((h) => (
                 <div key={h.id} className="text-xs text-slate-500 dark:text-slate-500 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
@@ -3177,6 +3297,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
             </Card>
 
             <Card title="Application History" className="mb-4">
+              <EntryLog app={app} />
               {(app.history || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No history yet</p>}
               {(app.history || []).map((h) => (
                 <div key={h.id} className="text-xs text-slate-500 dark:text-slate-500 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
@@ -3480,4 +3601,11 @@ function DocumentRow({ doc, applicationId, onChanged }) {
 // App.jsx so it's a distinct, bookmarkable view rather than a toggle.
 export function StaffApplications({ canEdit = true, canApprove = true, staff } = {}) {
   return <Applications restricted canEdit={canEdit} canApprove={canApprove} staff={staff} />;
+}
+
+// Locked to Draft Submitted applications only — no tab switcher, so this is
+// a dedicated "inbox" of everything still waiting on a first look. Wired up
+// as its own nav tab in App.jsx, sitting between Applications and Call/Chat.
+export function DraftApplications({ canEdit = true, canApprove = true, staff } = {}) {
+  return <Applications onlyDraft canEdit={canEdit} canApprove={canApprove} staff={staff} />;
 }

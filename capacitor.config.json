@@ -1,6 +1,6 @@
 {
-  "appId": "com.sharmajikaoffice.erp",
-  "appName": "Sharma Ji Ka Office",
+  "appId": "com.oneinfinity.erp",
+  "appName": "One Infinity",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"

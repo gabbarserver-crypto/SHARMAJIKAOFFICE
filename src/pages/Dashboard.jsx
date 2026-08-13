@@ -23,7 +23,7 @@ const OVERFLOW_ICONS = { payments: CreditCard, reports: BarChart2, settings: Set
 const APP_VERSION = "1.0.0";
 const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
 
-// SJO Games — opens the standalone games site, handing off the current
+// 1 Infinity Games — opens the standalone games site, handing off the current
 // Supabase session so a staff member who's already logged in here doesn't
 // have to log in again there. Both apps share the same Supabase project,
 // so the games site adopts this session via supabase.auth.setSession().
@@ -195,7 +195,7 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
             <Gamepad2 size={22} />
           </div>
           <div>
-            <p className="font-semibold text-slate-800 dark:text-slate-100">SJO Games</p>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">1 Infinity Games</p>
             <p className="text-sm text-slate-400 dark:text-slate-500">
               Take a break — play a quick round, no extra login needed
             </p>

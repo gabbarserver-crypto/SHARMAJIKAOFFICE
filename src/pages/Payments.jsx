@@ -31,6 +31,8 @@ export default function Payments({ staff } = {}) {
   const [recentQuery, setRecentQuery] = useState("");
   const [recentSortKey, setRecentSortKey] = useState("date");
   const [recentSortDir, setRecentSortDir] = useState("desc");
+  const [bankFeeDeducted, setBankFeeDeducted] = useState(0); // sum of every application's RTO/govt fee — always paid out of the bank
+  const [bankBalanceLoading, setBankBalanceLoading] = useState(true);
 
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.tagName === "SELECT" ? e.target.value : e.target.value.toUpperCase() }));
 
@@ -42,8 +44,44 @@ export default function Payments({ staff } = {}) {
       setAgencies(a || []);
       loadRecent();
       loadAllPayments();
+      loadBankBalance();
     })();
   }, []);
+
+  // Bank Balance = every UPI payment received (lands straight in the bank)
+  // minus every application's RTO/govt fee (always paid out of the bank as
+  // an online challan) — regardless of how the fee-paying dealer's payment
+  // itself was collected (cash, cheque, card, etc. don't touch the bank).
+  // Fee total is paginated the same way loadAllPayments is, since a plain
+  // .select("rto_fee") would otherwise get silently capped at the
+  // project's "Max Rows" setting.
+  const loadBankBalance = async () => {
+    setBankBalanceLoading(true);
+    const pageSize = 1000;
+    const maxPages = 50;
+    let total = 0;
+    for (let page = 0; page < maxPages; page++) {
+      const from = page * pageSize;
+      const { data, error } = await supabase
+        .from("applications")
+        .select("rto_fee")
+        .not("rto_fee", "is", null)
+        .range(from, from + pageSize - 1);
+      if (error) {
+        console.error("loadBankBalance:", error);
+        break;
+      }
+      total += (data || []).reduce((acc, r) => acc + Number(r.rto_fee || 0), 0);
+      if (!data || data.length < pageSize) break;
+    }
+    setBankFeeDeducted(total);
+    setBankBalanceLoading(false);
+  };
+
+  const bankUpiReceived = allPayments
+    .filter((p) => p.payment_mode === "UPI")
+    .reduce((acc, p) => acc + Number(p.amount || 0), 0);
+  const bankBalance = bankUpiReceived - bankFeeDeducted;
 
   useEffect(() => {
     (async () => {
@@ -311,9 +349,20 @@ export default function Payments({ staff } = {}) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex justify-end gap-2">
-        <PrimaryButton onClick={() => setShowSendQr(true)}>📲 Send Payment QR</PrimaryButton>
-        <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Card className="!p-4">
+          <p className="text-xs text-slate-400 dark:text-slate-500">Bank Balance</p>
+          <p className={`text-xl font-bold mt-1 ${bankBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
+            {bankBalanceLoading ? "…" : `₹${bankBalance.toLocaleString("en-IN")}`}
+          </p>
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+            UPI received ₹{bankUpiReceived.toLocaleString("en-IN")} − Application fee paid ₹{bankFeeDeducted.toLocaleString("en-IN")}
+          </p>
+        </Card>
+        <div className="flex gap-2">
+          <PrimaryButton onClick={() => setShowSendQr(true)}>📲 Send Payment QR</PrimaryButton>
+          <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>
+        </div>
       </div>
 
       {showSendQr && (

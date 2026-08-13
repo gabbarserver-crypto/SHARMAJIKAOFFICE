@@ -1,37 +1,35 @@
-SJO ERP — Handsfree (Speaker) toggle for calls
-================================================
+One Infinity ERP — "Draft Application" sidebar tab
+==========================================
 
-Where each file goes:
+Kya add hua:
+  Sidebar mein "Applications" ke niche aur "Call/Chat" ke upar ek naya
+  tab "Draft Application" — isme sirf status = "Draft Submitted" wali
+  applications dikhengi. Status-switcher bar (All/Under Review/etc.) is
+  page par nahi dikhega, taaki galti se doosre status pe switch na ho
+  jaye — ye page hamesha sirf Draft Submitted dikhayega.
 
-  src/lib/speakerMode.js              → src/lib/speakerMode.js  (new file)
-  src/lib/call.js                     → src/lib/call.js
-  src/lib/directCall.js               → src/lib/directCall.js
-  src/components/GlobalCallOverlay.jsx → src/components/GlobalCallOverlay.jsx
-  src/components/ChatPanel.jsx        → src/components/ChatPanel.jsx
-  android_native/SpeakerModePlugin.java → android/app/src/main/java/com/sharmajikaoffice/erp/SpeakerModePlugin.java (new file)
-  android_native/MainActivity.java    → android/app/src/main/java/com/sharmajikaoffice/erp/MainActivity.java
+Baaki sab kaam wahi hai jo already Applications page mein tha (same
+row actions: Accept, status change, chat, document review, edit) —
+is step mein sirf NAVIGATION + FILTER add kiya hai. "Assign Staff hatana"
+aur "Accept/Reject tak actions restrict karna, aur kisne kya field bhara
+uska log rakhna" — ye abhi implement NAHI kiya, kyunki wo alag,
+bada kaam hai (naya audit-log table chahiye hoga) — jab confirm karo
+scope, wo agla step hoga.
 
-Why a native plugin was needed:
-Calls run on Agora's Web SDK inside the Android WebView. That SDK has no
-"speakerphone" concept — routing audio to the loudspeaker vs. the earpiece
-is an Android AudioManager setting, not something a web page can control.
-SpeakerModePlugin.java is a small bridge for just that one setting.
+Files (already patched, ready to drop in):
+  Applications.jsx  → src/pages/Applications.jsx  (replace)
+  App.jsx            → src/App.jsx                 (replace)
+  Sidebar.jsx         → src/components/Sidebar.jsx  (replace)
 
-What you get:
-- A new Handsfree/Speaker button next to Mute, once a call connects
-  (both the full-screen call UI and the in-chat-panel call UI).
-- Defaults: video calls start on speaker (phone usually propped up/held
-  away from the ear), audio calls start on earpiece (held to the ear like
-  a normal call) — tap the button any time to switch.
-- Audio routing resets back to normal once the call ends.
+Agar aap already-modified versions rakhna chahte ho aur sirf ye
+changes lagana chahte ho (jaise agar aapne DealerPortal.jsx jaisa kuch
+aur bhi change kar rakha hai), to .diff files use kar lo:
+  Applications.jsx.diff
+  App.jsx.diff
+  Sidebar.jsx.diff
+(git apply Applications.jsx.diff  -- ya manually patch karke)
+
+Teeno files esbuild se syntax-check ho chuki hain, koi error nahi.
 
 After copying files:
-  npm install     (no new npm packages needed — this is a local native plugin)
-  npx cap sync android
-Then in Android Studio: Clean Project → Rebuild → reinstall the APK.
-
-Note: MainActivity.java here already includes your existing mic/camera
-permission fix — just adds the one registerPlugin(SpeakerModePlugin.class)
-line before super.onCreate(). If your actual MainActivity.java has since
-changed further, just add that one line + the import yourself instead of
-overwriting the whole file.
+  npm run build   (ya npm run dev se local test)

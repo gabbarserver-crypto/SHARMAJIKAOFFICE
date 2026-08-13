@@ -11,7 +11,7 @@ import Login from "./pages/Login";
 import Welcome from "./pages/Welcome";
 import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
-import Applications, { StaffApplications } from "./pages/Applications";
+import Applications, { StaffApplications, DraftApplications } from "./pages/Applications";
 import Payments from "./pages/Payments";
 import Ledger from "./pages/Ledger";import Reports from "./pages/Reports";
 import Masters from "./pages/Masters";
@@ -56,6 +56,7 @@ const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
   { key: "applications", label: "Applications", Component: Applications },
   { key: "staffApplications", label: "Staff View", Component: StaffApplications },
+  { key: "draftApplications", label: "Draft Application", Component: DraftApplications },
   { key: "chats", label: "Call/Chat", Component: Chats },
   { key: "masters", label: "Masters", Component: Masters },
   { key: "payments", label: "Payments", Component: Payments },
@@ -75,6 +76,10 @@ const MODULE_BY_NAV_KEY = {
   dashboard: "dashboard",
   applications: "applications",
   staffApplications: "staffApplications",
+  // Reuses the "applications" permission row rather than needing its own —
+  // anyone who can already view Applications sees this tab too, no new
+  // permissions-table row required for existing roles.
+  draftApplications: "applications",
   chats: "chats",
   masters: "masters",
   payments: "payments",

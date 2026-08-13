@@ -70,5 +70,5 @@ command generates every density/size Android needs automatically.
 - `vite.config.js` — set `base: './'` so asset paths resolve correctly
   inside Capacitor's WebView (a very common cause of a blank white screen
   on first launch otherwise). This doesn't affect your normal web hosting.
-- `capacitor.config.json` — app ID `com.sharmajikaoffice.erp`, app name
-  "Sharma Ji Ka Office", pointed at the `dist/` build output.
+- `capacitor.config.json` — app ID `com.oneinfinity.erp`, app name
+  "One Infinity", pointed at the `dist/` build output.

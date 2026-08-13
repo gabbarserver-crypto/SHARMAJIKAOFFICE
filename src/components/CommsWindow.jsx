@@ -495,6 +495,7 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
   const [loading, setLoading] = useState(true);
   const [missedOnly, setMissedOnly] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [menuRowId, setMenuRowId] = useState(null); // which row's Chat/Call popover is open
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -522,6 +523,34 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
   }, [load, variant, dealerId]);
 
   const visibleRows = missedOnly ? rows.filter((r) => r.outcome !== "answered") : rows;
+
+  // Resolves "Chat" for a row regardless of whether it was a thread call
+  // (thread already exists) or a direct call (need to find/derive the
+  // dealer the counterpart belongs to before a thread can be opened).
+  const openChatWith = async (counterpart, threadInfo) => {
+    setMenuRowId(null);
+    if (threadInfo) {
+      onOpenThread({ threadId: threadInfo.threadId, dealerId: variant === "staff" ? threadInfo.dealerId : dealerId, applicationId: threadInfo.applicationId, label: threadInfo.appLabel, dealerName: threadInfo.dealerName });
+      return;
+    }
+    if (variant !== "staff") {
+      // Dealer side: every staff member shares the one "Support Team" thread.
+      onOpenThread({ dealerId, applicationId: null, label: "Support Team", dealerName: null });
+      return;
+    }
+    if (counterpart?.type === "dealer") {
+      onOpenThread({ dealerId: counterpart.id, applicationId: null, label: counterpart.name, dealerName: counterpart.name });
+      return;
+    }
+    if (counterpart?.type === "dealer_staff") {
+      const { data } = await supabase.from("dealer_staff").select("dealer_id, dealers(short_name, name)").eq("id", counterpart.id).maybeSingle();
+      if (data?.dealer_id) {
+        onOpenThread({ dealerId: data.dealer_id, applicationId: null, label: counterpart.name, dealerName: data.dealers?.short_name || data.dealers?.name });
+      }
+    }
+    // counterpart.type === "staff" (an internal staff-to-staff call) has no
+    // dealer thread to open — Chat stays disabled for those rows.
+  };
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -554,11 +583,18 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
               : null;
             const who = r.caller_name || r.callee_name || "Unknown";
             const threadInfo = r.source === "thread" ? threadLabelFromRow(r) : null;
+            const canCall = !!counterpart?.id;
+            const canChat = !!threadInfo || variant !== "staff" || counterpart?.type === "dealer" || counterpart?.type === "dealer_staff";
+            const menuOpen = menuRowId === r.id;
 
             return (
-              <div key={r.id} className="w-full px-4 py-3 flex items-center gap-3">
+              <div key={r.id} className="w-full px-4 py-3 flex items-center gap-3 relative">
                 <PastelAvatar name={who} size={38} />
-                <div className="min-w-0 flex-1">
+                <button
+                  onClick={() => setMenuRowId(menuOpen ? null : r.id)}
+                  className="min-w-0 flex-1 text-left"
+                  title={`Options for ${who}`}
+                >
                   <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{who}</p>
                   <div className="flex items-center gap-1.5">
                     <Icon size={13} className={color} />
@@ -567,7 +603,7 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
                     </span>
                     <span className="text-[11px] text-slate-400 dark:text-slate-500">· {timeAgo(r.started_at)}</span>
                   </div>
-                </div>
+                </button>
                 {counterpart?.id ? (
                   <button
                     onClick={() => call?.startCall(counterpart, "audio")}
@@ -579,13 +615,35 @@ function CallsTab({ variant, dealerId, identity, call, onOpenThread }) {
                   </button>
                 ) : threadInfo ? (
                   <button
-                    onClick={() => onOpenThread({ threadId: threadInfo.threadId, dealerId: variant === "staff" ? threadInfo.dealerId : dealerId, applicationId: threadInfo.applicationId, label: threadInfo.appLabel, dealerName: threadInfo.dealerName })}
+                    onClick={() => openChatWith(counterpart, threadInfo)}
                     title="Open this chat"
                     className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100"
                   >
                     <MessageSquare size={15} />
                   </button>
                 ) : null}
+
+                {menuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setMenuRowId(null)} />
+                    <div className="absolute left-12 top-12 z-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 w-36">
+                      <button
+                        onClick={() => { setMenuRowId(null); canChat && openChatWith(counterpart, threadInfo); }}
+                        disabled={!canChat}
+                        className="w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <MessageSquare size={13} className="text-emerald-600" /> Chat
+                      </button>
+                      <button
+                        onClick={() => { setMenuRowId(null); canCall && call?.startCall(counterpart, "audio"); }}
+                        disabled={!canCall || !call || call.status !== "idle"}
+                        className="w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <Phone size={13} className="text-emerald-600" /> Call
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             );
           })}

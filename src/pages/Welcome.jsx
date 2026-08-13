@@ -12,10 +12,10 @@ import { Gamepad2 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { Browser } from "@capacitor/browser";
 import { supabase } from "../lib/supabase";
-import logo from "../assets/sjo-logo-full.png";
+import logo from "../assets/one-infinity-logo-full.png";
 
 export default function Welcome({ onContinue }) {
-  // Opens the standalone SJO Games site. On native, a plain <a target="_blank">
+  // Opens the standalone 1 Infinity Games site. On native, a plain <a target="_blank">
   // would hand off to the system browser (Chrome) instead of staying inside
   // the app, so it goes through an in-app Custom Tab instead (same reasoning
   // as submitWithGoogle in Login.jsx).
@@ -48,7 +48,7 @@ export default function Welcome({ onContinue }) {
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-sm text-center">
           <div className="bg-white rounded-2xl p-8 shadow-xl">
-            <img src={logo} alt="Sharma Ji Ka Office" className="w-full max-w-[240px] mx-auto mb-4" />
+            <img src={logo} alt="One Infinity" className="w-full max-w-[240px] mx-auto mb-4" />
             <p className="text-slate-500 text-sm leading-relaxed mb-6">
               Your trusted partner for Driving Licence, RC Transfer, PCC and other RTO services.
             </p>
@@ -73,7 +73,7 @@ export default function Welcome({ onContinue }) {
                 className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl mt-3"
               >
                 <Gamepad2 size={18} />
-                SJO Games
+                1 Infinity Games
               </button>
             </div>
           </div>
@@ -94,7 +94,7 @@ export default function Welcome({ onContinue }) {
             <a href="/contact-us" className="hover:text-white/80">Contact Us</a>
           </nav>
           <p>Dayalpur, 33 Ft Road, North East Delhi – 110094 · 9899029807</p>
-          <p>© {new Date().getFullYear()} Sharma Ji Ka Office</p>
+          <p>© {new Date().getFullYear()} One Infinity</p>
         </div>
       </footer>
     </div>

@@ -37,9 +37,9 @@ export default function Login({ onLoggedIn }) {
       <div className="bg-white rounded-2xl w-full max-w-sm p-8">
         <div className="text-center mb-6">
           <div className="w-16 h-16 rounded-full border-2 border-amber-500 mx-auto flex items-center justify-center mb-3">
-            <span className="font-extrabold text-lg tracking-wide text-slate-800">SJO</span>
+            <span className="font-extrabold text-lg tracking-wide text-slate-800">1 Infinity</span>
           </div>
-          <h1 className="font-bold text-slate-800 text-lg">Sharma Ji Ka Office</h1>
+          <h1 className="font-bold text-slate-800 text-lg">One Infinity</h1>
           <p className="text-slate-400 text-sm">Admin / Staff Login</p>
         </div>
 

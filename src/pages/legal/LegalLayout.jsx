@@ -6,7 +6,7 @@
 // logic even runs, so they're reachable with no login and no session at
 // all (required for payment-gateway KYC verification of the site).
 import React from "react";
-import logo from "../../assets/sjo-logo-full.png";
+import logo from "../../assets/one-infinity-logo-full.png";
 
 export default function LegalLayout({ title, updated, children }) {
   return (
@@ -14,7 +14,7 @@ export default function LegalLayout({ title, updated, children }) {
       <header className="bg-[#0f1b3d]">
         <div className="max-w-3xl mx-auto px-5 py-4 flex items-center justify-between">
           <a href="/" className="flex items-center gap-2">
-            <img src={logo} alt="Sharma Ji Ka Office" className="h-8 w-auto" />
+            <img src={logo} alt="One Infinity" className="h-8 w-auto" />
           </a>
           <a href="/" className="text-white/70 hover:text-white text-sm">
             ← Back to home
@@ -36,7 +36,7 @@ export default function LegalLayout({ title, updated, children }) {
 
       <footer className="bg-[#0f1b3d] text-white/60 text-sm">
         <div className="max-w-3xl mx-auto px-5 py-6 flex flex-wrap gap-x-6 gap-y-2 justify-between">
-          <span>© {new Date().getFullYear()} Sharma Ji Ka Office</span>
+          <span>© {new Date().getFullYear()} One Infinity</span>
           <nav className="flex flex-wrap gap-x-5 gap-y-2">
             <a href="/privacy-policy" className="hover:text-white">Privacy Policy</a>
             <a href="/terms-and-conditions" className="hover:text-white">Terms &amp; Conditions</a>
