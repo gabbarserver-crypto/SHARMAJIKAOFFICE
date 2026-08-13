@@ -629,7 +629,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
         <Field label="Applicant already has a Driving Licence or Learner Licence?">
           <Select value={f.already_has_dl_ll} onChange={set("already_has_dl_ll")}>
             <option value="">Select…</option>
-            <option value="No">No</option>
+            <option value="No">No (Fresh) </option>
             <option value="Yes — has Learner Licence">Yes — has Learner Licence</option>
             <option value="Yes — has Driving Licence">Yes — has Driving Licence</option>
           </Select>
@@ -1012,9 +1012,13 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
       return;
     }
     const { data: urlData } = supabase.storage.from("application-documents").getPublicUrl(path);
+    // Auto-verify: a document the dealer uploads is trusted immediately (no
+    // "Pending" wait for staff to click Verify) — staff can still Reject it
+    // afterwards if something's actually wrong with it (see DocumentRow in
+    // Applications.jsx, which now allows Reject even on a Verified doc).
     const { error: updateError } = await supabase
       .from("application_documents")
-      .update({ file_url: urlData.publicUrl, status: "Pending", reject_reason: null })
+      .update({ file_url: urlData.publicUrl, status: "Verified", reject_reason: null, verified_at: new Date().toISOString() })
       .eq("id", doc.id);
     setBusyId(null);
     if (updateError) {

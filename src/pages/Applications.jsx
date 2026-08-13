@@ -3560,7 +3560,22 @@ function DocumentRow({ doc, applicationId, onChanged }) {
   return (
     <div className="py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
       <div className="flex items-center justify-between text-sm">
-        <span className="text-slate-700 dark:text-slate-300">{doc.name}</span>
+        <div className="flex items-center gap-2">
+          {doc.file_url ? (
+            /\.(png|jpe?g|gif|webp|bmp)$/i.test(doc.file_url) ? (
+              <img
+                src={doc.file_url}
+                alt={doc.name}
+                className="w-10 h-10 rounded border border-slate-200 dark:border-slate-800 object-cover shrink-0"
+              />
+            ) : (
+              <span className="w-10 h-10 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-center text-[9px] font-semibold text-slate-400 dark:text-slate-500 shrink-0">
+                FILE
+              </span>
+            )
+          ) : null}
+          <span className="text-slate-700 dark:text-slate-300">{doc.name}</span>
+        </div>
         <div className="flex items-center gap-2">
           {doc.file_url ? (
             <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-blue-600 text-xs font-semibold">View</a>
@@ -3572,9 +3587,16 @@ function DocumentRow({ doc, applicationId, onChanged }) {
           </span>
         </div>
       </div>
-      {doc.file_url && doc.status !== "Verified" && doc.status !== "Rejected" && (
+      {doc.file_url && doc.status !== "Rejected" && (
         <div className="flex gap-2 mt-1.5">
-          <button disabled={busy} onClick={() => setStatus("Verified")} className="text-xs font-semibold text-emerald-600 disabled:opacity-50">Verify</button>
+          {/* Verify is only needed for a doc still sitting at Pending (e.g.
+              one staff uploaded themselves) — a dealer's own upload is
+              already auto-verified. Reject stays available even once
+              Verified, since an auto-verified doc can still turn out to be
+              wrong and needs to be catchable. */}
+          {doc.status !== "Verified" && (
+            <button disabled={busy} onClick={() => setStatus("Verified")} className="text-xs font-semibold text-emerald-600 disabled:opacity-50">Verify</button>
+          )}
           <button disabled={busy} onClick={() => setStatus("Rejected")} className="text-xs font-semibold text-rose-500 disabled:opacity-50">Reject</button>
         </div>
       )}
