@@ -272,8 +272,18 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
           >
             Agency
           </button>
+          <button
+            onClick={() => setEntityMode("bank")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+              entityMode === "bank" ? "bg-blue-600 text-white" : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            Bank
+          </button>
         </div>
       )}
+
+      {(only === "bank" || (!only && entityMode === "bank")) && <BankTab />}
 
       {(only === "dealer" || (!only && entityMode === "dealer")) && (
         <SundryHead
@@ -692,3 +702,136 @@ function SortableTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "lef
     </th>
   );
 }
+
+// Bank tab — tracks money actually flowing through the bank account:
+// RTO government fee paid out (rto_fee on SERVICE entries) vs. money
+// collected via UPI (Cash never touches the bank, so it's excluded), with
+// a running Bank Balance. Backed by the bank_ledger view
+// (009_bank_ledger_view.sql), which already does the daily grouping and
+// running-total math server-side.
+function BankTab() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const { data, error } = await supabase.from("bank_ledger").select("*").order("entry_date", { ascending: false });
+      if (error) { setLoadError(error.message); setLoading(false); return; }
+      setLoadError(null);
+      setRows(data || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayRow = rows.find((r) => r.entry_date === today);
+  const latestBalance = rows[0]?.bank_balance ?? 0; // rows are newest-first
+
+  const filteredRows = rows.filter((r) => {
+    if (rangeFrom && r.entry_date < rangeFrom) return false;
+    if (rangeTo && r.entry_date > rangeTo) return false;
+    return true;
+  });
+  const periodTotals = filteredRows.reduce(
+    (acc, r) => {
+      acc.feePaid += Number(r.fee_paid || 0);
+      acc.upiReceived += Number(r.upi_received || 0);
+      return acc;
+    },
+    { feePaid: 0, upiReceived: 0 }
+  );
+
+  return (
+    <div>
+      <div className="grid sm:grid-cols-3 gap-4 mb-5">
+        <Card>
+          <p className="text-xs text-slate-400 dark:text-slate-500">Fee Paid Today</p>
+          <p className="text-xl font-bold text-rose-600 mt-1">₹{Number(todayRow?.fee_paid || 0).toLocaleString("en-IN")}</p>
+        </Card>
+        <Card>
+          <p className="text-xs text-slate-400 dark:text-slate-500">Received in Bank Today (UPI)</p>
+          <p className="text-xl font-bold text-emerald-600 mt-1">₹{Number(todayRow?.upi_received || 0).toLocaleString("en-IN")}</p>
+        </Card>
+        <Card>
+          <p className="text-xs text-slate-400 dark:text-slate-500">Bank Balance</p>
+          <p className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-1">₹{Number(latestBalance).toLocaleString("en-IN")}</p>
+          {loadError && <p className="text-[11px] text-amber-600 mt-1">Error: {loadError}</p>}
+        </Card>
+      </div>
+
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <label className="text-xs text-slate-400 dark:text-slate-500">From</label>
+        <input
+          type="date"
+          value={rangeFrom}
+          onChange={(e) => setRangeFrom(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+        />
+        <label className="text-xs text-slate-400 dark:text-slate-500">To</label>
+        <input
+          type="date"
+          value={rangeTo}
+          onChange={(e) => setRangeTo(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+        />
+        {(rangeFrom || rangeTo) && (
+          <button onClick={() => { setRangeFrom(""); setRangeTo(""); }} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
+            Clear
+          </button>
+        )}
+        {(rangeFrom || rangeTo) && (
+          <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">
+            Period total — Fee Paid: <span className="text-rose-600 font-semibold">₹{periodTotals.feePaid.toLocaleString("en-IN")}</span>
+            {" · "}UPI Received: <span className="text-emerald-600 font-semibold">₹{periodTotals.upiReceived.toLocaleString("en-IN")}</span>
+          </span>
+        )}
+      </div>
+
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
+            <tr>
+              <th className="px-3 py-2 text-left">Date</th>
+              <th className="px-3 py-2 text-right">Fee Paid</th>
+              <th className="px-3 py-2 text-right">UPI Received</th>
+              <th className="px-3 py-2 text-right">Net</th>
+              <th className="px-3 py-2 text-right">Bank Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={5} className="text-center text-slate-400 dark:text-slate-500 py-8">Loading…</td></tr>
+            ) : filteredRows.length === 0 ? (
+              <tr><td colSpan={5} className="text-center text-slate-400 dark:text-slate-500 py-8">No activity yet</td></tr>
+            ) : (
+              filteredRows.map((r) => (
+                <tr key={r.entry_date} className={`border-t border-slate-100 dark:border-slate-800 ${r.entry_date === today ? "bg-blue-50 dark:bg-blue-500/10" : ""}`}>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">
+                    {new Date(r.entry_date).toLocaleDateString("en-IN")}{r.entry_date === today ? " (Today)" : ""}
+                  </td>
+                  <td className="px-3 py-2 text-right text-rose-600 font-medium whitespace-nowrap">
+                    {r.fee_paid > 0 ? `₹${Number(r.fee_paid).toLocaleString("en-IN")}` : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right text-emerald-600 font-medium whitespace-nowrap">
+                    {r.upi_received > 0 ? `₹${Number(r.upi_received).toLocaleString("en-IN")}` : "—"}
+                  </td>
+                  <td className={`px-3 py-2 text-right font-medium whitespace-nowrap ${r.net_for_day < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                    {r.net_for_day >= 0 ? "+" : ""}₹{Number(r.net_for_day).toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                    ₹{Number(r.bank_balance).toLocaleString("en-IN")}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+

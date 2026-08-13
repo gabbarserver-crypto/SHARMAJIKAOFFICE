@@ -33,6 +33,7 @@ export default function Payments({ staff } = {}) {
   const [recentSortDir, setRecentSortDir] = useState("desc");
   const [bankFeeDeducted, setBankFeeDeducted] = useState(0); // sum of every application's RTO/govt fee — always paid out of the bank
   const [bankBalanceLoading, setBankBalanceLoading] = useState(true);
+  const [bankBalanceError, setBankBalanceError] = useState("");
   const [feeRows, setFeeRows] = useState([]); // application fee rows powering the Bank Transactions table
   const [bankQuery, setBankQuery] = useState("");
   const [bankDateFrom, setBankDateFrom] = useState("");
@@ -63,26 +64,35 @@ export default function Payments({ staff } = {}) {
   // each fee belongs to.
   const loadBankBalance = async () => {
     setBankBalanceLoading(true);
-    const pageSize = 1000;
-    const maxPages = 50;
-    let all = [];
-    for (let page = 0; page < maxPages; page++) {
-      const from = page * pageSize;
-      const { data, error } = await supabase
-        .from("applications")
-        .select("id, draft_code, applicant_name, rto_fee, fee_entered_at, application_date, submitted_at")
-        .not("rto_fee", "is", null)
-        .range(from, from + pageSize - 1);
-      if (error) {
-        console.error("loadBankBalance:", error);
-        break;
+    setBankBalanceError("");
+    try {
+      const pageSize = 1000;
+      const maxPages = 50;
+      let all = [];
+      for (let page = 0; page < maxPages; page++) {
+        const from = page * pageSize;
+        const { data, error } = await supabase
+          .from("applications")
+          .select("id, draft_code, applicant_name, rto_fee, fee_entered_at, application_date, submitted_at")
+          .not("rto_fee", "is", null)
+          .range(from, from + pageSize - 1);
+        if (error) throw error; // caught below — guarantees the spinner clears either way
+        all = all.concat(data || []);
+        if (!data || data.length < pageSize) break;
       }
-      all = all.concat(data || []);
-      if (!data || data.length < pageSize) break;
+      setFeeRows(all);
+      setBankFeeDeducted(all.reduce((acc, r) => acc + Number(r.rto_fee || 0), 0));
+    } catch (err) {
+      console.error("loadBankBalance:", err);
+      setBankBalanceError(err?.message || "Couldn't load application fees");
+      setFeeRows([]);
+      setBankFeeDeducted(0);
+    } finally {
+      // Always runs, even on a thrown/network error — this is what was
+      // missing before and left "Bank Balance" stuck on "…" forever
+      // whenever this particular query failed.
+      setBankBalanceLoading(false);
     }
-    setFeeRows(all);
-    setBankFeeDeducted(all.reduce((acc, r) => acc + Number(r.rto_fee || 0), 0));
-    setBankBalanceLoading(false);
   };
 
   // Money IN: dealer payments collected via UPI (UPI lands straight in the
@@ -420,9 +430,16 @@ export default function Payments({ staff } = {}) {
           <p className={`text-xl font-bold mt-1 ${bankBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
             {bankBalanceLoading ? "…" : `₹${bankBalance.toLocaleString("en-IN")}`}
           </p>
-          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-            UPI received ₹{bankUpiReceived.toLocaleString("en-IN")} − Application fee paid ₹{bankFeeDeducted.toLocaleString("en-IN")} − Agency payouts ₹{bankAgencyPaidOut.toLocaleString("en-IN")}
-          </p>
+          {bankBalanceError ? (
+            <p className="text-[11px] text-rose-500 mt-1">
+              Couldn't load application fees: {bankBalanceError}{" "}
+              <button onClick={loadBankBalance} className="underline font-semibold">Retry</button>
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+              UPI received ₹{bankUpiReceived.toLocaleString("en-IN")} − Application fee paid ₹{bankFeeDeducted.toLocaleString("en-IN")} − Agency payouts ₹{bankAgencyPaidOut.toLocaleString("en-IN")}
+            </p>
+          )}
         </Card>
         <div className="flex gap-2">
           <PrimaryButton onClick={() => setShowSendQr(true)}>📲 Send Payment QR</PrimaryButton>

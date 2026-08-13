@@ -9,6 +9,7 @@ import { supabase } from "../lib/supabase";
 import { Card, StatusBadge, Modal, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "../components/UI";
 import CommsWindow from "../components/CommsWindow";
 import ChatPanel from "../components/ChatPanel";
+import CallLogPanel from "../components/CallLogPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
@@ -629,7 +630,7 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
         <Field label="Applicant already has a Driving Licence or Learner Licence?">
           <Select value={f.already_has_dl_ll} onChange={set("already_has_dl_ll")}>
             <option value="">Select…</option>
-            <option value="No">No (Fresh) </option>
+            <option value="No">No</option>
             <option value="Yes — has Learner Licence">Yes — has Learner Licence</option>
             <option value="Yes — has Driving Licence">Yes — has Driving Licence</option>
           </Select>
@@ -1416,13 +1417,16 @@ function DealerChats({ dealerId, identity, onMessage }) {
 
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
           {selected ? (
-            <ChatPanel
-              dealerId={dealerId}
-              applicationId={selected.applicationId}
-              identity={identity}
-              emptyLabel="No messages yet — say hello."
-              onMessage={handleMessage}
-            />
+            <>
+              <CallLogPanel threadId={selected.threadId} dealerId={dealerId} />
+              <ChatPanel
+                dealerId={dealerId}
+                applicationId={selected.applicationId}
+                identity={identity}
+                emptyLabel="No messages yet — say hello."
+                onMessage={handleMessage}
+              />
+            </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm text-slate-400 dark:text-slate-500">
               Pick a conversation on the left.

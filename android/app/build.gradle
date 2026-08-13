@@ -1,10 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace "com.sharmajikaoffice.erp"
+    namespace "com.oneinfinity.erp"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.sharmajikaoffice.erp"
+        applicationId "com.oneinfinity.erp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -49,6 +49,14 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+
+    // capacitor-push-notifications depends on firebase-messaging
+    // internally, but as a Gradle "implementation" dependency — invisible
+    // outside that module. CallMessagingService.java extends
+    // FirebaseMessagingService directly in THIS module, so it needs its
+    // own explicit dependency to see that class at compile time.
+    implementation platform('com.google.firebase:firebase-bom:33.1.2')
+    implementation 'com.google.firebase:firebase-messaging'
 }
 
 apply from: 'capacitor.build.gradle'

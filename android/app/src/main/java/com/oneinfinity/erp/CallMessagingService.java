@@ -1,4 +1,4 @@
-package com.sharmajikaoffice.erp;
+package com.oneinfinity.erp;
 
 import android.app.KeyguardManager;
 import android.app.NotificationChannel;

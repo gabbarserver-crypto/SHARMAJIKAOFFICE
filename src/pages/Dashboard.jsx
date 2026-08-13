@@ -21,7 +21,7 @@ const OVERFLOW_ICONS = { payments: CreditCard, reports: BarChart2, settings: Set
 // bundled INSIDE the app itself, ballooning its size with every build
 // (this is what caused the app to balloon to ~100MB+ before).
 const APP_VERSION = "1.0.0";
-const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
+const APK_PATH = "https://github.com/gabbarserver-crypto/one-infinity/releases/latest/download/app-1infinity.apk";
 
 // 1 Infinity Games — opens the standalone games site, handing off the current
 // Supabase session so a staff member who's already logged in here doesn't
