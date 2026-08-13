@@ -1,8 +1,12 @@
 package com.sharmajikaoffice.erp;
 
 import android.Manifest;
+import android.app.KeyguardManager;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
+import android.view.WindowManager;
 import android.webkit.PermissionRequest;
 import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
@@ -17,6 +21,11 @@ public class MainActivity extends BridgeActivity {
 
   private static final int MIC_CAMERA_REQUEST_CODE = 1001;
 
+  // Set on the launch Intent by CallMessagingService's full-screen intent
+  // so we know to draw over the lock screen. Never set for a normal app
+  // launch, so normal opens are unaffected.
+  public static final String EXTRA_INCOMING_CALL = "incoming_call";
+
   // Held onto so we can finish resolving the WebView's PermissionRequest
   // once the (async) native permission dialog actually returns a result —
   // see onRequestPermissionsResult below.
@@ -26,6 +35,7 @@ public class MainActivity extends BridgeActivity {
   public void onCreate(Bundle savedInstanceState) {
     registerPlugin(SpeakerModePlugin.class);
     super.onCreate(savedInstanceState);
+    maybeShowOverLockscreen(getIntent());
 
     // Capacitor only turns on WebView debugging (chrome://inspect) when
     // BuildConfig.DEBUG is true, i.e. only for debug builds — a release
@@ -115,5 +125,37 @@ public class MainActivity extends BridgeActivity {
     PermissionRequest request = pendingWebPermissionRequest;
     pendingWebPermissionRequest = null;
     resolveWebPermissionRequest(request);
+  }
+
+  @Override
+  public void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+    // MainActivity is launchMode="singleTask", so a tap on the full-screen
+    // call notification while the app is already running arrives here
+    // instead of onCreate.
+    maybeShowOverLockscreen(intent);
+  }
+
+  // Draws the activity over the lock screen and turns the screen on, but
+  // ONLY when launched from CallMessagingService's incoming-call
+  // full-screen intent — never for a normal app open.
+  private void maybeShowOverLockscreen(Intent intent) {
+    if (intent == null || !intent.getBooleanExtra(EXTRA_INCOMING_CALL, false)) return;
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+      setShowWhenLocked(true);
+      setTurnScreenOn(true);
+    } else {
+      getWindow().addFlags(
+          WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+              | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+              | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+    if (km != null) {
+      km.requestDismissKeyguard(this, null);
+    }
   }
 }

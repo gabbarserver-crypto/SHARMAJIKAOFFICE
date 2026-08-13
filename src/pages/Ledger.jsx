@@ -4,44 +4,9 @@ import { supabase } from "../lib/supabase";
 import { Card, Field, GhostButton, PrimaryButton, Modal } from "../components/UI";
 import { DealerForm, AgencyForm } from "./Masters";
 
-// Now that Type has its own column, strip the parts of the description that
-// just repeat it — the "Service: X" segment, and the "Payment received"
-// prefix — along with whatever separator (·, -, –, —) sat next to them, so
-// the remaining text doesn't have an orphaned separator left behind.
-export function stripTypeFromDescription(description) {
-  if (!description) return description;
-  let d = description;
-  d = d.replace(/\s*[·\-–—]?\s*Service:\s*[^·\-–—\n]+/i, "");
-  d = d.replace(/^\s*Payment received\s*[·\-–—]?\s*/i, "");
-  d = d.replace(/\s*[·\-–—]\s*[·\-–—]\s*/g, " · "); // collapse any now-adjacent separators
-  d = d.replace(/\s*·\s*/g, " · "); // normalize spacing around any remaining separator
-  d = d.replace(/^[\s·\-–—]+/, "").replace(/[\s·\-–—]+$/, "");
-  return d.trim();
-}
-
-// Ledger transactions don't have their own "type" column — the type (LL RIC,
-// PCC, PAYMENT, ...) is embedded in the free-text description, e.g.
-// "MANOJ KUMAR · Service: LL RIC · App No: 3303448226" or
-// "Payment received — Cash · UPI 16-07-2026". This pulls a short label back
-// out of that text for display as its own column.
-export function deriveTxnType(description) {
-  if (!description) return null;
-  if (/payment received/i.test(description)) return "PAYMENT";
-  const m = description.match(/Service:\s*([^·\n]+)/i);
-  if (m) return m[1].trim().toUpperCase();
-  return null;
-}
-
-// Pulls the application number back out of a ledger description like
-// "...· App No: 1870636524" so a row can be linked to its application.
-export function extractAppNo(description) {
-  if (!description) return null;
-  const m = description.match(/App No:\s*([^\s·\-–—]+)/i);
-  return m ? m[1].trim() : null;
-}
-
-// Tailwind classes per Type, purely cosmetic grouping — payments in green,
-// PCC in blue, anything else (service names like LL RIC, MCWG...) neutral.
+// Tailwind classes per ledger_type, purely cosmetic grouping — payments in
+// green, PCC in blue, anything else (service names like LL RIC, MCWG...)
+// neutral.
 function txnTypeClass(typeLabel) {
   if (!typeLabel) return "text-slate-400 dark:text-slate-500";
   if (typeLabel === "PAYMENT") return "text-emerald-600 dark:text-emerald-400 font-semibold";
@@ -49,22 +14,22 @@ function txnTypeClass(typeLabel) {
   return "text-slate-600 dark:text-slate-300 font-semibold";
 }
 
-// Builds a CSV of the given transactions and triggers a browser download —
+// Builds a CSV of the given ledger rows and triggers a browser download —
 // entirely client-side, matching how the rest of the app's CSV export/import
 // works (see lib/csv.js).
-function exportLedgerCSV(entityName, txns) {
+function exportLedgerCSV(entityName, rows) {
   const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const header = ["Date", "Voucher No.", "Type", "Description", "Debit", "Credit", "Running Balance"];
+  const header = ["Date", "Entry Code", "Type", "Name", "Debit", "Credit", "Running Balance"];
   const lines = [header.join(",")];
-  txns.forEach((t) => {
+  rows.forEach((r) => {
     lines.push([
-      escapeCsv(new Date(t.created_at).toLocaleDateString()),
-      escapeCsv(t.voucher_no),
-      escapeCsv(deriveTxnType(t.description) || ""),
-      escapeCsv(stripTypeFromDescription(t.description)),
-      escapeCsv(t.type === "debit" ? t.amount : ""),
-      escapeCsv(t.type === "credit" ? t.amount : ""),
-      escapeCsv(t.running_balance),
+      escapeCsv(new Date(r.entry_date).toLocaleDateString()),
+      escapeCsv(r.entry_code),
+      escapeCsv(r.ledger_type),
+      escapeCsv(r.display_name),
+      escapeCsv(r.debit > 0 ? r.debit : ""),
+      escapeCsv(r.credit > 0 ? r.credit : ""),
+      escapeCsv(r.running_balance),
     ].join(","));
   });
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -84,63 +49,62 @@ function exportLedgerCSV(entityName, txns) {
 // ledger below. Add/Edit for dealers & agencies lives here too (reusing the
 // same forms Masters used to use) — Masters no longer has Dealer/Agency
 // tabs, this page is now the only place to manage them.
+//
+// Backed by ledger_entries (one row per SERVICE or PAYMENT — no more
+// double-entry pairs, no more type/name buried in free text) via the
+// dealer_ledger / agency_ledger views, which already compute debit,
+// credit, and running_balance server-side.
 export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) {
   const [entityId, setEntityId] = useState(initialEntityId || "");
-  const [entityMode, setEntityMode] = useState(only === "agency" ? "agency" : "dealer"); // "dealer" | "agency" — mode of the currently open ledger detail
-  const [summary, setSummary] = useState(null);
-  const [summaryError, setSummaryError] = useState(null);
-  const [txns, setTxns] = useState([]);
+  const [entityMode, setEntityMode] = useState(only === "agency" ? "agency" : "dealer"); // "dealer" | "agency"
+  const [summary, setSummary] = useState(null); // { credit_limit } for dealer mode, fetched from dealers table directly
+  const [rows, setRowsState] = useState([]); // ledger rows for the open entity, from dealer_ledger / agency_ledger
+  const [loadError, setLoadError] = useState(null);
   const [entityName, setEntityName] = useState("");
-  const [sortKey, setSortKey] = useState("created_at");
+  const [sortKey, setSortKey] = useState("entry_date");
   const [sortDir, setSortDir] = useState("desc"); // newest first by default
   const [periodFrom, setPeriodFrom] = useState(""); // yyyy-mm-dd, empty = no lower bound
   const [periodTo, setPeriodTo] = useState(""); // yyyy-mm-dd, empty = no upper bound
-  const [appDetail, setAppDetail] = useState(null); // application row shown in the description-click modal
+  const [appDetail, setAppDetail] = useState(null); // application row shown in the row-click modal
   const [appDetailLoading, setAppDetailLoading] = useState(false);
   const [appDetailError, setAppDetailError] = useState("");
-  const [appDetailTxn, setAppDetailTxn] = useState(null); // the ledger_transactions/agency_ledger_transactions row that was clicked
+  const [appDetailRow, setAppDetailRow] = useState(null); // the ledger_entries row that was clicked
   const [editAmount, setEditAmount] = useState(""); // draft value while editing the Amount field in the modal
   const [savingAmount, setSavingAmount] = useState(false);
   const [amountSaveError, setAmountSaveError] = useState("");
 
-  // Description cells that carry an "App No: ..." are clickable — this
-  // looks the application up by that number and opens it in a modal so
-  // staff don't have to leave the ledger to see what a line item was for.
-  const openAppDetail = useCallback(async (txn) => {
-    const appNo = extractAppNo(txn.description);
-    if (!appNo) return;
+  // Clicking a SERVICE row's name looks the application up by entry_code
+  // (== application_no for rows created from a real application) so staff
+  // don't have to leave the ledger to see what a line item was for.
+  // PAYMENT rows have no application behind them, so they're not clickable.
+  const openAppDetail = useCallback(async (row) => {
+    if (row.entry_type !== "SERVICE") return;
     setAppDetailLoading(true);
     setAppDetailError("");
     setAmountSaveError("");
     setAppDetail(null);
-    setAppDetailTxn(txn);
+    setAppDetailRow(row);
     const { data, error } = await supabase
       .from("applications")
       .select("*, dealers(name,code,short_name), services(parent_service,short_name), staff:assigned_staff_id(full_name)")
-      .eq("application_no", appNo)
+      .eq("application_no", row.entry_code)
       .maybeSingle();
     setAppDetailLoading(false);
     if (error || !data) {
-      setAppDetailError(`No application found for App No: ${appNo}`);
+      setAppDetailError(`No application found for App No: ${row.entry_code}`);
       return;
     }
     setAppDetail(data);
-    setEditAmount(String(txn.amount ?? data.amount ?? ""));
+    setEditAmount(String(row.debit || data.amount || ""));
   }, []);
 
-  // Saves the edited Amount into both the ledger transaction that was
-  // clicked (so the ledger table + running balance reflect it immediately)
-  // and the linked application's own amount field, so the two stay in
-  // sync. Only Amount is editable here — every other field in the modal is
-  // read-only, on purpose.
-  //
-  // Both writes happen inside a single Postgres function (see
-  // supabase/013_atomic_ledger_amount_update.sql) instead of two separate
-  // client-side .update() calls — so either both land or neither does,
-  // and the ledger + application amount can never go out of sync from a
-  // half-completed save.
+  // Saves the edited Amount into both ledger_entries and the linked
+  // application's own amount field, atomically, via a single Postgres
+  // function (see 005_summary_views_and_rpc.sql) — so either both land or
+  // neither does, and the ledger + application amount can never go out of
+  // sync from a half-completed save.
   const saveAmount = useCallback(async () => {
-    if (!appDetailTxn || !appDetail) return;
+    if (!appDetailRow || !appDetail) return;
     const newAmount = Number(editAmount);
     if (!Number.isFinite(newAmount) || newAmount < 0) {
       setAmountSaveError("Enter a valid amount");
@@ -148,9 +112,8 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
     }
     setSavingAmount(true);
     setAmountSaveError("");
-    const rpcName = entityMode === "dealer" ? "update_dealer_ledger_amount" : "update_agency_ledger_amount";
-    const { error: rpcErr } = await supabase.rpc(rpcName, {
-      p_txn_id: appDetailTxn.id,
+    const { error: rpcErr } = await supabase.rpc("update_ledger_entry_amount", {
+      p_entry_id: appDetailRow.id,
       p_application_id: appDetail.id,
       p_new_amount: newAmount,
     });
@@ -160,58 +123,46 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
       return;
     }
     // Reflect the new amount locally so the ledger table + running balance
-    // recompute without a full refetch.
-    setTxns((prev) => prev.map((t) => (t.id === appDetailTxn.id ? { ...t, amount: newAmount } : t)));
-    setAppDetailTxn((t) => ({ ...t, amount: newAmount }));
+    // recompute without a full refetch of everything.
+    setRowsState((prev) =>
+      prev.map((r) => (r.id === appDetailRow.id ? { ...r, debit: newAmount } : r))
+    );
+    setAppDetailRow((r) => ({ ...r, debit: newAmount }));
     setAppDetail((a) => ({ ...a, amount: newAmount }));
-  }, [appDetailTxn, appDetail, editAmount, entityMode]);
+  }, [appDetailRow, appDetail, editAmount]);
 
-  // Admin-only: removes a single ledger transaction row outright — for
-  // correcting mistakes like a duplicate debit (e.g. from a double-clicked
-  // Approve) without having to touch the application it came from. This
-  // only removes the ledger row; it does not change the linked
-  // application's status or amount.
-  const [deletingTxnId, setDeletingTxnId] = useState(null);
-  const deleteTxn = useCallback(async (txn) => {
-    if (!window.confirm(`Delete this ${txn.type} entry of ₹${Number(txn.amount).toLocaleString("en-IN")} (Voucher ${txn.voucher_no})? This cannot be undone.`)) return;
-    setDeletingTxnId(txn.id);
-    const table = entityMode === "dealer" ? "ledger_transactions" : "agency_ledger_transactions";
-    const { error } = await supabase.from(table).delete().eq("id", txn.id);
-    setDeletingTxnId(null);
+  // Admin-only: removes a single ledger entry outright — for correcting
+  // mistakes like a duplicate row, without touching the application/payment
+  // it came from.
+  const [deletingRowId, setDeletingRowId] = useState(null);
+  const deleteRow = useCallback(async (row) => {
+    const amt = row.debit > 0 ? row.debit : row.credit;
+    if (!window.confirm(`Delete this ${row.ledger_type} entry of ₹${Number(amt).toLocaleString("en-IN")} (${row.entry_code})? This cannot be undone.`)) return;
+    setDeletingRowId(row.id);
+    const { error } = await supabase.from("ledger_entries").delete().eq("id", row.id);
+    setDeletingRowId(null);
     if (error) {
       alert("Failed to delete: " + error.message);
       return;
     }
-    setTxns((prev) => prev.filter((t) => t.id !== txn.id));
-  }, [entityMode]);
+    setRowsState((prev) => prev.filter((r) => r.id !== row.id));
+  }, []);
 
-  // Running balance is a property of *when* a transaction happened, not of
-  // whatever order it's currently displayed in — so it's always computed by
-  // walking the transactions oldest-to-newest first, then the result is
-  // re-sorted for display. Re-sorting by voucher/description/amount later
-  // never recalculates or scrambles these balances.
-  const sortedTxns = useMemo(() => {
-    const chronological = [...txns].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-    let running = 0;
-    const withBalance = chronological.map((t) => {
-      running += t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0);
-      return { ...t, running_balance: running };
-    });
-    const byId = new Map(withBalance.map((t) => [t.id, t]));
+  const sortedRows = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
-    return [...txns].map((t) => byId.get(t.id)).sort((a, b) => {
+    return [...rows].sort((a, b) => {
       let av = a[sortKey], bv = b[sortKey];
-      if (sortKey === "created_at") { av = new Date(av); bv = new Date(bv); }
-      if (sortKey === "amount") { av = Number(av || 0); bv = Number(bv || 0); }
+      if (sortKey === "entry_date") { av = new Date(av); bv = new Date(bv); }
+      if (sortKey === "debit" || sortKey === "credit" || sortKey === "running_balance") { av = Number(av || 0); bv = Number(bv || 0); }
       if (av < bv) return -1 * dir;
       if (av > bv) return 1 * dir;
       return 0;
     });
-  }, [txns, sortKey, sortDir]);
+  }, [rows, sortKey, sortDir]);
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir(key === "created_at" ? "desc" : "asc"); }
+    else { setSortKey(key); setSortDir(key === "entry_date" ? "desc" : "asc"); }
   };
   const ledgerDetailRef = useRef(null);
 
@@ -230,75 +181,75 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
 
   useEffect(() => {
     (async () => {
-      if (!entityId) { setSummary(null); setTxns([]); return; }
-      const table = entityMode === "dealer" ? "dealers" : "agencies";
-      const { data: entityRow } = await supabase.from(table).select("name").eq("id", entityId).maybeSingle();
-      if (entityRow?.name) setEntityName(entityRow.name);
+      if (!entityId) { setSummary(null); setRowsState([]); return; }
       if (entityMode === "dealer") {
-        const { data: s, error: sErr } = await supabase.from("dealer_ledger_summary").select("*").eq("dealer_id", entityId).maybeSingle();
-        if (sErr) console.error("dealer_ledger_summary:", sErr);
-        setSummary(s);
-        setSummaryError(sErr?.message || null);
-        const { data: t } = await supabase.from("ledger_transactions").select("*").eq("dealer_id", entityId).order("created_at", { ascending: false });
-        setTxns(t || []);
+        const { data: dealerRow } = await supabase.from("dealers").select("name, credit_limit").eq("id", entityId).maybeSingle();
+        if (dealerRow?.name) setEntityName(dealerRow.name);
+        setSummary(dealerRow);
+        const { data: r, error: rErr } = await supabase
+          .from("dealer_ledger")
+          .select("*")
+          .eq("dealer_id", entityId)
+          .order("entry_date", { ascending: false });
+        setLoadError(rErr?.message || null);
+        setRowsState(r || []);
       } else {
-        const { data: s, error: sErr } = await supabase.from("agency_ledger_summary").select("*").eq("agency_id", entityId).maybeSingle();
-        if (sErr) console.error("agency_ledger_summary:", sErr);
-        setSummary(s);
-        setSummaryError(sErr?.message || null);
-        const { data: t } = await supabase.from("agency_ledger_transactions").select("*").eq("agency_id", entityId).order("created_at", { ascending: false });
-        setTxns(t || []);
+        const { data: agencyRow } = await supabase.from("agencies").select("name").eq("id", entityId).maybeSingle();
+        if (agencyRow?.name) setEntityName(agencyRow.name);
+        setSummary(null);
+        const { data: r, error: rErr } = await supabase
+          .from("agency_ledger")
+          .select("*")
+          .eq("agency_id", entityId)
+          .order("entry_date", { ascending: false });
+        setLoadError(rErr?.message || null);
+        setRowsState(r || []);
       }
     })();
   }, [entityId, entityMode]);
 
-  // Running balance computed straight from the transactions we already
-  // fetched, so it shows up even if the *_ledger_summary view returns no
-  // row, errors out, or is blocked by RLS. Credit is money in (reduces what
-  // they owe), debit is money out (increases what they owe) — matches how
-  // entries are posted elsewhere in the app.
-  const computedBalance = txns.reduce(
-    (acc, t) => acc + (t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0)),
-    0
-  );
-  const runningBalance = summary?.running_balance ?? computedBalance;
+  // running_balance is already computed server-side by the view (walked
+  // chronologically by entry_date/created_at), so the latest row — however
+  // the table is currently sorted for display — always carries the correct
+  // final balance.
+  const runningBalance = useMemo(() => {
+    if (!rows.length) return 0;
+    return rows.reduce((latest, r) => {
+      const d = new Date(r.entry_date);
+      return !latest || d >= latest.d ? { d, val: Number(r.running_balance || 0) } : latest;
+    }, null)?.val ?? 0;
+  }, [rows]);
 
   // Available Limit = Credit Limit + Running Balance. Running balance is
   // negative when the dealer owes money and positive when they're in
   // credit, so adding it (not subtracting it) correctly shrinks the
   // available limit as debt grows and grows it when they're prepaid.
-  // Computed here instead of trusted from the summary view, since that
-  // view was doing Credit Limit - Running Balance and produced a bogus
-  // (inflated) number whenever running_balance was negative.
   const availableLimit = Number(summary?.credit_limit || 0) + Number(runningBalance || 0);
 
-  // Rows within the selected date range (inclusive). Each row keeps the
-  // running_balance computed from *all* history in sortedTxns above — a
-  // date filter narrows which rows are shown, it doesn't reset the
-  // opening balance to zero.
-  const periodTxns = useMemo(() => {
-    if (!periodFrom && !periodTo) return sortedTxns;
+  // Rows within the selected date range (inclusive).
+  const periodRows = useMemo(() => {
+    if (!periodFrom && !periodTo) return sortedRows;
     const from = periodFrom ? new Date(periodFrom + "T00:00:00") : null;
     const to = periodTo ? new Date(periodTo + "T23:59:59") : null;
-    return sortedTxns.filter((t) => {
-      const d = new Date(t.created_at);
+    return sortedRows.filter((r) => {
+      const d = new Date(r.entry_date);
       if (from && d < from) return false;
       if (to && d > to) return false;
       return true;
     });
-  }, [sortedTxns, periodFrom, periodTo]);
+  }, [sortedRows, periodFrom, periodTo]);
 
   const periodTotals = useMemo(
     () =>
-      periodTxns.reduce(
-        (acc, t) => {
-          if (t.type === "debit") acc.debit += Number(t.amount || 0);
-          else acc.credit += Number(t.amount || 0);
+      periodRows.reduce(
+        (acc, r) => {
+          acc.debit += Number(r.debit || 0);
+          acc.credit += Number(r.credit || 0);
           return acc;
         },
         { debit: 0, credit: 0 }
       ),
-    [periodTxns]
+    [periodRows]
   );
 
   return (
@@ -330,8 +281,8 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
           subtitle="Dealers — amounts owed to us"
           entityMode="dealer"
           table="dealers"
-          summaryTable="dealer_ledger_summary"
-          summaryKey="dealer_id"
+          balancesTable="dealer_ledger_balances"
+          balancesKey="dealer_id"
           Form={DealerForm}
           selectedId={entityMode === "dealer" ? entityId : null}
           onOpenLedger={(id, name) => openLedger("dealer", id, name)}
@@ -345,8 +296,8 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
           subtitle="Agencies — amounts we owe / settle with them"
           entityMode="agency"
           table="agencies"
-          summaryTable="agency_ledger_summary"
-          summaryKey="agency_id"
+          balancesTable="agency_ledger_balances"
+          balancesKey="agency_id"
           Form={AgencyForm}
           selectedId={entityMode === "agency" ? entityId : null}
           onOpenLedger={(id, name) => openLedger("agency", id, name)}
@@ -368,13 +319,11 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
               <button onClick={() => window.print()} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
                 🖶 Print
               </button>
-              <button onClick={() => exportLedgerCSV(entityName, periodTxns)} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
+              <button onClick={() => exportLedgerCSV(entityName, periodRows)} className="text-sm font-semibold text-slate-500 hover:text-blue-600">
                 ⬇ Export CSV
               </button>
             </div>
           </div>
-          {/* Print-only heading — the buttons/nav above are hidden via .no-print, so
-              a printed page needs its own plain-text title instead. */}
           <h3 className="hidden print:block text-lg font-bold mb-4">{entityName || "Ledger"} — Ledger Statement</h3>
           <div className="no-print flex items-end justify-between flex-wrap gap-3 mb-4">
             <div className="flex items-end gap-3">
@@ -410,7 +359,7 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
             <Card>
               <p className="text-xs text-slate-400 dark:text-slate-500">Running Balance</p>
               <p className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-1">₹{Number(runningBalance || 0).toLocaleString("en-IN")}</p>
-              {summaryError && <p className="text-[11px] text-amber-600 mt-1">Computed from transactions — summary view error: {summaryError}</p>}
+              {loadError && <p className="text-[11px] text-amber-600 mt-1">Error loading ledger: {loadError}</p>}
             </Card>
             {entityMode === "dealer" && summary && (
               <>
@@ -438,61 +387,64 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
                 <tr>
-                  <SortableTh label="Date" sortKeyName="created_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                  <SortableTh label="Voucher No." sortKeyName="voucher_no" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Date" sortKeyName="entry_date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Entry Code" sortKeyName="entry_code" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <th className="px-3 py-2 text-left">Type</th>
-                  <SortableTh label="Description" sortKeyName="description" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                  <SortableTh label="Debit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                  <SortableTh label="Credit" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                  <SortableTh label="Name" sortKeyName="display_name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Debit" sortKeyName="debit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                  <SortableTh label="Credit" sortKeyName="credit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   <SortableTh label="Running Balance" sortKeyName="running_balance" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   {isAdmin && <th className="px-3 py-2 text-right">Actions</th>}
                 </tr>
               </thead>
               <tbody>
-                {periodTxns.map((t) => (
-                  <tr key={t.id} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(t.created_at).toLocaleDateString()}</td>
-                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{t.voucher_no}</td>
-                    <td className={`px-3 py-2 whitespace-nowrap ${txnTypeClass(deriveTxnType(t.description))}`}>{deriveTxnType(t.description) || "—"}</td>
+                {periodRows.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(r.entry_date).toLocaleDateString()}</td>
+                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{r.entry_code}</td>
+                    <td className={`px-3 py-2 whitespace-nowrap ${txnTypeClass(r.ledger_type)}`}>{r.ledger_type || "—"}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                      {extractAppNo(t.description) ? (
+                      {r.entry_type === "SERVICE" ? (
                         <button
                           type="button"
-                          onClick={() => openAppDetail(t)}
+                          onClick={() => openAppDetail(r)}
                           className="text-left hover:underline decoration-dotted text-blue-600 dark:text-blue-400"
                           title="View application details"
                         >
-                          {stripTypeFromDescription(t.description)}
+                          {r.display_name}
                         </button>
                       ) : (
-                        stripTypeFromDescription(t.description)
+                        <>
+                          {r.display_name}
+                          {r.payment_mode && <span className="text-slate-400 dark:text-slate-500"> · {r.payment_mode}{r.reference_no ? ` ${r.reference_no}` : ""}</span>}
+                        </>
                       )}
                     </td>
                     <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-rose-600">
-                      {t.type === "debit" ? `₹${Number(t.amount).toLocaleString("en-IN")}` : ""}
+                      {r.debit > 0 ? `₹${Number(r.debit).toLocaleString("en-IN")}` : ""}
                     </td>
                     <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-emerald-600">
-                      {t.type === "credit" ? `₹${Number(t.amount).toLocaleString("en-IN")}` : ""}
+                      {r.credit > 0 ? `₹${Number(r.credit).toLocaleString("en-IN")}` : ""}
                     </td>
-                    <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.running_balance < 0 ? "text-rose-600" : "text-slate-700 dark:text-slate-300"}`}>
-                      ₹{Number(t.running_balance).toLocaleString("en-IN")}
+                    <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${r.running_balance < 0 ? "text-rose-600" : "text-slate-700 dark:text-slate-300"}`}>
+                      ₹{Number(r.running_balance).toLocaleString("en-IN")}
                     </td>
                     {isAdmin && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => deleteTxn(t)}
-                          disabled={deletingTxnId === t.id}
+                          onClick={() => deleteRow(r)}
+                          disabled={deletingRowId === r.id}
                           className="text-rose-600 hover:text-rose-700 text-xs font-medium disabled:opacity-50"
                           title="Delete this ledger entry"
                         >
-                          {deletingTxnId === t.id ? "Deleting…" : "Delete"}
+                          {deletingRowId === r.id ? "Deleting…" : "Delete"}
                         </button>
                       </td>
                     )}
                   </tr>
                 ))}
-                {periodTxns.length === 0 && (
+                {periodRows.length === 0 && (
                   <tr><td colSpan={isAdmin ? 8 : 7} className="text-center text-slate-400 dark:text-slate-500 py-8">No transactions yet</td></tr>
                 )}
               </tbody>
@@ -503,7 +455,7 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
       {(appDetailLoading || appDetail || appDetailError) && (
         <Modal
           title="Application Details"
-          onClose={() => { setAppDetail(null); setAppDetailError(""); setAppDetailTxn(null); setAmountSaveError(""); }}
+          onClose={() => { setAppDetail(null); setAppDetailError(""); setAppDetailRow(null); setAmountSaveError(""); }}
         >
           {appDetailLoading && <p className="text-sm text-slate-500 dark:text-slate-400">Loading…</p>}
           {appDetailError && <p className="text-sm text-rose-600">{appDetailError}</p>}
@@ -555,7 +507,7 @@ function Row({ label, value }) {
 // just Name / Code / Active status / Balance, name & balance clickable
 // into the ledger below, plus a New/Edit affordance (reusing the same
 // forms Masters used to use — those tabs are gone from Masters now).
-function SundryHead({ title, subtitle, entityMode, table, summaryTable, summaryKey, Form, selectedId, onOpenLedger, className = "" }) {
+function SundryHead({ title, subtitle, entityMode, table, balancesTable, balancesKey, Form, selectedId, onOpenLedger, className = "" }) {
   const [rows, setRows] = useState([]);
   const [balances, setBalances] = useState({}); // id -> running_balance
   const [loading, setLoading] = useState(true);
@@ -568,14 +520,14 @@ function SundryHead({ title, subtitle, entityMode, table, summaryTable, summaryK
     // Fetch rows and balances together so they land in state in the same
     // pass — otherwise the zero-balance filter below would briefly hide
     // every row on first paint (balances start empty).
-    const [{ data }, { data: summaries }] = await Promise.all([
+    const [{ data }, { data: balanceRows }] = await Promise.all([
       supabase.from(table).select("*").order("name"),
-      supabase.from(summaryTable).select("*"),
+      supabase.from(balancesTable).select("*"),
     ]);
     setRows(data || []);
-    setBalances(Object.fromEntries((summaries || []).map((s) => [s[summaryKey], s.running_balance])));
+    setBalances(Object.fromEntries((balanceRows || []).map((b) => [b[balancesKey], b.running_balance])));
     setLoading(false);
-  }, [table, summaryTable, summaryKey]);
+  }, [table, balancesTable, balancesKey]);
 
   useEffect(() => { load(); }, [load]);
 

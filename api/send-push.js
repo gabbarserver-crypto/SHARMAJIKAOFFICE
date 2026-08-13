@@ -75,11 +75,35 @@ export default async function handler(req, res) {
     if (!app) return res.json({ sent: 0, reason: "FIREBASE_SERVICE_ACCOUNT not configured on the server yet" });
 
     const { default: admin } = await import("firebase-admin");
+
+    // Calls need a data-only message: if a `notification` block is present,
+    // Google Play Services deliver it straight to the system tray itself
+    // and our own FirebaseMessagingService.onMessageReceived() never fires
+    // for a killed app — which is exactly the case an incoming call most
+    // needs to handle, since that's when the lock-screen full-screen UI has
+    // to be built natively instead of relying on the default tray entry.
+    // Every other push kind (chat, drafts) keeps the old notification-block
+    // behavior — simplest path, no custom UI needed there.
+    const isCall = data?.kind === "call";
+
     const message = {
       tokens,
-      notification: { title, body: body || "" },
-      data: Object.fromEntries(Object.entries(data || {}).map(([k, v]) => [k, String(v)])),
-      android: { priority: "high" },
+      ...(isCall
+        ? {}
+        : { notification: { title, body: body || "" } }),
+      data: {
+        ...Object.fromEntries(Object.entries(data || {}).map(([k, v]) => [k, String(v)])),
+        // Data-only messages carry no title/body of their own — the native
+        // side (FirebaseMessagingService) needs these to build its own
+        // full-screen call notification, so pass them through explicitly.
+        ...(isCall ? { title, body: body || "" } : {}),
+      },
+      android: {
+        priority: "high",
+        // Don't let a stale ring arrive after the caller's own 30s timeout
+        // (RING_TIMEOUT_MS in src/lib/call.js) has already given up.
+        ...(isCall ? { ttl: 30000 } : {}),
+      },
     };
 
     const result = await admin.messaging().sendEachForMulticast(message);

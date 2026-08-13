@@ -26,7 +26,9 @@ import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
-import { stripTypeFromDescription, deriveTxnType } from "./Ledger";
+// (Ledger's description-parsing helpers are gone — dealer_ledger already
+// carries ledger_type / display_name as real columns, so nothing needs
+// importing from Ledger.jsx anymore.)
 import { Capacitor } from "@capacitor/core";
 import { Browser } from "@capacitor/browser";
 
@@ -64,7 +66,7 @@ const openGames = async () => {
   window.open(url, "_blank", "noopener,noreferrer");
 };
 
-const TABS = ["Applications", "Call/Chat", "Ledger"];
+const TABS = ["Applications", "Call/Chat", "Ledger", "Payments"];
 
 // Small reusable sortable <th> — click toggles asc/desc on that column,
 // clicking a different column switches to it (asc first). Shared by the
@@ -104,20 +106,17 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   // here too so it's visible without switching tabs.
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase.from("ledger_transactions").select("type, amount").eq("dealer_id", dealer.id);
+      const { data, error } = await supabase.from("dealer_ledger_balances").select("running_balance").eq("dealer_id", dealer.id).maybeSingle();
       if (error) {
         // Leave runningBalance as-is (null on first load shows "…", a
         // stale-but-real number on refresh stays put) rather than falling
-        // through to `(data || [])` → an empty array → a confidently wrong
-        // ₹0. That silent fallback is what made this card show ₹0 while
-        // the Ledger tab's own fetch (a separate query) succeeded and
-        // showed the real -₹1,02,350 — same underlying number, just one
-        // of the two fetches quietly failed with no visible error.
+        // through to a confidently wrong ₹0 on a failed fetch.
         console.error("Couldn't load running balance:", error.message);
         return;
       }
-      const balance = (data || []).reduce((acc, t) => acc + (t.type === "credit" ? Number(t.amount || 0) : -Number(t.amount || 0)), 0);
-      setRunningBalance(balance);
+      // No row at all means this dealer has no ledger activity yet — that's
+      // a real ₹0, not a fetch failure, so it's fine to default here.
+      setRunningBalance(Number(data?.running_balance || 0));
     })();
   }, [dealer.id, refreshKey]);
 
@@ -372,6 +371,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           </div>
         )}
         {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
+        {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} />}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
 
@@ -1454,9 +1454,117 @@ function monthLabelOf(key) {
   return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 }
 
+// Payments-only view for the dealer portal — same dealer_ledger view as
+// "My Ledger" but filtered to entry_type = PAYMENT, so a dealer can check
+// what they've paid without SERVICE charge rows mixed in. Running Balance
+// shown here is still the dealer's real overall balance at that point in
+// time (services + payments combined) — just the row list is filtered.
+function DealerPaymentHistory({ dealerId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("dealer_ledger")
+        .select("id, entry_code, entry_date, display_name, credit, running_balance, payment_mode, reference_no")
+        .eq("dealer_id", dealerId)
+        .eq("entry_type", "PAYMENT")
+        .order("entry_date", { ascending: false });
+      if (error) {
+        console.error("Couldn't load payment history:", error.message);
+        setLoadError(error.message);
+        setLoading(false);
+        return;
+      }
+      setLoadError(null);
+      setRows(data || []);
+      setLoading(false);
+    })();
+  }, [dealerId]);
+
+  const filteredRows = rows.filter((r) => {
+    const d = r.entry_date;
+    if (rangeFrom && d < rangeFrom) return false;
+    if (rangeTo && d > rangeTo) return false;
+    return true;
+  });
+
+  const totalPaid = filteredRows.reduce((acc, r) => acc + Number(r.credit || 0), 0);
+
+  return (
+    <Card title="Payment History">
+      <p className="text-sm text-slate-500 dark:text-slate-500 mb-4">
+        Total paid{(rangeFrom || rangeTo) ? " (in range)" : ""}: <span className="font-bold text-emerald-600">₹{totalPaid.toLocaleString("en-IN")}</span>
+      </p>
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <input
+          type="date"
+          value={rangeFrom}
+          onChange={(e) => setRangeFrom(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+        />
+        <span className="text-xs text-slate-400">to</span>
+        <input
+          type="date"
+          value={rangeTo}
+          onChange={(e) => setRangeTo(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+        />
+        {(rangeFrom || rangeTo) && (
+          <button onClick={() => { setRangeFrom(""); setRangeTo(""); }} className="text-xs font-semibold text-slate-500 hover:text-blue-600">
+            Clear
+          </button>
+        )}
+      </div>
+      {loading ? (
+        <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
+      ) : loadError ? (
+        <p className="text-center text-rose-600 py-8">Couldn't load payment history — please refresh and try again.</p>
+      ) : filteredRows.length === 0 ? (
+        <p className="text-center text-slate-400 dark:text-slate-500 py-8">No payments yet</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
+              <tr>
+                <th className="text-left font-medium px-3 py-2">Date</th>
+                <th className="text-left font-medium px-3 py-2">Entry Code</th>
+                <th className="text-left font-medium px-3 py-2">Mode / Ref No.</th>
+                <th className="text-right font-medium px-3 py-2">Amount</th>
+                <th className="text-right font-medium px-3 py-2">Running Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((r) => (
+                <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(r.entry_date).toLocaleDateString("en-IN")}</td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{r.entry_code}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                    {r.payment_mode || "—"}{r.reference_no ? ` · ${r.reference_no}` : ""}
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold whitespace-nowrap text-emerald-600">
+                    ₹{Number(r.credit || 0).toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                    ₹{Number(r.running_balance || 0).toLocaleString("en-IN")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function DealerLedger({ dealerId }) {
   const [txns, setTxns] = useState([]);
-  const [appsByCode, setAppsByCode] = useState({}); // draft/application_no -> { applicant_name, services }
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [sortKey, setSortKey] = useState("created_at");
@@ -1476,15 +1584,14 @@ function DealerLedger({ dealerId }) {
     (async () => {
       setLoading(true);
       const { data, error } = await supabase
-        .from("ledger_transactions")
-        .select("id, type, amount, description, voucher_no, created_at")
+        .from("dealer_ledger")
+        .select("id, entry_type, ledger_type, display_name, debit, credit, running_balance, entry_date")
         .eq("dealer_id", dealerId)
-        .order("created_at", { ascending: false });
+        .order("entry_date", { ascending: false });
       if (error) {
-        // Same trap the summary card above hit before it was fixed: don't
-        // let a failed fetch fall through to `data || []` — an empty array
-        // here renders as a confident "No ledger entries yet" / ₹0, which
-        // looks identical to a genuinely empty ledger even though the
+        // Don't let a failed fetch fall through to `data || []` — an empty
+        // array here renders as a confident "No ledger entries yet" / ₹0,
+        // which looks identical to a genuinely empty ledger even though the
         // dealer's actual balance (shown correctly in the card above, from
         // its own separate query) says otherwise. Surface the failure
         // instead of hiding it behind a wrong-but-plausible empty state.
@@ -1494,63 +1601,22 @@ function DealerLedger({ dealerId }) {
         return;
       }
       setLoadError(null);
-      const rows = data || [];
-      setTxns(rows);
-
-      // Ledger entries reference the application via voucher_no (== draft_code
-      // at the time it was accepted). Resolve those back to a service +
-      // applicant name to display, instead of parsing the free-text description.
-      //
-      // A dealer with a long history can easily have 1000+ distinct vouchers
-      // (BBH0001, BBH0002, ... BBH1725, ...). Building one giant .or() filter
-      // with two eq() clauses per voucher produced a URL well past what the
-      // browser/server allow, so the request failed outright with
-      // net::ERR_FAILED before a response ever came back — that's why
-      // Service/Applicant Name showed blank even though the ledger entries
-      // themselves loaded fine. Fixed by using .in() (much shorter per code)
-      // and chunking into batches, so this keeps working no matter how many
-      // vouchers a dealer accumulates over time.
-      const codes = [...new Set(rows.map((t) => t.voucher_no).filter(Boolean))];
-      if (codes.length) {
-        const CHUNK_SIZE = 150;
-        const chunks = [];
-        for (let i = 0; i < codes.length; i += CHUNK_SIZE) chunks.push(codes.slice(i, i + CHUNK_SIZE));
-        const results = await Promise.all(
-          chunks.map((chunk) =>
-            supabase
-              .from("applications")
-              .select("draft_code, application_no, applicant_name, services(parent_service, short_name)")
-              .eq("dealer_id", dealerId)
-              .or(`draft_code.in.(${chunk.join(",")}),application_no.in.(${chunk.join(",")})`)
-          )
-        );
-        const map = {};
-        results.forEach(({ data: apps }) => {
-          (apps || []).forEach((a) => {
-            const label = a.services ? (a.services.short_name || a.services.parent_service) : null;
-            if (a.draft_code) map[a.draft_code] = { applicant_name: a.applicant_name, service: label };
-            if (a.application_no) map[a.application_no] = { applicant_name: a.applicant_name, service: label };
-          });
-        });
-        setAppsByCode(map);
-      } else {
-        setAppsByCode({});
-      }
+      setTxns(data || []);
       setLoading(false);
     })();
   }, [dealerId]);
 
-  // Resolve each transaction's display fields once, up front, so both the
-  // balance walk and the sorting/grouping below can just read plain fields.
-  const enrichedTxns = txns.map((t) => {
-    const matched = appsByCode[t.voucher_no];
-    const isPayment = !matched && deriveTxnType(t.description) === "PAYMENT";
-    return {
-      ...t,
-      serviceCell: matched?.service || (isPayment ? "Payment" : (t.description || "—")),
-      applicantCell: matched?.applicant_name || (isPayment ? (stripTypeFromDescription(t.description) || "—") : "—"),
-    };
-  });
+  // dealer_ledger already carries the service name / payment description
+  // as display_name and ledger_type as real columns — no more matching
+  // against applications by voucher code, no more parsing free text.
+  const enrichedTxns = txns.map((t) => ({
+    ...t,
+    created_at: t.entry_date,
+    type: t.credit > 0 ? "credit" : "debit",
+    amount: t.credit > 0 ? t.credit : t.debit,
+    serviceCell: t.ledger_type || "—",
+    applicantCell: t.display_name || "—",
+  }));
 
   // Running balance walked chronologically (oldest first) regardless of
   // display order, then grouped into months. Each month's opening balance is

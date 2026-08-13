@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -40,6 +41,27 @@
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- @capacitor/push-notifications' default FCM service only ever
+             puts messages in the normal system tray — it never wakes the
+             screen for a locked device. We replace it with our own so
+             incoming-call pushes can show a full-screen, screen-waking UI
+             instead (see CallMessagingService). Chat/draft pushes are
+             untouched: they use a "notification" block, which Google Play
+             Services delivers straight to the tray on its own without
+             going through either service, whenever the app isn't in the
+             foreground. -->
+        <service
+            android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"
+            tools:node="remove" />
+
+        <service
+            android:name=".CallMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 
     <!-- Permissions -->
@@ -57,6 +79,19 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Needed for the incoming-call notification to wake/turn on a locked
+         screen (see CallMessagingService). USE_FULL_SCREEN_INTENT is
+         install-time granted for apps targeting SDK 33 or below; since
+         this app targets SDK 35, Android 14+ devices additionally require
+         the user to manually flip "Full screen notifications" on once, in
+         Settings → Apps → Sharma Ji Ka Office → Full screen notifications
+         (or Settings → Notifications → Full screen intent apps, wording
+         varies by OEM). Without it, the call still rings/vibrates and
+         shows a heads-up notification, just won't wake a locked screen. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Neither is actually required to install the app — plenty of
          phones without a camera should still be able to use voice calls. -->
