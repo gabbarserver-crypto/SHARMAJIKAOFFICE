@@ -407,6 +407,7 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
                       {r.entry_type === "SERVICE" ? (
                         <button
                           type="button"
+<<<<<<< HEAD
                           onClick={() => openAppDetail(r)}
                           className="text-left hover:underline decoration-dotted text-blue-600 dark:text-blue-400"
                           title="View application details"
@@ -692,3 +693,6 @@ function SortableTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "lef
     </th>
   );
 }
+=======
+                          onClick={() => openAppDetail
+>>>>>>> 6926865e17ddebebbe4f4e430a109eec657b6c24
