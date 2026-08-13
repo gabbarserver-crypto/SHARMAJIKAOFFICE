@@ -797,6 +797,10 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
               <tr>
                 <SortableTh label="Ref No." sortKeyName="ref" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Applicant" sortKeyName="applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th className="text-left font-medium px-3 py-2">Father/Husband</th>
+                <th className="text-left font-medium px-3 py-2">Mobile</th>
+                <th className="text-left font-medium px-3 py-2">Address</th>
+                <th className="text-left font-medium px-3 py-2">Application No.</th>
                 <SortableTh label="Service" sortKeyName="service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Submitted" sortKeyName="submitted_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Status" sortKeyName="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -812,12 +816,16 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
                   </td>
                   <td className="px-3 py-2">
                     <button
-                      onClick={() => onSelect?.({ id: r.id, applicant_name: r.applicant_name, draft_code: r.application_no || r.draft_code, service_id: r.service_id })}
+                      onClick={() => onSelect?.(r)}
                       className="text-blue-600 font-semibold hover:underline text-left"
                     >
                       {r.applicant_name}
                     </button>
                   </td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{r.father_husband_name || "—"}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.mobile || "—"}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 max-w-[220px] truncate" title={r.address || ""}>{r.address || "—"}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.application_no || "—"}</td>
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
                     {r.services?.short_name || r.services?.parent_service || "—"}
                   </td>
@@ -850,7 +858,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
                 </tr>
               ))}
               {visibleRows.length === 0 && (
-                <tr><td colSpan={7} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
+                <tr><td colSpan={11} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
               )}
             </tbody>
           </table>
