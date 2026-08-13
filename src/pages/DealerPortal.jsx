@@ -1061,7 +1061,15 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
   return (
     <>
     <Modal title={`Documents — ${application.draft_code}`} onClose={onClose}>
-      <p className="text-xs text-slate-500 dark:text-slate-500 mb-4">{application.applicant_name}</p>
+      <div className="mb-4">
+        <p className="text-xs text-slate-500 dark:text-slate-500">{application.applicant_name}</p>
+        {application.father_husband_name && (
+          <p className="text-xs text-slate-400 dark:text-slate-500">Father/Husband: {application.father_husband_name}</p>
+        )}
+        {application.address && (
+          <p className="text-xs text-slate-400 dark:text-slate-500">Address: {application.address}</p>
+        )}
+      </div>
       {loading ? (
         <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
       ) : visibleDocs.length === 0 ? (
