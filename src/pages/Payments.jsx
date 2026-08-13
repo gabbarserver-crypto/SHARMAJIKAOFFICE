@@ -149,51 +149,29 @@ export default function Payments({ staff } = {}) {
       return;
     }
 
-    // Post this payment to the dealer ledger (a payment received reduces
-    // what the dealer owes, so it's posted as a credit) and, if a "Paid At"
-    // agency was chosen, mirror the same amount as a credit on that
-    // agency's ledger too. For a pure Agency payment (no dealer at all),
-    // only the agency side is posted. Voucher no. is the payment's own
-    // reference no. (or a generated fallback) so this stays a distinct,
-    // traceable line.
+    // Post this payment to the ledger: dealer_id set means the dealer's
+    // running balance drops by this amount (payment received); agency_id
+    // set means the agency's running balance drops too (agency collected
+    // this on our behalf, or the payment was made directly to them) — both
+    // effects live on the SAME row now, not two separate ledger tables.
     const dealerName = dealers.find((d) => d.id === form.dealer_id)?.name;
     const agencyName = agencies.find((a) => a.id === form.paid_at_agency_id)?.name;
-    const voucherNo = form.reference_no?.trim() || `PMT-${paymentRow.id}`;
+    const entryCode = form.reference_no?.trim() || `PMT-${paymentRow.id}`;
     const amount = parseFloat(form.amount);
 
-    const ledgerInserts = [];
-    if (!isAgencyOnly) {
-      ledgerInserts.push(
-        supabase.from("ledger_transactions").insert({
-          dealer_id: form.dealer_id,
-          voucher_no: voucherNo,
-          payment_id: paymentRow.id,
-          type: "credit",
-          amount,
-          description: `Payment received — ${form.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${form.remarks ? ` · ${form.remarks}` : ""}`,
-          ...(form.paid_on ? { created_at: form.paid_on } : {}),
-        })
-      );
-    }
-
-    if (form.paid_at_agency_id) {
-      ledgerInserts.push(
-        supabase.from("agency_ledger_transactions").insert({
-          agency_id: form.paid_at_agency_id,
-          voucher_no: voucherNo,
-          payment_id: paymentRow.id,
-          type: "credit",
-          amount,
-          description: isAgencyOnly
-            ? `Payment received — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`
-            : `Payment collected on behalf of ${dealerName || "dealer"} — ${form.payment_mode}${form.remarks ? ` · ${form.remarks}` : ""}`,
-          ...(form.paid_on ? { created_at: form.paid_on } : {}),
-        })
-      );
-    }
-
-    const ledgerResults = await Promise.all(ledgerInserts);
-    const ledgerError = ledgerResults.find((r) => r.error)?.error;
+    const { error: ledgerError } = await supabase.from("ledger_entries").insert({
+      entry_code: entryCode,
+      entry_type: "PAYMENT",
+      entry_date: form.paid_on || new Date().toISOString().slice(0, 10),
+      dealer_id: isAgencyOnly ? null : form.dealer_id,
+      agency_id: form.paid_at_agency_id || null,
+      amount: isAgencyOnly ? 0 : -amount,
+      agency_paid_amount: form.paid_at_agency_id ? amount : 0,
+      payment_mode: form.payment_mode,
+      reference_no: form.reference_no || null,
+      payer_name: isAgencyOnly ? (agencyName || null) : (dealerName || null),
+      source_payment_id: paymentRow.id,
+    });
 
     setSaving(false);
     if (ledgerError) {
@@ -208,49 +186,14 @@ export default function Payments({ staff } = {}) {
     loadAllPayments();
   };
 
-  // Admin-only: deleting a payment also removes the ledger entries it
-  // posted. Matches by payment_id (set on every payment going forward) and
-  // falls back to voucher_no (the payment's reference no., or a PMT-<id>
-  // fallback) for payments recorded before payment_id existed. Unlike the
-  // previous version, this checks what actually got deleted — a delete
-  // that matches zero rows doesn't error, so silently trusting it is how
-  // a payment could disappear while its ledger entry stayed behind.
-  // Core delete logic, shared between the single "Delete" button and the
-  // "All Receipts & Payments" bulk-select delete below. Returns a plain
-  // {ok, message} instead of touching setToast directly, so the bulk path
-  // can collect per-row results into one summary instead of firing a toast
-  // per payment.
+  // Admin-only: deleting a payment also removes its ledger row — matched
+  // directly by source_payment_id (no more voucher_no fallback matching,
+  // no more two separate ledger tables to clean up).
   const deletePaymentAndLedger = async (p) => {
-    const voucherNo = p.reference_no?.trim() || `PMT-${p.id}`;
-
-    const deleteLedgerRows = async (table, entityCol, entityId) => {
-      let { data, error } = await supabase.from(table).delete().eq("payment_id", p.id).select("id");
-      if (!error && (!data || data.length === 0)) {
-        // Pre-payment_id row — fall back to the old voucher_no match.
-        ({ data, error } = await supabase.from(table).delete().eq(entityCol, entityId).eq("voucher_no", voucherNo).select("id"));
-      }
-      return { data, error };
-    };
-
-    // Only the side(s) this payment actually posted to are required to
-    // match — a pure Agency payment (p.dealer_id null) never had a dealer
-    // ledger row to begin with, so there's nothing to find there.
-    const dealerResult = p.dealer_id
-      ? await deleteLedgerRows("ledger_transactions", "dealer_id", p.dealer_id)
-      : { data: [], error: null, skipped: true };
-    const agencyResult = p.paid_at_agency_id
-      ? await deleteLedgerRows("agency_ledger_transactions", "agency_id", p.paid_at_agency_id)
-      : { data: [], error: null, skipped: true };
-
-    if (dealerResult.error || agencyResult.error) {
-      return { ok: false, message: "Failed to remove ledger entries: " + (dealerResult.error || agencyResult.error).message + " — payment was NOT deleted." };
+    const { error: ledgerErr } = await supabase.from("ledger_entries").delete().eq("source_payment_id", p.id);
+    if (ledgerErr) {
+      return { ok: false, message: "Failed to remove ledger entry: " + ledgerErr.message + " — payment was NOT deleted." };
     }
-    const dealerOk = dealerResult.skipped || (dealerResult.data && dealerResult.data.length > 0);
-    const agencyOk = agencyResult.skipped || (agencyResult.data && agencyResult.data.length > 0);
-    if (!dealerOk || !agencyOk) {
-      return { ok: false, message: "Couldn't find this payment's ledger entry to remove — payment was NOT deleted." };
-    }
-
     const { error } = await supabase.from("payments").delete().eq("id", p.id);
     if (error) return { ok: false, message: "Failed to delete: " + error.message };
     return { ok: true, message: "" };
@@ -289,18 +232,17 @@ export default function Payments({ staff } = {}) {
   };
 
   // Admin-only: saves an edited date/amount/mode/reference/remarks and
-  // updates the matching ledger entry — payment_id first, voucher_no
-  // fallback for pre-payment_id rows (see deletePayment above for why the
-  // fallback exists and why zero-row results are treated as a failure,
-  // not success).
+  // updates the matching ledger row — matched directly by
+  // source_payment_id now, no more voucher_no fallback / two-table sync.
   const savePaymentEdit = async (edited) => {
     const original = editingPayment;
-    const oldVoucherNo = original.reference_no?.trim() || `PMT-${original.id}`;
-    const newVoucherNo = edited.reference_no?.trim() || `PMT-${original.id}`;
+    const isAgencyOnly = !original.dealer_id;
+    const newEntryCode = edited.reference_no?.trim() || `PMT-${original.id}`;
+    const newAmount = parseFloat(edited.amount);
     const { error } = await supabase
       .from("payments")
       .update({
-        amount: parseFloat(edited.amount),
+        amount: newAmount,
         payment_mode: edited.payment_mode,
         reference_no: edited.reference_no || null,
         remarks: edited.remarks || null,
@@ -311,37 +253,21 @@ export default function Payments({ staff } = {}) {
       setToast("Failed to update: " + error.message);
       return;
     }
-    const agencyName = agencies.find((a) => a.id === original.paid_at_agency_id)?.name;
 
-    const updateLedgerRow = async (table, entityCol, entityId, patch) => {
-      let { data, error } = await supabase.from(table).update(patch).eq("payment_id", original.id).select("id");
-      if (!error && (!data || data.length === 0)) {
-        ({ data, error } = await supabase.from(table).update(patch).eq(entityCol, entityId).eq("voucher_no", oldVoucherNo).select("id"));
-      }
-      return { data, error };
-    };
+    const { error: ledgerErr } = await supabase
+      .from("ledger_entries")
+      .update({
+        entry_code: newEntryCode,
+        amount: isAgencyOnly ? 0 : -newAmount,
+        agency_paid_amount: original.paid_at_agency_id ? newAmount : 0,
+        payment_mode: edited.payment_mode,
+        reference_no: edited.reference_no || null,
+        ...(edited.paid_on ? { entry_date: edited.paid_on } : {}),
+      })
+      .eq("source_payment_id", original.id);
 
-    const dealerResult = original.dealer_id
-      ? await updateLedgerRow("ledger_transactions", "dealer_id", original.dealer_id, {
-          amount: parseFloat(edited.amount),
-          voucher_no: newVoucherNo,
-          description: `Payment received — ${edited.payment_mode}${agencyName ? ` · Paid at: ${agencyName}` : ""}${edited.remarks ? ` · ${edited.remarks}` : ""}`,
-          ...(edited.paid_on ? { created_at: edited.paid_on } : {}),
-        })
-      : { data: [], error: null, skipped: true };
-    let agencyResult = { data: [], error: null, skipped: true };
-    if (original.paid_at_agency_id) {
-      agencyResult = await updateLedgerRow("agency_ledger_transactions", "agency_id", original.paid_at_agency_id, {
-        amount: parseFloat(edited.amount),
-        voucher_no: newVoucherNo,
-        ...(edited.paid_on ? { created_at: edited.paid_on } : {}),
-      });
-    }
-
-    if (dealerResult.error || agencyResult.error) {
-      setToast("Payment updated, but its ledger entry failed to sync: " + (dealerResult.error || agencyResult.error).message);
-    } else if (!(dealerResult.skipped || (dealerResult.data && dealerResult.data.length > 0)) || !(agencyResult.skipped || (agencyResult.data && agencyResult.data.length > 0))) {
-      setToast("Payment updated, but couldn't find its ledger entry to update — please check the ledger manually.");
+    if (ledgerErr) {
+      setToast("Payment updated, but its ledger entry failed to sync: " + ledgerErr.message);
     } else {
       setToast("Payment updated");
     }
@@ -860,38 +786,20 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           return;
         }
 
-        const voucherNo = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
-        const ledgerInserts = [];
-        if (payload.dealer_id) {
-          ledgerInserts.push(
-            supabase.from("ledger_transactions").insert({
-              dealer_id: payload.dealer_id,
-              voucher_no: voucherNo,
-              payment_id: paymentRow.id,
-              type: "credit",
-              amount: payload.amount,
-              description: `Payment received — ${payload.payment_mode}${payload.agency_name ? ` · Paid at: ${payload.agency_name}` : ""}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
-              ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
-            })
-          );
-        }
-        if (payload.agency_id) {
-          ledgerInserts.push(
-            supabase.from("agency_ledger_transactions").insert({
-              agency_id: payload.agency_id,
-              voucher_no: voucherNo,
-              payment_id: paymentRow.id,
-              type: "credit",
-              amount: payload.amount,
-              description: payload.dealer_id
-                ? `Payment collected on behalf of ${payload.dealer_name || "dealer"} — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`
-                : `Payment received — ${payload.payment_mode}${payload.remarks ? ` · ${payload.remarks}` : ""}`,
-              ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
-            })
-          );
-        }
-        const ledgerResults = await Promise.all(ledgerInserts);
-        const ledgerError = ledgerResults.find((res) => res.error)?.error;
+        const entryCode = payload.reference_no?.trim() || `PMT-${paymentRow.id}`;
+        const { error: ledgerError } = await supabase.from("ledger_entries").insert({
+          entry_code: entryCode,
+          entry_type: "PAYMENT",
+          entry_date: payload.paid_on || new Date().toISOString().slice(0, 10),
+          dealer_id: payload.dealer_id || null,
+          agency_id: payload.agency_id || null,
+          amount: payload.dealer_id ? -payload.amount : 0,
+          agency_paid_amount: payload.agency_id ? payload.amount : 0,
+          payment_mode: payload.payment_mode,
+          reference_no: payload.reference_no || null,
+          payer_name: payload.dealer_name || payload.agency_name || null,
+          source_payment_id: paymentRow.id,
+        });
         if (ledgerError) {
           ledgerFailures.push({
             reference_no: payload.reference_no || voucherNo,

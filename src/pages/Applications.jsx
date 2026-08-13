@@ -594,27 +594,32 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return { ok: false, message: "Already accepted" };
     }
 
-    const descriptionParts = [
-      app.applicant_name || null,
-      serviceLabel(app.services) ? `Service: ${serviceLabel(app.services)}` : null,
-      app.application_no ? `App No: ${app.application_no}` : null,
-      app.date_of_birth ? `DOB: ${isoToDDMMYYYY(app.date_of_birth)}` : null,
-    ].filter(Boolean);
-
-    const { error: ledgerError } = await supabase.from("ledger_transactions").insert({
-      dealer_id: app.dealer_id,
-      type: "debit",
-      amount: app.amount || 0,
-      voucher_no: app.draft_code,
-      description: descriptionParts.join(" · "),
-    });
-    if (ledgerError) {
-      return { ok: false, message: "Status updated, but ledger entry failed: " + ledgerError.message };
-    }
-
+    // Ledger no longer posts here — Accept is a workflow status, not a
+    // billing event. The ledger row now posts when staff explicitly mark
+    // the application Completed (see completeApplication below), so
+    // there's nothing further to do once the status flip itself lands.
     return {
       ok: true,
-      message: `Accepted on ${isoToDDMMYYYY(applicationDate)} — ₹${Number(app.amount || 0).toLocaleString("en-IN")} debited to dealer ledger`,
+      message: `Accepted on ${isoToDDMMYYYY(applicationDate)}`,
+    };
+  };
+
+  // Marks an application Completed and posts its SERVICE row to the
+  // ledger, atomically, via the complete_application() Postgres function —
+  // this is the actual billing event now (Accept, above, no longer is).
+  // Safe to call more than once: the function is a no-op if this
+  // application already has a ledger row.
+  const completeApplication = async (app) => {
+    if (app.status === "Completed") {
+      return { ok: false, message: "Already completed" };
+    }
+    const { error } = await supabase.rpc("complete_application", { p_application_id: app.id });
+    if (error) {
+      return { ok: false, message: "Failed: " + error.message };
+    }
+    return {
+      ok: true,
+      message: `Completed — ₹${Number(app.amount || 0).toLocaleString("en-IN")} posted to dealer ledger`,
     };
   };
 
@@ -626,10 +631,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // always cleaned up here too.
   const deleteApplication = async (app) => {
     if (!window.confirm(`Delete application ${app.draft_code} (${app.applicant_name})? This cannot be undone.`)) return;
-    if (app.status === "Accepted") {
-      await supabase.from("ledger_transactions").delete().eq("dealer_id", app.dealer_id).eq("voucher_no", app.draft_code);
-    }
-    await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", `${app.draft_code}-AGENCYFEE`);
+    await supabase.from("ledger_entries").delete().eq("source_application_id", app.id);
     await supabase.from("application_documents").delete().eq("application_id", app.id);
     const { error } = await supabase.from("applications").delete().eq("id", app.id);
     if (error) {
@@ -644,6 +646,24 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const updateStatus = async (newStatus, remarks) => {
     if (newStatus === "Accepted") {
       const result = await approveApplication(selected, remarks);
+      setToast(result.message);
+      closeDetail();
+      load();
+      return;
+    }
+    if (newStatus === "Completed") {
+      const result = await completeApplication(selected);
+      if (result.ok && remarks !== selected.remarks) {
+        // complete_application() already set status/completed_at/application_date —
+        // remarks is the only field it doesn't touch.
+        const { error } = await supabase.from("applications").update({ remarks }).eq("id", selected.id);
+        if (error) {
+          setToast("Ledger posted, but remarks failed to save: " + error.message);
+          closeDetail();
+          load();
+          return;
+        }
+      }
       setToast(result.message);
       closeDetail();
       load();
@@ -696,90 +716,57 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   };
 
   // Amount is special-cased: if this application has already been
-  // Accepted, a matching debit already sits in ledger_transactions
-  // (posted by approveApplication below). Editing Amount here needs to
-  // keep that ledger row in sync too, same as editing it from the Ledger
-  // page already keeps the application in sync (see
-  // update_dealer_ledger_amount / 013_atomic_ledger_amount_update.sql).
-  // update_application_amount does both writes in one atomic function
-  // call so they can't drift from a half-completed save.
+  // Completed, a matching row already sits in ledger_entries (posted by
+  // complete_application). Editing Amount here needs to keep that row in
+  // sync too — sync_ledger_entry_amounts() is a no-op if no ledger row
+  // exists yet (not Completed), so it's always safe to call.
   const updateApplicationAmount = async (id, value) => {
     const newAmount = value === "" || value === null ? 0 : value;
-    const { error } = await supabase.rpc("update_application_amount", {
-      p_application_id: id,
-      p_new_amount: newAmount,
-    });
+    const { error } = await supabase.from("applications").update({ amount: newAmount }).eq("id", id);
     if (error) {
       setToast("Failed to update amount: " + error.message);
       return;
     }
+    const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: id });
+    if (syncErr) {
+      setToast("Amount saved, but ledger sync failed: " + syncErr.message);
+    }
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, amount: newAmount } : r)));
   };
 
-  // Keeps the Agency's ledger in sync with an application's Agency Fee —
-  // posts as a debit (it's a cost we owe the agency), independent of the
-  // application's status. voucher_no is suffixed so it never collides with
-  // a Payments-page voucher on the same draft_code. Delete-then-insert keeps
-  // this idempotent whether the fee/agency changed or was cleared.
-  const syncAgencyFeeLedger = async (row, agencyFeeValue, agencyId) => {
-    const voucherNo = `${row.draft_code}-AGENCYFEE`;
-    const { error: delError } = await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", voucherNo);
-    if (delError) return { error: delError };
-    if (agencyFeeValue && agencyId) {
-      const descriptionParts = [
-        "Agency Fee",
-        [serviceLabel(row.services), row.applicant_name].filter(Boolean).join(" ") || null,
-        row.application_no ? `App No: ${row.application_no}` : null,
-      ].filter(Boolean);
-      const { error: insError } = await supabase.from("agency_ledger_transactions").insert({
-        agency_id: agencyId,
-        voucher_no: voucherNo,
-        type: "debit",
-        amount: agencyFeeValue,
-        description: descriptionParts.join(" · "),
-      });
-      if (insError) return { error: insError };
-    }
-    return { error: null };
-  };
+  // Agency Fee is a column on the SAME ledger_entries row as the rest of
+  // the application (not a separate ledger row anymore) — so keeping it
+  // in sync after Completion is just another call to
+  // sync_ledger_entry_amounts, same as an Amount edit.
 
-  // Agency Fee needs an Agency to post its debit to, so entering a fee with
-  // no Agency selected is blocked rather than silently skipping the ledger.
+  // Agency Fee no longer needs an Agency selected up front to save — it's
+  // just a column on the application/ledger row now, not a separate
+  // ledger entry that has to post somewhere.
   const updateAgencyFee = async (row, rawValue) => {
     const value = rawValue === "" ? null : parseFloat(rawValue);
-    if (value !== null && !row.agency_id) {
-      setToast("Select an Agency for this application first — Agency Fee needs an agency to post to.");
-      return;
-    }
     const { error } = await supabase.from("applications").update({ agency_fee: value }).eq("id", row.id);
     if (error) {
       setToast("Failed to update: " + error.message);
       return;
     }
     setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, agency_fee: value } : r)));
-    const { error: ledgerError } = await syncAgencyFeeLedger(row, value, row.agency_id);
-    if (ledgerError) setToast("Agency Fee saved, but agency ledger sync failed: " + ledgerError.message);
+    const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: row.id });
+    if (syncErr) setToast("Agency Fee saved, but ledger sync failed: " + syncErr.message);
   };
 
-  // Changing the Agency while an Agency Fee is already set moves the ledger
-  // debit to the new agency; clearing the Agency is blocked in that case
-  // instead of leaving an orphaned fee with nowhere to post.
+  // Changing the Agency after Completion moves the agency ledger's running
+  // balance along with it (same sync call), since agency_id lives on the
+  // same ledger row as the Agency Fee.
   const updateAgencyId = async (row, value) => {
     const newAgencyId = value || null;
-    if (row.agency_fee && !newAgencyId) {
-      setToast("Can't remove the Agency while an Agency Fee is set on this application — clear the Agency Fee first.");
-      return;
-    }
     const { error } = await supabase.from("applications").update({ agency_id: newAgencyId }).eq("id", row.id);
     if (error) {
       setToast("Failed to update: " + error.message);
       return;
     }
     setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, agency_id: newAgencyId } : r)));
-    if (row.agency_fee) {
-      const { error: ledgerError } = await syncAgencyFeeLedger(row, row.agency_fee, newAgencyId);
-      if (ledgerError) setToast("Agency updated, but ledger sync failed: " + ledgerError.message);
-    }
+    const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: row.id });
+    if (syncErr) setToast("Agency updated, but ledger sync failed: " + syncErr.message);
   };
 
   // PCC Fee is the trigger for auto-stamping today's date into Slot — used
@@ -2036,57 +2023,39 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
         });
       }
 
-      // Rows imported directly as Accepted skip the normal "Approve" action
-      // (and its ledger debit) entirely, so post the matching ledger entry
-      // here — same shape as approveApplication — for any imported row
+      // Rows imported directly as Completed skip the normal "Mark
+      // Completed" action entirely, so post the matching ledger row here
+      // — same shape as complete_application() — for any imported row
       // that's already at that stage. Backdated to the row's own
-      // Application Date (when the CSV provided one) rather than defaulting
-      // to "now" — otherwise every imported row shows up on the ledger as
-      // if it happened at import time, and the description now also
-      // includes the service so it's identifiable without opening the row.
-      const preApproved = insertedRows.filter((r) => r.status === "Accepted");
-      if (preApproved.length) {
-        const ledgerRows = preApproved.map((r) => {
+      // Application Date (when the CSV provided one) rather than
+      // defaulting to "now", and Agency Fee/Agency ride along on the same
+      // row (it's one ledger_entries row per application now, not a
+      // separate agency ledger table).
+      const preCompleted = insertedRows.filter((r) => r.status === "Completed");
+      if (preCompleted.length) {
+        const ledgerRows = preCompleted.map((r) => {
           const service = serviceList.find((s) => s.id === r.service_id);
           return {
+            entry_code: r.application_no || `APP-${r.id.slice(0, 8)}`,
+            entry_type: "SERVICE",
+            entry_date: r.application_date || new Date().toISOString().slice(0, 10),
             dealer_id: r.dealer_id,
-            type: "debit",
+            agency_id: r.agency_id || null,
+            applicant_name: r.applicant_name,
+            service_type: serviceLabel(service) || null,
             amount: r.amount || 0,
-            voucher_no: r.draft_code,
-            description: `${r.applicant_name || ""}${service ? ` · Service: ${serviceLabel(service)}` : ""}${r.application_no ? ` · App No: ${r.application_no}` : ""}`,
-            ...(r.application_date ? { created_at: r.application_date } : {}),
+            rto_fee: r.rto_fee || null,
+            agency_fee: r.agency_fee || null,
+            dob: r.date_of_birth || null,
+            license_no: r.ll_dl_no || null,
+            address: r.address || null,
+            contact_no: r.mobile || null,
+            source_application_id: r.id,
           };
         });
-        const { error: ledgerError } = await supabase.from("ledger_transactions").insert(ledgerRows);
+        const { error: ledgerError } = await supabase.from("ledger_entries").insert(ledgerRows);
         if (ledgerError) {
-          setError(`Applications imported, but ${preApproved.length} ledger entr${preApproved.length !== 1 ? "ies" : "y"} failed to post: ` + ledgerError.message);
-          setImporting(false);
-          setProgress(null);
-          return;
-        }
-      }
-
-      // Agency Fee posts a debit to the Agency's ledger — same as editing it
-      // in the table — for any imported row that has both an Agency Fee and
-      // an Agency, regardless of status. Rows with an Agency Fee but no
-      // Agency just mean that fee was paid directly, nothing to post.
-      // Backdated to Application Date for the same reason as above.
-      const feeWithAgency = insertedRows.filter((r) => r.agency_fee && r.agency_id);
-      if (feeWithAgency.length) {
-        const agencyLedgerRows = feeWithAgency.map((r) => {
-          const service = serviceList.find((s) => s.id === r.service_id);
-          return {
-            agency_id: r.agency_id,
-            type: "debit",
-            amount: r.agency_fee,
-            voucher_no: `${r.draft_code}-AGENCYFEE`,
-            description: `Agency Fee${service ? ` · Service: ${serviceLabel(service)}` : ""} · ${r.applicant_name || ""}${r.application_no ? ` · App No: ${r.application_no}` : ""}`,
-            ...(r.application_date ? { created_at: r.application_date } : {}),
-          };
-        });
-        const { error: agencyLedgerError } = await supabase.from("agency_ledger_transactions").insert(agencyLedgerRows);
-        if (agencyLedgerError) {
-          setError(`Applications imported, but ${feeWithAgency.length} agency ledger entr${feeWithAgency.length !== 1 ? "ies" : "y"} failed to post: ` + agencyLedgerError.message);
+          setError(`Applications imported, but ${preCompleted.length} ledger entr${preCompleted.length !== 1 ? "ies" : "y"} failed to post: ` + ledgerError.message);
           setImporting(false);
           setProgress(null);
           return;
@@ -2511,84 +2480,41 @@ function UpdateApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
       r.changes.forEach((c) => { fields[c.column] = c.newValue; });
 
       const statusChange = r.changes.find((c) => c.key === "status");
-      const becomingAccepted = statusChange && statusChange.newValue === "Accepted" && r.target.status !== "Accepted";
+      const becomingCompleted = statusChange && statusChange.newValue === "Completed" && r.target.status !== "Completed";
 
       try {
-        if (becomingAccepted) {
-          // Same shape as the table's Approve button / CSV Import's
-          // pre-approved path: flip status, backfill application_date /
-          // completed_at if not already set, and post the dealer ledger debit.
-          const applicationDate = fields.application_date || r.target.application_date || new Date().toISOString().slice(0, 10);
-          fields.application_date = applicationDate;
-          if (!r.target.completed_at) fields.completed_at = new Date().toISOString();
+        if (becomingCompleted) {
+          // Same shape as the table's "Mark Completed" action / CSV
+          // Import's pre-completed path: flip status/ledger together via
+          // complete_application(), then apply any OTHER changed fields
+          // from this CSV row on top (the RPC only touches
+          // status/completed_at/application_date + the ledger row).
+          const { error: rpcErr } = await supabase.rpc("complete_application", { p_application_id: r.target.id });
+          if (rpcErr) throw rpcErr;
 
-          const { error: updErr } = await supabase.from("applications").update(fields).eq("id", r.target.id);
-          if (updErr) throw updErr;
-
-          const finalAmount = fields.amount !== undefined ? fields.amount : r.target.amount;
-          const finalServiceId = fields.service_id !== undefined ? fields.service_id : r.target.service_id;
-          const finalApplicantName = fields.applicant_name !== undefined ? fields.applicant_name : r.target.applicant_name;
-          const finalApplicationNo = fields.application_no !== undefined ? fields.application_no : r.target.application_no;
-          const service = serviceList.find((s) => s.id === finalServiceId);
-          const descriptionParts = [
-            finalApplicantName || null,
-            serviceLabel(service) ? `Service: ${serviceLabel(service)}` : null,
-            finalApplicationNo ? `App No: ${finalApplicationNo}` : null,
-          ].filter(Boolean);
-
-          const { error: ledgerError } = await supabase.from("ledger_transactions").insert({
-            dealer_id: r.target.dealer_id,
-            type: "debit",
-            amount: finalAmount || 0,
-            voucher_no: r.target.draft_code,
-            description: descriptionParts.join(" · "),
-            created_at: applicationDate,
-          });
-          if (ledgerError) throw new Error("Status updated, but dealer ledger entry failed: " + ledgerError.message);
+          const otherFields = { ...fields };
+          delete otherFields.status;
+          if (Object.keys(otherFields).length) {
+            const { error: updErr } = await supabase.from("applications").update(otherFields).eq("id", r.target.id);
+            if (updErr) throw updErr;
+            const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: r.target.id });
+            if (syncErr) throw new Error("Saved, but ledger sync failed: " + syncErr.message);
+          }
         } else {
           const { error: updErr } = await supabase.from("applications").update(fields).eq("id", r.target.id);
           if (updErr) throw updErr;
 
-          // Row was already Accepted before this import (not becoming
-          // Accepted just now, that path above already posts the ledger
-          // row fresh). If Amount changed, the existing ledger debit needs
-          // to move with it — same sync as the inline table edit uses.
-          if (fields.amount !== undefined && r.target.status === "Accepted") {
-            const { error: syncErr } = await supabase.rpc("update_application_amount", {
-              p_application_id: r.target.id,
-              p_new_amount: fields.amount || 0,
-            });
+          // Row was already Completed before this import (not becoming
+          // Completed just now, that path above already posts the ledger
+          // row fresh). If Amount/RTO Fee/Agency Fee/Agency changed, the
+          // existing ledger row needs to move with it — same sync as the
+          // inline table edits use. sync_ledger_entry_amounts() is a
+          // no-op if there's no ledger row (not Completed), so it's safe
+          // to call unconditionally whenever any of these changed.
+          const ledgerFieldsChanged = r.changes.some((c) => ["amount", "rto_fee", "agency_fee", "agency"].includes(c.key));
+          if (ledgerFieldsChanged) {
+            const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: r.target.id });
             if (syncErr) throw new Error("Saved, but ledger sync failed: " + syncErr.message);
-          }
-        }
-
-        // Keep the agency ledger in sync — same delete-then-insert pattern
-        // as the inline Agency Fee / Agency edits in the table.
-        const feeOrAgencyChanged = r.changes.some((c) => c.key === "agency_fee" || c.key === "agency");
-        if (feeOrAgencyChanged) {
-          const finalFee = fields.agency_fee !== undefined ? fields.agency_fee : r.target.agency_fee;
-          const finalAgencyId = fields.agency_id !== undefined ? fields.agency_id : r.target.agency_id;
-          const voucherNo = `${r.target.draft_code}-AGENCYFEE`;
-          const { error: delErr } = await supabase.from("agency_ledger_transactions").delete().eq("voucher_no", voucherNo);
-          if (delErr) throw delErr;
-          if (finalFee && finalAgencyId) {
-            const finalServiceId = fields.service_id !== undefined ? fields.service_id : r.target.service_id;
-            const finalApplicantName = fields.applicant_name !== undefined ? fields.applicant_name : r.target.applicant_name;
-            const finalApplicationNo = fields.application_no !== undefined ? fields.application_no : r.target.application_no;
-            const service = serviceList.find((s) => s.id === finalServiceId);
-            const descriptionParts = [
-              "Agency Fee",
-              [serviceLabel(service), finalApplicantName].filter(Boolean).join(" ") || null,
-              finalApplicationNo ? `App No: ${finalApplicationNo}` : null,
-            ].filter(Boolean);
-            const { error: agencyErr } = await supabase.from("agency_ledger_transactions").insert({
-              agency_id: finalAgencyId,
-              voucher_no: voucherNo,
-              type: "debit",
-              amount: finalFee,
-              description: descriptionParts.join(" · "),
-            });
-            if (agencyErr) throw new Error("Saved, but agency ledger sync failed: " + agencyErr.message);
           }
         }
 
