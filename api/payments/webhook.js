@@ -27,6 +27,7 @@
 // PAYMENT_SUCCESS_WEBHOOK event.
 import { supabaseAdmin } from "../_lib/adminAuth.js";
 import { verifyWebhookSignature, fetchOrderStatus } from "./_lib/cashfree.js";
+import { sendPushNotification } from "../_lib/push.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -141,6 +142,18 @@ export default async function handler(req, res) {
         .from("payment_qr_requests")
         .update({ status: "paid", payment_id: payment.id, paid_at: new Date().toISOString() })
         .eq("id", qrRequest.id);
+
+      // Real push to every staff device, not just an in-app toast -- this
+      // runs server-side (Cashfree calling us directly, no staff browser
+      // involved at all), so it's the only way staff get notified if
+      // nobody's app happens to be open right now. Fire-and-forget: never
+      // block or fail the webhook response over a push delivery issue.
+      sendPushNotification({
+        targetType: "all_staff",
+        title: "Payment received (QR)",
+        body: `${dealerRow?.name || "A dealer"} — ₹${Number(qrRequest.amount).toLocaleString("en-IN")}`,
+        data: { kind: "payment" },
+      }).catch(() => {});
 
       return res.status(200).json({ ok: true });
     }
