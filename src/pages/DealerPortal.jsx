@@ -16,6 +16,7 @@ import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextServi
 import { getOrCreateThread, sendMessage, countDealerUnread, listRecentThreadsForDealer } from "../lib/chat";
 import { notify } from "../lib/notify";
 import { createDealerStaffLogin, sendPush, createPaymentQr } from "../lib/serverApi";
+import { openCashfreeHostedCheckout } from "../lib/cashfreeCheckout";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { ageHighlightClass, validateAgeForService } from "../lib/age";
 import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
@@ -1521,10 +1522,11 @@ function TopUpModal({ dealer, onClose, onPaid }) {
   const [customAmount, setCustomAmount] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [qr, setQr] = useState(null); // { qrRequestId, qrImageUrl, qrRawString, expiresAt, cfOrderId }
+  const [qr, setQr] = useState(null); // { qrRequestId, qrImageUrl, qrRawString, paymentSessionId, cashfreeMode, expiresAt, cfOrderId }
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [toast, setToast] = useState(null);
   const [newBalance, setNewBalance] = useState(null);
+  const [openingHosted, setOpeningHosted] = useState(false);
   const pollRef = useRef(null);
 
   const finalAmount = useCustom ? parseFloat(customAmount) || 0 : amount;
@@ -1600,6 +1602,18 @@ function TopUpModal({ dealer, onClose, onPaid }) {
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
   const ss = String(secondsLeft % 60).padStart(2, "0");
 
+  const openHosted = async () => {
+    if (!qr?.paymentSessionId) return;
+    setOpeningHosted(true);
+    try {
+      await openCashfreeHostedCheckout({ paymentSessionId: qr.paymentSessionId, mode: qr.cashfreeMode });
+    } catch (e) {
+      setToast(e.message || "Could not open the payment page");
+    } finally {
+      setOpeningHosted(false);
+    }
+  };
+
   return (
     <Modal title="Top Up Wallet" onClose={onClose}>
       {step === "form" && (
@@ -1643,6 +1657,13 @@ function TopUpModal({ dealer, onClose, onPaid }) {
           </p>
           {qr.qrImageUrl ? (
             <img src={qr.qrImageUrl} alt="UPI payment QR" className="mx-auto w-56 h-56 rounded-lg border border-slate-200 dark:border-slate-700" />
+          ) : qr.paymentSessionId ? (
+            <div className="py-4">
+              <PrimaryButton onClick={openHosted} disabled={openingHosted} className="w-full">
+                {openingHosted ? "Opening…" : "Pay Now"}
+              </PrimaryButton>
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">Opens Cashfree's payment page in a new tab — UPI QR, UPI app, or card, whichever's easiest. This tab keeps waiting for confirmation.</p>
+            </div>
           ) : (
             <p className="text-sm text-rose-500">QR image unavailable — try again in a moment.</p>
           )}

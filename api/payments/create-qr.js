@@ -115,7 +115,21 @@ export default async function handler(req, res) {
       webhookUrl,
     });
 
-    const qr = await generateUpiQr({ paymentSessionId: order.payment_session_id });
+    // The order itself is created either way -- it's specifically the
+    // "Order Pay" call (rendering that order as an embedded UPI QR) that
+    // some Cashfree accounts don't have enabled yet ("POST /orders/pay is
+    // not enabled or approved", needs Cashfree support to turn on). Rather
+    // than failing the whole request when that happens, fall back to
+    // returning the order's payment_session_id so the frontend can send the
+    // dealer to Cashfree's own hosted checkout page instead (which needs no
+    // special approval and offers UPI QR/intent/cards there) -- see
+    // src/lib/cashfreeCheckout.js.
+    let qr = { qrImageUrl: null, qrRawString: null };
+    try {
+      qr = await generateUpiQr({ paymentSessionId: order.payment_session_id });
+    } catch (qrErr) {
+      console.warn("create-qr: embedded UPI QR unavailable, falling back to hosted checkout:", qrErr.message);
+    }
 
     const { data: qrRequest, error: insertErr } = await supabaseAdmin
       .from("payment_qr_requests")
@@ -136,6 +150,11 @@ export default async function handler(req, res) {
       qrRequestId: qrRequest.id,
       qrImageUrl: qr.qrImageUrl,
       qrRawString: qr.qrRawString,
+      // Always included so the frontend can fall back to Cashfree's hosted
+      // checkout (cashfree.checkout({ paymentSessionId, ... })) whenever
+      // qrImageUrl above is null.
+      paymentSessionId: order.payment_session_id,
+      cashfreeMode: process.env.CASHFREE_ENV === "PRODUCTION" ? "production" : "sandbox",
       expiresAt: expiresAt.toISOString(),
       cfOrderId,
     });

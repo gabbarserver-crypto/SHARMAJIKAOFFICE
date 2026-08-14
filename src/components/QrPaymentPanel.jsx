@@ -14,6 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { createPaymentQr } from "../lib/serverApi";
+import { openCashfreeHostedCheckout } from "../lib/cashfreeCheckout";
 import { Modal, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "./UI";
 
 export default function QrPaymentPanel({ dealerId, applications, onClose, onPaid }) {
@@ -21,9 +22,10 @@ export default function QrPaymentPanel({ dealerId, applications, onClose, onPaid
   const [applicationId, setApplicationId] = useState("");
   const [amount, setAmount] = useState("");
   const [creating, setCreating] = useState(false);
-  const [qr, setQr] = useState(null); // { qrRequestId, qrImageUrl, qrRawString, expiresAt, cfOrderId }
+  const [qr, setQr] = useState(null); // { qrRequestId, qrImageUrl, qrRawString, paymentSessionId, cashfreeMode, expiresAt, cfOrderId }
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [toast, setToast] = useState(null);
+  const [openingHosted, setOpeningHosted] = useState(false);
   const pollRef = useRef(null);
 
   const requestQr = async () => {
@@ -92,6 +94,18 @@ export default function QrPaymentPanel({ dealerId, applications, onClose, onPaid
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
   const ss = String(secondsLeft % 60).padStart(2, "0");
 
+  const openHosted = async () => {
+    if (!qr?.paymentSessionId) return;
+    setOpeningHosted(true);
+    try {
+      await openCashfreeHostedCheckout({ paymentSessionId: qr.paymentSessionId, mode: qr.cashfreeMode });
+    } catch (e) {
+      setToast(e.message || "Could not open the payment page");
+    } finally {
+      setOpeningHosted(false);
+    }
+  };
+
   return (
     <Modal title="Pay by QR" onClose={onClose}>
       {step === "form" && (
@@ -118,6 +132,13 @@ export default function QrPaymentPanel({ dealerId, applications, onClose, onPaid
           </p>
           {qr.qrImageUrl ? (
             <img src={qr.qrImageUrl} alt="UPI payment QR" className="mx-auto w-56 h-56 rounded-lg border border-slate-200 dark:border-slate-700" />
+          ) : qr.paymentSessionId ? (
+            <div className="py-4">
+              <PrimaryButton onClick={openHosted} disabled={openingHosted} className="w-full">
+                {openingHosted ? "Opening…" : "Pay Now"}
+              </PrimaryButton>
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">Opens Cashfree's payment page in a new tab — UPI QR, UPI app, or card, whichever's easiest. This tab keeps waiting for confirmation.</p>
+            </div>
           ) : (
             <p className="text-sm text-rose-500">QR image unavailable — try again in a moment.</p>
           )}
