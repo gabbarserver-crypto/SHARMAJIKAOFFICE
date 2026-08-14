@@ -21,7 +21,7 @@ const STATUS_META = {
 export default function DealerPaymentsPanel({ dealerId, identity }) {
   const [applications, setApplications] = useState([]);
   const [recent, setRecent] = useState([]);
-  const [form, setForm] = useState({ application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
+  const [form, setForm] = useState({ application_id: "", amount: "", payment_mode: "Bank", reference_no: "", remarks: "" });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [showQr, setShowQr] = useState(false);
@@ -95,7 +95,7 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
           </Field>
           <Field label="Payment Mode" required>
             <Select value={form.payment_mode} onChange={set("payment_mode")}>
-              <option>Cash</option><option>Bank</option><option>UPI</option><option>Cheque</option>
+              <option>Bank</option>
             </Select>
           </Field>
         </div>
