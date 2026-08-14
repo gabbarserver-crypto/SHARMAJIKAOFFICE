@@ -31,6 +31,7 @@
 // until this is set; every other piece (token capture, the DB table, the
 // Android manifest/gradle wiring) is already in place.
 import { resolveCaller, supabaseAdmin } from "./_lib/adminAuth.js";
+import { applyCors } from "./_lib/cors.js";
 
 let firebaseApp = null;
 async function getFirebaseApp() {
@@ -50,6 +51,8 @@ async function getFirebaseApp() {
 }
 
 export default async function handler(req, res) {
+  if (applyCors(req, res)) return; // preflight handled
+
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   if (!supabaseAdmin) return res.status(500).json({ error: "Server isn't configured with SUPABASE_SERVICE_ROLE_KEY" });
 
@@ -103,6 +106,29 @@ export default async function handler(req, res) {
         // Don't let a stale ring arrive after the caller's own 30s timeout
         // (RING_TIMEOUT_MS in src/lib/call.js) has already given up.
         ...(isCall ? { ttl: 30000 } : {}),
+        // Chat/draft pushes (not calls — those are data-only above and
+        // rendered by native code instead): target the high-priority
+        // "Calls & Messages" channel created client-side in
+        // src/lib/push.js. Without an explicit channelId, Android falls
+        // back to Capacitor's bare default channel, which has no light
+        // color and a plain "default" sound rather than the punchier
+        // "urgent" one — that's what made pushes feel dim/slow before.
+        ...(isCall
+          ? {}
+          : {
+              notification: {
+                channelId: "calls_messages",
+                priority: "max",
+                visibility: "public",
+                defaultVibrateTimings: false,
+                vibrateTimingsMillis: [0, 250, 150, 250],
+                lightSettings: {
+                  color: { red: 1, green: 0.23, blue: 0.18, alpha: 1 },
+                  lightOnDurationMillis: 300,
+                  lightOffDurationMillis: 300,
+                },
+              },
+            }),
       },
     };
 

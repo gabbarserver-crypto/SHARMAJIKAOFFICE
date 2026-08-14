@@ -20,6 +20,7 @@
 //   individual who has ever opened this thread — lets the UI show exactly
 //   who ("Seen by Rahul, 2:14 PM") rather than just which side.
 import { supabaseAdmin, resolveCaller } from "../_lib/adminAuth.js";
+import { applyCors } from "../_lib/cors.js";
 
 function sideFor(caller) {
   if (caller?.kind === "staff") return "staff";
@@ -28,6 +29,8 @@ function sideFor(caller) {
 }
 
 export default async function handler(req, res) {
+  if (applyCors(req, res)) return; // preflight handled
+
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   if (!supabaseAdmin) return res.status(500).json({ error: "Server isn't configured with SUPABASE_SERVICE_ROLE_KEY" });
 

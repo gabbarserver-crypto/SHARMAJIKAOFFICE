@@ -14,8 +14,11 @@
 //   SUPABASE_URL
 //   SUPABASE_SERVICE_ROLE_KEY   (Supabase Dashboard → Settings → API → service_role — keep secret)
 import { supabaseAdmin, resolveCaller } from "../_lib/adminAuth.js";
+import { applyCors } from "../_lib/cors.js";
 
 export default async function handler(req, res) {
+  if (applyCors(req, res)) return; // preflight handled
+
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   if (!supabaseAdmin) return res.status(500).json({ error: "Server isn't configured with SUPABASE_SERVICE_ROLE_KEY" });
 
