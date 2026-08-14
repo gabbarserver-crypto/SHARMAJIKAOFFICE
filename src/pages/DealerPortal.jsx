@@ -15,8 +15,7 @@ import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
 import { getOrCreateThread, sendMessage, countDealerUnread, listRecentThreadsForDealer } from "../lib/chat";
 import { notify } from "../lib/notify";
-import { createDealerStaffLogin, sendPush, createPaymentQr } from "../lib/serverApi";
-import { openCashfreeHostedCheckout } from "../lib/cashfreeCheckout";
+import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { ageHighlightClass, validateAgeForService } from "../lib/age";
 import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
@@ -24,6 +23,7 @@ import { scanAadhaarImage } from "../lib/aadhaarOcr";
 import { useDarkMode } from "../lib/theme";
 import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText, Gamepad2 } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
+import DealerPaymentsPanel from "../components/DealerPaymentsPanel";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
@@ -369,7 +369,12 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         )}
         {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
         {tab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
-        {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} />}
+        {tab === "Payments" && (
+          <div className="space-y-6">
+            <DealerPaymentsPanel dealerId={dealer.id} identity={identity} />
+            <DealerPaymentHistory dealerId={dealer.id} />
+          </div>
+        )}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
 
