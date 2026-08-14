@@ -79,12 +79,38 @@ export default async function handler(req, res) {
     if (!qrRequest) return res.status(200).json({ ok: true, note: "unknown order_id, ignored" });
 
     // Already handled (Cashfree can send the same webhook more than once --
-    // this makes the handler idempotent instead of double-inserting).
+    // this makes the handler idempotent instead of double-inserting/
+    // double-crediting).
     if (qrRequest.status === "paid") return res.status(200).json({ ok: true, note: "already processed" });
 
     const order = await fetchOrderStatus(orderId);
 
     if (order.order_status === "PAID") {
+      // Wallet top-ups are a separate prepaid pool from `payments` /
+      // dealer_ledger (see the "Wallet Balance" vs "Running Balance" cards
+      // in DealerPortal) -- so these credit `dealers.wallet_balance`
+      // directly instead of inserting a `payments` row. The increment runs
+      // through a Postgres function (not a plain read-then-write update)
+      // so two webhook deliveries racing each other can't clobber one
+      // another's credit.
+      if (qrRequest.purpose === "wallet_topup") {
+        const { error: creditErr } = await supabaseAdmin.rpc("increment_dealer_wallet", {
+          p_dealer_id: qrRequest.dealer_id,
+          p_amount: qrRequest.amount,
+        });
+        if (creditErr) {
+          console.error("webhook: failed to credit wallet for", orderId, creditErr.message);
+          return res.status(200).json({ ok: true, note: "wallet credit failed, will retry on next webhook delivery" });
+        }
+
+        await supabaseAdmin
+          .from("payment_qr_requests")
+          .update({ status: "paid", paid_at: new Date().toISOString() })
+          .eq("id", qrRequest.id);
+
+        return res.status(200).json({ ok: true });
+      }
+
       const { data: payment, error: paymentErr } = await supabaseAdmin
         .from("payments")
         .insert({

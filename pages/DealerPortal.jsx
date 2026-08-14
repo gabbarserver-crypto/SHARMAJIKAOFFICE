@@ -13,9 +13,9 @@ import CallLogPanel from "../components/CallLogPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { getOrCreateThread, sendMessage, countDealerUnread, listRecentThreadsForDealer } from "../lib/chat";
+import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
 import { notify } from "../lib/notify";
-import { createDealerStaffLogin, sendPush, createPaymentQr } from "../lib/serverApi";
+import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { ageHighlightClass, validateAgeForService } from "../lib/age";
 import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
@@ -28,8 +28,7 @@ import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
 import PastelAvatar from "../components/PastelAvatar";
-import { Search, Users } from "lucide-react";
-import { loadSeenMap, saveSeenMap, isThreadSeen } from "../lib/threadSeen";
+import { Search } from "lucide-react";
 // (Ledger's description-parsing helpers are gone — dealer_ledger already
 // carries ledger_type / display_name as real columns, so nothing needs
 // importing from Ledger.jsx anymore.)
@@ -104,20 +103,10 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   const [unreadChats, setUnreadChats] = useState(0);
   const [showTopUp, setShowTopUp] = useState(false);
   const [runningBalance, setRunningBalance] = useState(null);
-  // Mirrors dealer.wallet_balance but can be bumped instantly the moment a
-  // Cashfree wallet top-up is confirmed (via TopUpModal's realtime
-  // subscription), without waiting for a full re-login/re-fetch of `dealer`.
-  const [walletBalance, setWalletBalance] = useState(Number(dealer.wallet_balance || 0));
   // Ref into the shared CommsWindow (Recent Chats/Recent Calls/New Call/
   // Customer Chat) so the mobile bottom tab bar can open it directly —
   // see DealerBottomTabBar's "Call/Chat" handling below.
   const commsRef = useRef(null);
-
-  // Keep the local override in sync if `dealer` itself is refetched
-  // (re-login, tab refocus, etc.) from somewhere upstream of this component.
-  useEffect(() => {
-    setWalletBalance(Number(dealer.wallet_balance || 0));
-  }, [dealer.wallet_balance]);
 
   // Running Balance shown beside Credit Limit in the summary cards — same
   // computation as the "My Ledger" tab (DealerLedger below), just lifted up
@@ -330,7 +319,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Wallet Balance</h3>
               <div className="flex items-center justify-between gap-1">
                 <p className="text-sm sm:text-2xl font-bold text-emerald-600 truncate">
-                  ₹{walletBalance.toLocaleString("en-IN")}
+                  ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
                 </p>
                 <GhostButton onClick={() => setShowTopUp(true)} className="!px-2 !py-1 !text-[10px] sm:!text-sm shrink-0">
                   Top Up
@@ -427,13 +416,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         />
       )}
 
-      {showTopUp && (
-        <TopUpModal
-          dealer={dealer}
-          onClose={() => setShowTopUp(false)}
-          onPaid={(newBalance) => setWalletBalance(newBalance)}
-        />
-      )}
+      {showTopUp && <TopUpModal dealer={dealer} onClose={() => setShowTopUp(false)} />}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
 
@@ -1373,14 +1356,52 @@ function DealerChats({ dealerId, identity, onMessage }) {
   const [error, setError] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState(null);
   const [query, setQuery] = useState("");
-  const [seenMap, setSeenMap] = useState(() => loadSeenMap(identity));
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const rows = await listRecentThreadsForDealer(dealerId, 60);
-      setThreads(rows);
+      const { data: threadRows, error: threadsError } = await supabase
+        .from("chat_threads")
+        .select("id, application_id, applications(draft_code, application_no, applicant_name)")
+        .eq("dealer_id", dealerId);
+      if (threadsError) throw threadsError;
+
+      const threadIds = (threadRows || []).map((t) => t.id);
+      let latestByThread = {};
+      if (threadIds.length) {
+        const { data: messages, error: messagesError } = await supabase
+          .from("chat_messages")
+          .select("thread_id, sender_type, body, created_at")
+          .in("thread_id", threadIds)
+          .order("created_at", { ascending: false });
+        if (messagesError) throw messagesError;
+        for (const m of messages || []) {
+          if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
+        }
+      }
+
+      const enriched = (threadRows || [])
+        .map((t) => {
+          const latest = latestByThread[t.id];
+          return {
+            threadId: t.id,
+            applicationId: t.application_id,
+            label: t.application_id
+              ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
+              : "General",
+            lastMessage: latest?.body || null,
+            lastAt: latest?.created_at || null,
+            awaitingReply: latest ? latest.sender_type === "staff" : false,
+          };
+        })
+        .sort((a, b) => {
+          // General thread first, then most recently active.
+          if (!a.applicationId !== !b.applicationId) return a.applicationId ? 1 : -1;
+          return new Date(b.lastAt || 0) - new Date(a.lastAt || 0);
+        });
+
+      setThreads(enriched);
     } catch (e) {
       setError(e.message || "Couldn't load chats");
     } finally {
@@ -1391,15 +1412,6 @@ function DealerChats({ dealerId, identity, onMessage }) {
   useEffect(() => { load(); }, [load]);
 
   const selected = threads.find((t) => t.threadId === selectedThreadId) || null;
-
-  const selectThread = (t) => {
-    setSelectedThreadId(t.threadId);
-    setSeenMap((prev) => {
-      const next = { ...prev, [t.threadId]: new Date().toISOString() };
-      saveSeenMap(identity, next);
-      return next;
-    });
-  };
 
   const handleMessage = () => {
     load();
@@ -1437,47 +1449,27 @@ function DealerChats({ dealerId, identity, onMessage }) {
                 {query.trim() ? "No matching chats." : "No conversations yet."}
               </p>
             ) : (
-              filtered.map((t) => {
-                const isGeneral = !t.applicationId;
-                const unread = t.unreadCount > 0 && !isThreadSeen(seenMap, t.threadId, t.lastAt);
-                return (
-                  <button
-                    key={t.threadId}
-                    onClick={() => selectThread(t)}
-                    className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3 ${
-                      selectedThreadId === t.threadId ? "bg-slate-50 dark:bg-slate-800/60" : ""
-                    }`}
-                  >
-                    <div className="relative shrink-0">
-                      <PastelAvatar name={isGeneral ? "Support Team" : t.label} size={40} />
-                      {isGeneral && (
-                        <span
-                          title="Group chat — you, your staff, and our team"
-                          className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center border-2 border-white dark:border-slate-900"
-                        >
-                          <Users size={9} />
-                        </span>
-                      )}
+              filtered.map((t) => (
+                <button
+                  key={t.threadId}
+                  onClick={() => setSelectedThreadId(t.threadId)}
+                  className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3 ${
+                    selectedThreadId === t.threadId ? "bg-slate-50 dark:bg-slate-800/60" : ""
+                  }`}
+                >
+                  <PastelAvatar name={t.label} size={40} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{t.label}</span>
+                      {t.lastAt && <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0">{timeAgo(t.lastAt)}</span>}
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
-                          {isGeneral ? "Support Team" : t.label}
-                        </span>
-                        {t.lastAt && <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0">{timeAgo(t.lastAt)}</span>}
-                      </div>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                        {t.lastMessage || "No messages yet"}
-                      </p>
-                    </div>
-                    {unread && (
-                      <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">
-                        {t.unreadCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              })
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {t.lastMessage || "No messages yet"}
+                    </p>
+                  </div>
+                  {t.awaitingReply && <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />}
+                </button>
+              ))
             )}
           </div>
         </div>
@@ -1507,186 +1499,71 @@ function DealerChats({ dealerId, identity, onMessage }) {
 
 const TOPUP_AMOUNTS = [10000, 20000];
 
-// Wallet top-up now runs through the same Cashfree QR flow as
-// QrPaymentPanel's "Pay by QR" (api/payments/create-qr.js +
-// api/payments/webhook.js), just with purpose: "wallet_topup" instead of
-// "application_payment" -- so it credits dealers.wallet_balance directly
-// (via the increment_dealer_wallet Postgres function) rather than inserting
-// a `payments` row. No more static/self-drawn UPI QR and no more "our team
-// confirms the payment" -- Cashfree's webhook confirms it server-to-server,
-// same as any other Pay by QR here, typically within a few seconds.
-function TopUpModal({ dealer, onClose, onPaid }) {
-  const [step, setStep] = useState("form"); // form | qr | paid | expired
+// Your UPI ID + display name — set these as Vite env vars
+// (VITE_UPI_ID / VITE_UPI_PAYEE_NAME) so they aren't hardcoded here.
+const UPI_ID = import.meta.env.VITE_UPI_ID || "your-upi-id@bank";
+const UPI_PAYEE_NAME = import.meta.env.VITE_UPI_PAYEE_NAME || "SJO Services";
+
+function TopUpModal({ dealer, onClose }) {
   const [amount, setAmount] = useState(TOPUP_AMOUNTS[0]);
   const [customAmount, setCustomAmount] = useState("");
   const [useCustom, setUseCustom] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [qr, setQr] = useState(null); // { qrRequestId, qrImageUrl, qrRawString, expiresAt, cfOrderId }
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const [toast, setToast] = useState(null);
-  const [newBalance, setNewBalance] = useState(null);
-  const pollRef = useRef(null);
 
   const finalAmount = useCustom ? parseFloat(customAmount) || 0 : amount;
-
-  const requestQr = async () => {
-    if (!finalAmount || finalAmount <= 0) { setToast("Enter an amount"); return; }
-    setCreating(true);
-    try {
-      const result = await createPaymentQr({ dealerId: dealer.id, amount: finalAmount, purpose: "wallet_topup" });
-      setQr(result);
-      setStep("qr");
-    } catch (e) {
-      setToast(e.message || "Could not create QR");
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  // Client-side countdown only -- the real expiry is enforced by Cashfree
-  // itself (order_expiry_time).
-  useEffect(() => {
-    if (step !== "qr" || !qr) return;
-    const tick = () => {
-      const left = Math.max(0, Math.floor((new Date(qr.expiresAt).getTime() - Date.now()) / 1000));
-      setSecondsLeft(left);
-      if (left === 0) setStep("expired");
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [step, qr]);
-
-  // Realtime subscription: flips to "paid" the instant webhook.js updates
-  // this row, then pulls the fresh wallet_balance straight from `dealers`
-  // so the modal (and the card behind it, via onPaid) shows the real
-  // post-credit number instead of just amount-so-far arithmetic.
-  useEffect(() => {
-    if (step !== "qr" || !qr) return;
-
-    const finish = async () => {
-      const { data } = await supabase.from("dealers").select("wallet_balance").eq("id", dealer.id).maybeSingle();
-      const bal = Number(data?.wallet_balance || 0);
-      setNewBalance(bal);
-      setStep("paid");
-      onPaid?.(bal);
-    };
-
-    const channel = supabase
-      .channel(`wallet-topup-${qr.qrRequestId}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "payment_qr_requests", filter: `id=eq.${qr.qrRequestId}` },
-        (payload) => {
-          if (payload.new.status === "paid") finish();
-          else if (payload.new.status === "expired") setStep("expired");
-        }
-      )
-      .subscribe();
-
-    // Fallback poll, in case Realtime is unavailable in this environment.
-    pollRef.current = setInterval(async () => {
-      const { data } = await supabase.from("payment_qr_requests").select("status").eq("id", qr.qrRequestId).maybeSingle();
-      if (data?.status === "paid") finish();
-      else if (data?.status === "expired") setStep("expired");
-    }, 5000);
-
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(pollRef.current);
-    };
-  }, [step, qr, dealer.id, onPaid]);
-
-  const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
-  const ss = String(secondsLeft % 60).padStart(2, "0");
+  const note = `Wallet top-up — ${dealer.code}`;
+  const upiLink = finalAmount > 0
+    ? `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_PAYEE_NAME)}&am=${finalAmount}&cu=INR&tn=${encodeURIComponent(note)}`
+    : null;
+  const qrSrc = upiLink
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(upiLink)}`
+    : null;
 
   return (
     <Modal title="Top Up Wallet" onClose={onClose}>
-      {step === "form" && (
-        <>
-          <Field label="Amount">
-            <div className="grid grid-cols-3 gap-2 mb-2">
-              {TOPUP_AMOUNTS.map((a) => (
-                <button
-                  key={a}
-                  onClick={() => { setAmount(a); setUseCustom(false); }}
-                  className={`py-2 rounded-lg text-sm font-semibold border ${
-                    !useCustom && amount === a ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-                  }`}
-                >
-                  ₹{a.toLocaleString("en-IN")}
-                </button>
-              ))}
-              <button
-                onClick={() => setUseCustom(true)}
-                className={`py-2 rounded-lg text-sm font-semibold border ${
-                  useCustom ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-                }`}
-              >
-                Other
-              </button>
-            </div>
-            {useCustom && (
-              <Input type="number" placeholder="Enter amount (₹)" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)} autoFocus />
-            )}
-          </Field>
-          <PrimaryButton onClick={requestQr} disabled={creating || !finalAmount} className="w-full">
-            {creating ? "Generating QR…" : `Generate QR${finalAmount > 0 ? ` for ₹${finalAmount.toLocaleString("en-IN")}` : ""}`}
-          </PrimaryButton>
-        </>
-      )}
-
-      {step === "qr" && qr && (
-        <div className="text-center space-y-4">
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Scan with any UPI app — PhonePe, Google Pay, Paytm, BHIM, your bank's app.
-          </p>
-          {qr.qrImageUrl ? (
-            <img src={qr.qrImageUrl} alt="UPI payment QR" className="mx-auto w-56 h-56 rounded-lg border border-slate-200 dark:border-slate-700" />
-          ) : (
-            <p className="text-sm text-rose-500">QR image unavailable — try again in a moment.</p>
-          )}
-          <p className="text-2xl font-bold text-slate-700 dark:text-slate-200">₹{finalAmount.toLocaleString("en-IN")}</p>
-          {qr.qrRawString && (
-            <a
-              href={qr.qrRawString}
-              className="inline-block bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg"
+      <Field label="Amount">
+        <div className="grid grid-cols-3 gap-2 mb-2">
+          {TOPUP_AMOUNTS.map((a) => (
+            <button
+              key={a}
+              onClick={() => { setAmount(a); setUseCustom(false); }}
+              className={`py-2 rounded-lg text-sm font-semibold border ${
+                !useCustom && amount === a ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
             >
-              Pay via UPI App
-            </a>
-          )}
-          <p className={`text-sm font-mono ${secondsLeft <= 30 ? "text-rose-500" : "text-slate-400"}`}>
-            Expires in {mm}:{ss}
+              ₹{a.toLocaleString("en-IN")}
+            </button>
+          ))}
+          <button
+            onClick={() => setUseCustom(true)}
+            className={`py-2 rounded-lg text-sm font-semibold border ${
+              useCustom ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+            }`}
+          >
+            Other
+          </button>
+        </div>
+        {useCustom && (
+          <Input type="number" placeholder="Enter amount (₹)" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)} />
+        )}
+      </Field>
+
+      {finalAmount > 0 ? (
+        <div className="text-center py-2">
+          <img src={qrSrc} alt="UPI QR code" className="mx-auto rounded-lg border border-slate-200 dark:border-slate-800" width={220} height={220} />
+          <p className="text-sm text-slate-500 dark:text-slate-500 mt-3">Scan with any UPI app, or tap below on your phone</p>
+          <a
+            href={upiLink}
+            className="inline-block mt-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg"
+          >
+            Pay ₹{finalAmount.toLocaleString("en-IN")} via UPI App
+          </a>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">
+            After paying, your wallet balance will be updated once our team confirms the payment.
           </p>
-          <p className="text-xs text-slate-400 dark:text-slate-500 animate-pulse">Waiting for payment…</p>
-          <GhostButton onClick={onClose} className="w-full">Cancel</GhostButton>
         </div>
+      ) : (
+        <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-4">Enter an amount to generate a payment QR.</p>
       )}
-
-      {step === "paid" && (
-        <div className="text-center space-y-3 py-4">
-          <p className="text-3xl">✅</p>
-          <p className="text-lg font-semibold text-emerald-600">Payment received</p>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            ₹{finalAmount.toLocaleString("en-IN")} added automatically — no verification needed.
-            {newBalance !== null && <> New wallet balance: ₹{newBalance.toLocaleString("en-IN")}.</>}
-          </p>
-          <PrimaryButton onClick={onClose} className="w-full">Done</PrimaryButton>
-        </div>
-      )}
-
-      {step === "expired" && (
-        <div className="text-center space-y-3 py-4">
-          <p className="text-lg font-semibold text-rose-500">QR expired</p>
-          <p className="text-sm text-slate-500 dark:text-slate-400">No payment came through in time. Generate a fresh one to try again.</p>
-          <div className="flex gap-2">
-            <GhostButton onClick={() => { setStep("form"); setQr(null); }} className="flex-1">Try again</GhostButton>
-            <PrimaryButton onClick={onClose} className="flex-1">Close</PrimaryButton>
-          </div>
-        </div>
-      )}
-
-      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </Modal>
   );
 }

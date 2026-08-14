@@ -1,19 +1,6 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Without this, if ANY element anywhere on a page (a wide table row, an
-   unwrapped flex row, etc.) is even 1px wider than the viewport, the whole
-   document becomes horizontally scrollable. On mobile WebViews that makes
-   position:fixed elements (like DealerBottomTabBar) appear to drift/scroll
-   sideways during an ordinary scroll gesture, since the fixed element's
-   containing block ends up including that overflow. Clamping overflow-x
-   here stops it at the source instead of chasing down every wide element
-   individually. */
-html, body, #root {
-  overflow-x: hidden;
-  max-width: 100%;
-}
-
 /* Accent color — kept in sync with whichever sidebar color is picked in
    Settings (see src/lib/sidebarColor.js, which writes these three
    variables on document.documentElement any time it changes). Defaults
@@ -63,4 +50,15 @@ body.print-isolate .print-target {
   width: 100% !important;
   background: #fff !important;
   padding: 32px !important;
+}
+
+/* Hides the up/down increment arrows on <input type="number"> — used on
+   the Amount column so it reads as a plain figure instead of a stepper. */
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.no-spinner[type="number"] {
+  -moz-appearance: textfield;
 }
