@@ -15,11 +15,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { createPaymentQr } from "../lib/serverApi";
 import { openCashfreeHostedCheckout } from "../lib/cashfreeCheckout";
-import { Modal, Field, Input, Select, PrimaryButton, GhostButton, Toast } from "./UI";
+import { Modal, Field, Input, PrimaryButton, GhostButton, Toast } from "./UI";
 
-export default function QrPaymentPanel({ dealerId, applications, onClose, onPaid }) {
+export default function QrPaymentPanel({ dealerId, onClose, onPaid }) {
   const [step, setStep] = useState("form"); // form | qr | paid | expired
-  const [applicationId, setApplicationId] = useState("");
   const [amount, setAmount] = useState("");
   const [creating, setCreating] = useState(false);
   const [qr, setQr] = useState(null); // { qrRequestId, qrImageUrl, qrRawString, paymentSessionId, cashfreeMode, expiresAt, cfOrderId }
@@ -32,7 +31,7 @@ export default function QrPaymentPanel({ dealerId, applications, onClose, onPaid
     if (!amount || Number(amount) <= 0) { setToast("Enter an amount"); return; }
     setCreating(true);
     try {
-      const result = await createPaymentQr({ dealerId, applicationId: applicationId || null, amount: Number(amount) });
+      const result = await createPaymentQr({ dealerId, amount: Number(amount) });
       setQr(result);
       setStep("qr");
     } catch (e) {
@@ -110,12 +109,6 @@ export default function QrPaymentPanel({ dealerId, applications, onClose, onPaid
     <Modal title="Pay by QR" onClose={onClose}>
       {step === "form" && (
         <div className="space-y-4">
-          <Field label="Application (optional)">
-            <Select value={applicationId} onChange={(e) => setApplicationId(e.target.value)}>
-              <option value="">— General payment, not tied to one application —</option>
-              {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
-            </Select>
-          </Field>
           <Field label="Amount (₹)" required>
             <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
           </Field>

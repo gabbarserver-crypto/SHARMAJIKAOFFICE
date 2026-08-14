@@ -66,49 +66,51 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
       return;
     }
     setToast("Submitted — this'll show as Pending until our team verifies it.");
-    setForm({ application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "" });
+    setForm({ application_id: "", amount: "", payment_mode: "Bank", reference_no: "", remarks: "" });
     load();
   };
 
   return (
     <div className="grid lg:grid-cols-2 gap-6">
-      <Card title="Submit a Payment">
-        <div className="mb-4 p-3 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">Pay by QR — instant, no verification wait</p>
-            <p className="text-xs text-emerald-600/80 dark:text-emerald-500/70">Scan with any UPI app; it's recorded automatically the moment it's paid.</p>
-          </div>
-          <GhostButton onClick={() => setShowQr(true)} className="whitespace-nowrap">Pay by QR</GhostButton>
-        </div>
-        <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
-          Or let us know about a payment you've made another way — it'll show as Pending until our team verifies it against what we received.
-        </p>
-        <Field label="Application (optional)">
-          <Select value={form.application_id} onChange={set("application_id")}>
-            <option value="">— General payment, not tied to one application —</option>
-            {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
-          </Select>
-        </Field>
-        <div className="grid sm:grid-cols-2 gap-x-4">
-          <Field label="Amount (₹)" required>
-            <Input type="number" value={form.amount} onChange={set("amount")} />
-          </Field>
-          <Field label="Payment Mode" required>
-            <Select value={form.payment_mode} onChange={set("payment_mode")}>
-              <option>Bank</option>
+      <div className="space-y-6">
+        <Card title="Pay by QR">
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+            Instant — scan with any UPI app and it's recorded automatically the moment it's paid. No verification wait, and nothing below needs to be filled for this.
+          </p>
+          <PrimaryButton onClick={() => setShowQr(true)} className="w-full">Pay by QR</PrimaryButton>
+        </Card>
+
+        <Card title="Report a Payment Made Another Way">
+          <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
+            Only fill this in if you paid by bank transfer outside the app. It'll show as Pending until our team verifies it against what we received.
+          </p>
+          <Field label="Application (optional)">
+            <Select value={form.application_id} onChange={set("application_id")}>
+              <option value="">— General payment, not tied to one application —</option>
+              {applications.map((a) => <option key={a.id} value={a.id}>{a.draft_code} — {a.applicant_name}</option>)}
             </Select>
           </Field>
-        </div>
-        <Field label="Reference No.">
-          <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
-        </Field>
-        <Field label="Remarks">
-          <Input value={form.remarks} onChange={set("remarks")} />
-        </Field>
-        <PrimaryButton onClick={submit} disabled={saving}>
-          {saving ? "Submitting…" : "Submit Payment"}
-        </PrimaryButton>
-      </Card>
+          <div className="grid sm:grid-cols-2 gap-x-4">
+            <Field label="Amount (₹)" required>
+              <Input type="number" value={form.amount} onChange={set("amount")} />
+            </Field>
+            <Field label="Payment Mode" required>
+              <Select value={form.payment_mode} onChange={set("payment_mode")}>
+                <option>Bank</option>
+              </Select>
+            </Field>
+          </div>
+          <Field label="Reference No.">
+            <Input value={form.reference_no} onChange={set("reference_no")} placeholder="UTR / cheque no." />
+          </Field>
+          <Field label="Remarks">
+            <Input value={form.remarks} onChange={set("remarks")} />
+          </Field>
+          <PrimaryButton onClick={submit} disabled={saving}>
+            {saving ? "Submitting…" : "Submit Payment"}
+          </PrimaryButton>
+        </Card>
+      </div>
 
       <Card title="Recent Payments">
         <div className="space-y-2 max-h-[520px] overflow-y-auto">
@@ -140,7 +142,6 @@ export default function DealerPaymentsPanel({ dealerId, identity }) {
       {showQr && (
         <QrPaymentPanel
           dealerId={dealerId}
-          applications={applications}
           onClose={() => setShowQr(false)}
           onPaid={() => load()}
         />
