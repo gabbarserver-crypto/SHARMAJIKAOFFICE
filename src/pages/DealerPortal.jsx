@@ -23,7 +23,7 @@ import { scanAadhaarImage } from "../lib/aadhaarOcr";
 import { useDarkMode } from "../lib/theme";
 import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText, Gamepad2 } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
-import DealerPaymentsPanel from "../components/DealerPaymentsPanel";
+import QrPaymentPanel from "../components/QrPaymentPanel";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
@@ -45,7 +45,7 @@ import { Browser } from "@capacitor/browser";
 // Android app's own assets at build time, so a self-hosted APK there ends
 // up bundled INSIDE the app itself, ballooning its size with every build
 // (this is what caused the app to balloon to ~100MB+ before).
-const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
+const APK_PATH = "https://github.com/gabbarserver-crypto/one-infinity/releases/latest/download/app-1infinity.apk";
 
 // 1 Infinity Games — same standalone games site linked from the staff Dashboard
 // (see src/pages/Dashboard.jsx), handing off the current Supabase session
@@ -104,6 +104,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   const [chatApp, setChatApp] = useState(null); // { id, label } | null
   const [unreadChats, setUnreadChats] = useState(0);
   const [runningBalance, setRunningBalance] = useState(null);
+  const [showQr, setShowQr] = useState(false);
   // Ref into the shared CommsWindow (Recent Chats/Recent Calls/New Call/
   // Customer Chat) so the mobile bottom tab bar can open it directly —
   // see DealerBottomTabBar's "Call/Chat" handling below.
@@ -314,8 +315,8 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       )}
 
       <main className="max-w-5xl mx-auto p-6 pb-24 md:pb-6">
-        {(tab === "Applications" || tab === "Ledger") && (
-          <div className="grid grid-cols-2 gap-2 sm:gap-4 mb-6">
+        {(tab === "Applications" || tab === "Ledger" || tab === "Payments") && (
+          <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
             <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
               <p className={`text-sm sm:text-2xl font-bold truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
@@ -327,6 +328,12 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
               <p className="text-sm sm:text-2xl font-bold text-slate-800 dark:text-slate-100 truncate">
                 ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
               </p>
+            </div>
+            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5 flex flex-col justify-between">
+              <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Pay by QR</h3>
+              <GhostButton onClick={() => setShowQr(true)} className="!text-[10px] sm:!text-sm w-full justify-center">
+                Pay by QR
+              </GhostButton>
             </div>
           </div>
         )}
@@ -369,12 +376,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         )}
         {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
         {tab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
-        {tab === "Payments" && (
-          <div className="space-y-6">
-            <DealerPaymentsPanel dealerId={dealer.id} identity={identity} />
-            <DealerPaymentHistory dealerId={dealer.id} />
-          </div>
-        )}
+        {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} />}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
 
@@ -412,6 +414,14 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       )}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+
+      {showQr && (
+        <QrPaymentPanel
+          dealerId={dealer.id}
+          onClose={() => setShowQr(false)}
+          onPaid={() => setRefreshKey((k) => k + 1)}
+        />
+      )}
 
       <CommsWindow ref={commsRef} variant="dealer" dealerId={dealer.id} dealerName={dealer.name} identity={identity} call={call} />
 

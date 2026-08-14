@@ -1,7 +1,7 @@
 // api/payments/create-qr.js
 //
 // Vercel Serverless Function. A dealer (or their active sub-staff) hits
-// "Pay by QR" in DealerPaymentsPanel -- this creates a Cashfree order with
+// "Pay by QR" in DealerPortal -- this creates a Cashfree order with
 // a fixed expiry, asks Cashfree to render it as a UPI QR, and records a
 // `payment_qr_requests` row so the frontend has something to poll/subscribe
 // to. Nothing lands in `payments` yet -- that only happens in webhook.js,

@@ -1,7 +1,7 @@
 // src/components/QrPaymentPanel.jsx
 //
-// Opens as a modal from DealerPaymentsPanel when the dealer picks "Pay by
-// QR" instead of self-reporting a payment. Three states:
+// Opens as a modal from the "Pay by QR" card in DealerPortal's summary row
+// (alongside Running Balance / Credit Limit). Three states:
 //   1. Asking for an amount -> calls createPaymentQr()
 //   2. Showing the QR + a live countdown to qr_expires_at
 //   3. Paid (a Supabase Realtime row change flips payment_qr_requests.status
