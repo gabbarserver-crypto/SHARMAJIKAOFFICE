@@ -105,6 +105,38 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true, note: "payment insert failed, will retry on next webhook delivery" });
       }
 
+      // Post this payment to the ledger too -- same as the staff "Record
+      // Payment" flow (src/pages/Payments.jsx submit()). The `payments` row
+      // alone only feeds the staff-side Receipts list and bank feed; the
+      // dealer's own Running Balance, Ledger tab, and Payments tab all read
+      // from ledger_entries, so without this insert a QR payment is fully
+      // visible to staff but invisible to the dealer who made it.
+      const { data: dealerRow } = await supabaseAdmin
+        .from("dealers")
+        .select("name")
+        .eq("id", qrRequest.dealer_id)
+        .maybeSingle();
+
+      const { error: ledgerErr } = await supabaseAdmin.from("ledger_entries").insert({
+        entry_code: `PMT-${payment.id}`,
+        entry_type: "PAYMENT",
+        entry_date: new Date().toISOString().slice(0, 10),
+        dealer_id: qrRequest.dealer_id,
+        amount: -qrRequest.amount,
+        payment_mode: "UPI",
+        reference_no: order.cf_order_id ? String(order.cf_order_id) : null,
+        payer_name: dealerRow?.name || null,
+        source_payment_id: payment.id,
+      });
+      if (ledgerErr) {
+        // Don't fail the webhook over this -- the payment itself is already
+        // safely recorded and Cashfree must not be told to retry (that would
+        // double-insert the payments row, since payment_qr_requests.status
+        // hasn't flipped to 'paid' yet below). Log loudly so it can be
+        // backfilled manually instead.
+        console.error("webhook: payment recorded but ledger insert failed for", orderId, ledgerErr.message);
+      }
+
       await supabaseAdmin
         .from("payment_qr_requests")
         .update({ status: "paid", payment_id: payment.id, paid_at: new Date().toISOString() })
