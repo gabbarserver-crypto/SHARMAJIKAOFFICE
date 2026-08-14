@@ -109,7 +109,7 @@ export default function DealerSidebar({
 
   return (
     <aside
-      className="no-print hidden md:flex shrink-0 h-screen flex-col m-3 rounded-3xl shadow-lg transition-all duration-300 sticky top-0"
+      className="no-print hidden md:flex shrink-0 flex-col m-3 rounded-3xl shadow-lg transition-all duration-300"
       style={{
         width: collapsed ? "5rem" : "16rem",
         height: "calc(100vh - 1.5rem)",

@@ -233,7 +233,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 md:flex">
+    <div className="min-h-screen md:h-screen bg-slate-100 dark:bg-slate-950 md:flex md:overflow-hidden">
       <DealerSidebar
         dealer={dealer}
         identity={identity}
@@ -249,7 +249,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         onOpenGames={openGames}
         onSetupPasskey={setUpPasskey}
       />
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col md:h-screen md:overflow-y-auto">
       {/* Mobile-only header — desktop (md+) uses DealerSidebar above instead. */}
       <header className="md:hidden bg-[#0f1b3d] text-white px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
