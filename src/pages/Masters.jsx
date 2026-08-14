@@ -611,7 +611,6 @@ function DealerMaster({ notify, call }) {
               </a>
             </div>
           ) : <span className="text-slate-300 text-xs">—</span> },
-          { key: "wallet_balance", label: "Wallet", render: (r) => `₹${Number(r.wallet_balance||0).toLocaleString("en-IN")}` },
           { key: "credit_limit", label: "Credit Limit", render: (r) => `₹${Number(r.credit_limit||0).toLocaleString("en-IN")}` },
           { key: "status", label: "Status", render: (r) => {
             const avail = summaryByDealer[r.id];

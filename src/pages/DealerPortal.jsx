@@ -103,22 +103,11 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   const [docsForApp, setDocsForApp] = useState(null); // { id, applicant_name } | null
   const [chatApp, setChatApp] = useState(null); // { id, label } | null
   const [unreadChats, setUnreadChats] = useState(0);
-  const [showTopUp, setShowTopUp] = useState(false);
   const [runningBalance, setRunningBalance] = useState(null);
-  // Mirrors dealer.wallet_balance but can be bumped instantly the moment a
-  // Cashfree wallet top-up is confirmed (via TopUpModal's realtime
-  // subscription), without waiting for a full re-login/re-fetch of `dealer`.
-  const [walletBalance, setWalletBalance] = useState(Number(dealer.wallet_balance || 0));
   // Ref into the shared CommsWindow (Recent Chats/Recent Calls/New Call/
   // Customer Chat) so the mobile bottom tab bar can open it directly —
   // see DealerBottomTabBar's "Call/Chat" handling below.
   const commsRef = useRef(null);
-
-  // Keep the local override in sync if `dealer` itself is refetched
-  // (re-login, tab refocus, etc.) from somewhere upstream of this component.
-  useEffect(() => {
-    setWalletBalance(Number(dealer.wallet_balance || 0));
-  }, [dealer.wallet_balance]);
 
   // Running Balance shown beside Credit Limit in the summary cards — same
   // computation as the "My Ledger" tab (DealerLedger below), just lifted up
@@ -326,18 +315,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
 
       <main className="max-w-5xl mx-auto p-6 pb-24 md:pb-6">
         {(tab === "Applications" || tab === "Ledger") && (
-          <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
-              <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Wallet Balance</h3>
-              <div className="flex items-center justify-between gap-1">
-                <p className="text-sm sm:text-2xl font-bold text-emerald-600 truncate">
-                  ₹{walletBalance.toLocaleString("en-IN")}
-                </p>
-                <GhostButton onClick={() => setShowTopUp(true)} className="!px-2 !py-1 !text-[10px] sm:!text-sm shrink-0">
-                  Top Up
-                </GhostButton>
-              </div>
-            </div>
+          <div className="grid grid-cols-2 gap-2 sm:gap-4 mb-6">
             <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
               <p className={`text-sm sm:text-2xl font-bold truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
@@ -425,14 +403,6 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           applicationLabel={chatApp.label}
           identity={identity}
           onClose={() => setChatApp(null)}
-        />
-      )}
-
-      {showTopUp && (
-        <TopUpModal
-          dealer={dealer}
-          onClose={() => setShowTopUp(false)}
-          onPaid={(newBalance) => setWalletBalance(newBalance)}
         />
       )}
 
@@ -1503,212 +1473,6 @@ function DealerChats({ dealerId, identity, onMessage }) {
         </div>
       </div>
     </Card>
-  );
-}
-
-const TOPUP_AMOUNTS = [10000, 20000];
-
-// Wallet top-up now runs through the same Cashfree QR flow as
-// QrPaymentPanel's "Pay by QR" (api/payments/create-qr.js +
-// api/payments/webhook.js), just with purpose: "wallet_topup" instead of
-// "application_payment" -- so it credits dealers.wallet_balance directly
-// (via the increment_dealer_wallet Postgres function) rather than inserting
-// a `payments` row. No more static/self-drawn UPI QR and no more "our team
-// confirms the payment" -- Cashfree's webhook confirms it server-to-server,
-// same as any other Pay by QR here, typically within a few seconds.
-function TopUpModal({ dealer, onClose, onPaid }) {
-  const [step, setStep] = useState("form"); // form | qr | paid | expired
-  const [amount, setAmount] = useState(TOPUP_AMOUNTS[0]);
-  const [customAmount, setCustomAmount] = useState("");
-  const [useCustom, setUseCustom] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [qr, setQr] = useState(null); // { qrRequestId, qrImageUrl, qrRawString, paymentSessionId, cashfreeMode, expiresAt, cfOrderId }
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const [toast, setToast] = useState(null);
-  const [newBalance, setNewBalance] = useState(null);
-  const [openingHosted, setOpeningHosted] = useState(false);
-  const pollRef = useRef(null);
-
-  const finalAmount = useCustom ? parseFloat(customAmount) || 0 : amount;
-
-  const requestQr = async () => {
-    if (!finalAmount || finalAmount <= 0) { setToast("Enter an amount"); return; }
-    setCreating(true);
-    try {
-      const result = await createPaymentQr({ dealerId: dealer.id, amount: finalAmount, purpose: "wallet_topup" });
-      setQr(result);
-      setStep("qr");
-    } catch (e) {
-      setToast(e.message || "Could not create QR");
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  // Client-side countdown only -- the real expiry is enforced by Cashfree
-  // itself (order_expiry_time).
-  useEffect(() => {
-    if (step !== "qr" || !qr) return;
-    const tick = () => {
-      const left = Math.max(0, Math.floor((new Date(qr.expiresAt).getTime() - Date.now()) / 1000));
-      setSecondsLeft(left);
-      if (left === 0) setStep("expired");
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [step, qr]);
-
-  // Realtime subscription: flips to "paid" the instant webhook.js updates
-  // this row, then pulls the fresh wallet_balance straight from `dealers`
-  // so the modal (and the card behind it, via onPaid) shows the real
-  // post-credit number instead of just amount-so-far arithmetic.
-  useEffect(() => {
-    if (step !== "qr" || !qr) return;
-
-    const finish = async () => {
-      const { data } = await supabase.from("dealers").select("wallet_balance").eq("id", dealer.id).maybeSingle();
-      const bal = Number(data?.wallet_balance || 0);
-      setNewBalance(bal);
-      setStep("paid");
-      onPaid?.(bal);
-    };
-
-    const channel = supabase
-      .channel(`wallet-topup-${qr.qrRequestId}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "payment_qr_requests", filter: `id=eq.${qr.qrRequestId}` },
-        (payload) => {
-          if (payload.new.status === "paid") finish();
-          else if (payload.new.status === "expired") setStep("expired");
-        }
-      )
-      .subscribe();
-
-    // Fallback poll, in case Realtime is unavailable in this environment.
-    pollRef.current = setInterval(async () => {
-      const { data } = await supabase.from("payment_qr_requests").select("status").eq("id", qr.qrRequestId).maybeSingle();
-      if (data?.status === "paid") finish();
-      else if (data?.status === "expired") setStep("expired");
-    }, 5000);
-
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(pollRef.current);
-    };
-  }, [step, qr, dealer.id, onPaid]);
-
-  const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
-  const ss = String(secondsLeft % 60).padStart(2, "0");
-
-  const openHosted = async () => {
-    if (!qr?.paymentSessionId) return;
-    setOpeningHosted(true);
-    try {
-      await openCashfreeHostedCheckout({ paymentSessionId: qr.paymentSessionId, mode: qr.cashfreeMode });
-    } catch (e) {
-      setToast(e.message || "Could not open the payment page");
-    } finally {
-      setOpeningHosted(false);
-    }
-  };
-
-  return (
-    <Modal title="Top Up Wallet" onClose={onClose}>
-      {step === "form" && (
-        <>
-          <Field label="Amount">
-            <div className="grid grid-cols-3 gap-2 mb-2">
-              {TOPUP_AMOUNTS.map((a) => (
-                <button
-                  key={a}
-                  onClick={() => { setAmount(a); setUseCustom(false); }}
-                  className={`py-2 rounded-lg text-sm font-semibold border ${
-                    !useCustom && amount === a ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-                  }`}
-                >
-                  ₹{a.toLocaleString("en-IN")}
-                </button>
-              ))}
-              <button
-                onClick={() => setUseCustom(true)}
-                className={`py-2 rounded-lg text-sm font-semibold border ${
-                  useCustom ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-                }`}
-              >
-                Other
-              </button>
-            </div>
-            {useCustom && (
-              <Input type="number" placeholder="Enter amount (₹)" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)} autoFocus />
-            )}
-          </Field>
-          <PrimaryButton onClick={requestQr} disabled={creating || !finalAmount} className="w-full">
-            {creating ? "Generating QR…" : `Generate QR${finalAmount > 0 ? ` for ₹${finalAmount.toLocaleString("en-IN")}` : ""}`}
-          </PrimaryButton>
-        </>
-      )}
-
-      {step === "qr" && qr && (
-        <div className="text-center space-y-4">
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Scan with any UPI app — PhonePe, Google Pay, Paytm, BHIM, your bank's app.
-          </p>
-          {qr.qrImageUrl ? (
-            <img src={qr.qrImageUrl} alt="UPI payment QR" className="mx-auto w-56 h-56 rounded-lg border border-slate-200 dark:border-slate-700" />
-          ) : qr.paymentSessionId ? (
-            <div className="py-4">
-              <PrimaryButton onClick={openHosted} disabled={openingHosted} className="w-full">
-                {openingHosted ? "Opening…" : "Pay Now"}
-              </PrimaryButton>
-              <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">Opens Cashfree's payment page in a new tab — UPI QR, UPI app, or card, whichever's easiest. This tab keeps waiting for confirmation.</p>
-            </div>
-          ) : (
-            <p className="text-sm text-rose-500">QR image unavailable — try again in a moment.</p>
-          )}
-          <p className="text-2xl font-bold text-slate-700 dark:text-slate-200">₹{finalAmount.toLocaleString("en-IN")}</p>
-          {qr.qrRawString && (
-            <a
-              href={qr.qrRawString}
-              className="inline-block bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg"
-            >
-              Pay via UPI App
-            </a>
-          )}
-          <p className={`text-sm font-mono ${secondsLeft <= 30 ? "text-rose-500" : "text-slate-400"}`}>
-            Expires in {mm}:{ss}
-          </p>
-          <p className="text-xs text-slate-400 dark:text-slate-500 animate-pulse">Waiting for payment…</p>
-          <GhostButton onClick={onClose} className="w-full">Cancel</GhostButton>
-        </div>
-      )}
-
-      {step === "paid" && (
-        <div className="text-center space-y-3 py-4">
-          <p className="text-3xl">✅</p>
-          <p className="text-lg font-semibold text-emerald-600">Payment received</p>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            ₹{finalAmount.toLocaleString("en-IN")} added automatically — no verification needed.
-            {newBalance !== null && <> New wallet balance: ₹{newBalance.toLocaleString("en-IN")}.</>}
-          </p>
-          <PrimaryButton onClick={onClose} className="w-full">Done</PrimaryButton>
-        </div>
-      )}
-
-      {step === "expired" && (
-        <div className="text-center space-y-3 py-4">
-          <p className="text-lg font-semibold text-rose-500">QR expired</p>
-          <p className="text-sm text-slate-500 dark:text-slate-400">No payment came through in time. Generate a fresh one to try again.</p>
-          <div className="flex gap-2">
-            <GhostButton onClick={() => { setStep("form"); setQr(null); }} className="flex-1">Try again</GhostButton>
-            <PrimaryButton onClick={onClose} className="flex-1">Close</PrimaryButton>
-          </div>
-        </div>
-      )}
-
-      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
-    </Modal>
   );
 }
 
