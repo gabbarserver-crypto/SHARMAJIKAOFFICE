@@ -5,14 +5,15 @@
 // of App.jsx (both the staff and dealer branches), so it's visible no
 // matter which page/tab is open.
 import React, { useEffect, useState } from "react";
-import { FileText, MessageCircle, Phone, X } from "lucide-react";
+import { FileText, MessageCircle, Phone, IndianRupee, X } from "lucide-react";
 import { onNotify } from "../lib/notify";
 
-const ICONS = { draft: FileText, chat: MessageCircle, call: Phone };
+const ICONS = { draft: FileText, chat: MessageCircle, call: Phone, payment: IndianRupee };
 const ACCENTS = {
   draft: "border-l-amber-500",
   chat: "border-l-blue-500",
   call: "border-l-emerald-500",
+  payment: "border-l-emerald-500",
 };
 
 const AUTO_DISMISS_MS = 6000;

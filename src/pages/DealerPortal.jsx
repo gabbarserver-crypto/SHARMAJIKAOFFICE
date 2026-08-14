@@ -374,9 +374,9 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
             <DealerChats dealerId={dealer.id} identity={identity} onMessage={refreshUnreadChats} />
           </div>
         )}
-        {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
+        {tab === "Ledger" && <DealerLedger dealerId={dealer.id} refreshKey={refreshKey} />}
         {tab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
-        {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} />}
+        {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} refreshKey={refreshKey} />}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
 
@@ -419,7 +419,10 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         <QrPaymentPanel
           dealerId={dealer.id}
           onClose={() => setShowQr(false)}
-          onPaid={() => setRefreshKey((k) => k + 1)}
+          onPaid={() => {
+            setRefreshKey((k) => k + 1);
+            setTab("Payments");
+          }}
         />
       )}
 
@@ -1629,7 +1632,7 @@ function DealerServiceAmounts({ dealerId }) {
 // what they've paid without SERVICE charge rows mixed in. Running Balance
 // shown here is still the dealer's real overall balance at that point in
 // time (services + payments combined) — just the row list is filtered.
-function DealerPaymentHistory({ dealerId }) {
+function DealerPaymentHistory({ dealerId, refreshKey = 0 }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -1655,7 +1658,10 @@ function DealerPaymentHistory({ dealerId }) {
       setRows(data || []);
       setLoading(false);
     })();
-  }, [dealerId]);
+    // refreshKey is bumped after a QR payment succeeds (see DealerPortal's
+    // onPaid handler) so this tab picks up the new ledger entry right away
+    // instead of only refetching on next tab switch or page load.
+  }, [dealerId, refreshKey]);
 
   const filteredRows = rows.filter((r) => {
     const d = r.entry_date;
@@ -1733,7 +1739,7 @@ function DealerPaymentHistory({ dealerId }) {
   );
 }
 
-function DealerLedger({ dealerId }) {
+function DealerLedger({ dealerId, refreshKey = 0 }) {
   const [txns, setTxns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -1774,7 +1780,9 @@ function DealerLedger({ dealerId }) {
       setTxns(data || []);
       setLoading(false);
     })();
-  }, [dealerId]);
+    // refreshKey is bumped after a QR payment succeeds (see DealerPortal's
+    // onPaid handler) so this tab picks up the new ledger entry right away.
+  }, [dealerId, refreshKey]);
 
   // dealer_ledger already carries the service name / payment description
   // as display_name and ledger_type as real columns — no more matching
