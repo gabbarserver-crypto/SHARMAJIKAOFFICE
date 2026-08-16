@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, Field, Input, Select, PrimaryButton, GhostButton, DangerButton, Modal, Toast } from "../components/UI";
+import SearchableSelect from "../components/SearchableSelect";
 import StaffQrSendPanel from "../components/StaffQrSendPanel";
 import { parseCSV, findByLabel, ddmmyyyyToISO } from "../lib/csv";
 
@@ -68,18 +69,21 @@ export default function Payments({ staff } = {}) {
     try {
       const pageSize = 1000;
       const maxPages = 50;
-      let all = [];
-      for (let page = 0; page < maxPages; page++) {
-        const from = page * pageSize;
-        const { data, error } = await supabase
-          .from("applications")
-          .select("id, draft_code, applicant_name, rto_fee, fee_entered_at, application_date, submitted_at")
-          .not("rto_fee", "is", null)
-          .range(from, from + pageSize - 1);
-        if (error) throw error; // caught below — guarantees the spinner clears either way
-        all = all.concat(data || []);
-        if (!data || data.length < pageSize) break;
-      }
+      const base = () =>
+        supabase.from("applications").select("id, draft_code, applicant_name, rto_fee, fee_entered_at, application_date, submitted_at", { count: "exact" }).not("rto_fee", "is", null);
+      const { count, error: countErr } = await base().range(0, 0);
+      if (countErr) throw countErr;
+      const totalPages = Math.min(maxPages, Math.max(1, Math.ceil((count || 0) / pageSize)));
+      const pages = await Promise.all(
+        Array.from({ length: totalPages }, (_, page) => {
+          const from = page * pageSize;
+          return base().range(from, from + pageSize - 1).then(({ data, error }) => {
+            if (error) throw error;
+            return data || [];
+          });
+        })
+      );
+      const all = pages.flat();
       setFeeRows(all);
       setBankFeeDeducted(all.reduce((acc, r) => acc + Number(r.rto_fee || 0), 0));
     } catch (err) {
@@ -194,21 +198,29 @@ export default function Payments({ staff } = {}) {
     setAllLoading(true);
     const pageSize = 1000;
     const maxPages = 50; // safety ceiling (50,000 rows) so a bug can't loop forever
-    let all = [];
-    for (let page = 0; page < maxPages; page++) {
-      const from = page * pageSize;
-      const { data, error } = await supabase
+    const base = () =>
+      supabase
         .from("payments")
-        .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)")
+        .select("*, dealers(name), applications(draft_code), paid_at_agency:paid_at_agency_id(name)", { count: "exact" })
         .order("created_at", { ascending: false })
-        .order("id", { ascending: false })
-        .range(from, from + pageSize - 1);
-      if (error) {
-        console.error("loadAllPayments:", error);
-        break;
-      }
-      all = all.concat(data || []);
-      if (!data || data.length < pageSize) break; // reached the end
+        .order("id", { ascending: false });
+    let all = [];
+    try {
+      const { count, error: countErr } = await base().range(0, 0);
+      if (countErr) throw countErr;
+      const totalPages = Math.min(maxPages, Math.max(1, Math.ceil((count || 0) / pageSize)));
+      const pages = await Promise.all(
+        Array.from({ length: totalPages }, (_, page) => {
+          const from = page * pageSize;
+          return base().range(from, from + pageSize - 1).then(({ data, error }) => {
+            if (error) throw error;
+            return data || [];
+          });
+        })
+      );
+      all = pages.flat();
+    } catch (error) {
+      console.error("loadAllPayments:", error);
     }
     setAllPayments(all);
     setAllLoading(false);
@@ -441,10 +453,12 @@ export default function Payments({ staff } = {}) {
           {form.payment_type === "dealer" ? (
             <>
               <Field label="Dealer" required>
-                <Select value={form.dealer_id} onChange={set("dealer_id")}>
-                  <option value="">Select Dealer</option>
-                  {dealers.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
-                </Select>
+                <SearchableSelect
+                  value={form.dealer_id}
+                  onChange={(id) => setForm((s) => ({ ...s, dealer_id: id }))}
+                  options={dealers.map((d) => ({ id: d.id, name: `${d.name} (${d.code})` }))}
+                  placeholder="Type to search dealer…"
+                />
               </Field>
               <Field label="Application (optional)">
                 <Select value={form.application_id} onChange={set("application_id")} disabled={!form.dealer_id}>
@@ -455,10 +469,12 @@ export default function Payments({ staff } = {}) {
             </>
           ) : (
             <Field label="Agency" required>
-              <Select value={form.paid_at_agency_id} onChange={set("paid_at_agency_id")}>
-                <option value="">Select Agency</option>
-                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.code})</option>)}
-              </Select>
+              <SearchableSelect
+                value={form.paid_at_agency_id}
+                onChange={(id) => setForm((s) => ({ ...s, paid_at_agency_id: id }))}
+                options={agencies.map((a) => ({ id: a.id, name: `${a.name} (${a.code})` }))}
+                placeholder="Type to search agency…"
+              />
             </Field>
           )}
           <Field label="Date">
