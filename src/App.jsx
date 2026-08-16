@@ -505,7 +505,7 @@ export default function App() {
   const Active = NAV.find((n) => n.key === active)?.Component || Dashboard;
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex">
+    <div className="min-h-screen md:h-screen bg-slate-100 dark:bg-slate-950 flex md:overflow-hidden">
       <Sidebar
         nav={visibleNav.filter((n) => n.key !== "dealerLedger" && n.key !== "agencyLedger")}
         active={active}
@@ -515,7 +515,7 @@ export default function App() {
         onLogout={() => supabase.auth.signOut()}
       />
       <main
-        className="flex-1 p-8 pb-24 md:pb-8 overflow-y-auto"
+        className="flex-1 p-8 pb-24 md:pb-8 overflow-y-auto md:h-screen"
         style={{ paddingTop: "calc(2rem + env(safe-area-inset-top, 0px))" }}
       >
         <Active
