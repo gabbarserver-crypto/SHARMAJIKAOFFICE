@@ -240,42 +240,49 @@ export default function Payments({ staff } = {}) {
     const { data: userData } = await supabase.auth.getUser();
     const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
 
-    const agencyName = agencies.find((a) => a.id === form.paid_at_agency_id)?.name;
-
-    // Single atomic call — see supabase/migrations/010_atomic_payment_with_ledger.sql.
-    // The payments row and its ledger_entries row are inserted inside one
-    // Postgres transaction now: if the ledger insert fails for any reason,
-    // the payment insert is rolled back too, so a receipt can never end up
-    // saved without a matching ledger entry (or vice versa) again.
-    const { data: paymentRow, error } = await supabase.rpc("record_payment_with_ledger", {
-      p_dealer_id: isAgencyOnly ? null : form.dealer_id,
-      p_application_id: isAgencyOnly ? null : (form.application_id || null),
-      p_amount: parseFloat(form.amount),
-      p_payment_mode: form.payment_mode,
-      p_reference_no: form.reference_no || null,
-      p_remarks: form.remarks || null,
-      p_paid_at_agency_id: form.paid_at_agency_id || null,
-      p_received_by: staffRow?.id || null,
-      p_created_at: form.paid_on || null,
-      p_entry_date: form.paid_on || null,
-    });
-
-    setSaving(false);
+    const { data: paymentRow, error } = await supabase
+      .from("payments")
+      .insert({
+        dealer_id: isAgencyOnly ? null : form.dealer_id,
+        application_id: isAgencyOnly ? null : (form.application_id || null),
+        amount: parseFloat(form.amount),
+        payment_mode: form.payment_mode,
+        reference_no: form.reference_no || null,
+        remarks: form.remarks || null,
+        paid_at_agency_id: form.paid_at_agency_id || null,
+        received_by: staffRow?.id || null,
+        ...(form.paid_on ? { created_at: form.paid_on } : {}),
+      })
+      .select()
+      .single();
 
     if (error) {
+      setSaving(false);
       setToast(error.code === "23505" ? "This reference number was just used by another payment — please check before saving again." : "Failed: " + error.message);
       return;
     }
-    if (!paymentRow) {
-      setToast("Failed: payment wasn't saved — please try again.");
-      return;
-    }
 
-    setToast(
-      isAgencyOnly
-        ? `Payment recorded — ${agencyName || "agency"} ledger updated`
-        : `Payment recorded — ledger entry & receipt generated${agencyName ? ` (dealer & ${agencyName} ledgers updated)` : ""}`
-    );
+    // Post this payment to the ledger: dealer_id set means the dealer's
+    // running balance drops by this amount (payment received); agency_id
+    // set means the agency's running balance drops too (agency collected
+    // this on our behalf, or the payment was made directly to them) — both
+    // effects live on the SAME row now, not two separate ledger tables.
+    // Writing straight to ledger_entries from the client is blocked by its
+    // RLS policy, so this goes through the SECURITY DEFINER RPC instead
+    // (same pattern as Applications' Amount field).
+    const agencyName = agencies.find((a) => a.id === form.paid_at_agency_id)?.name;
+    const { error: ledgerError } = await supabase.rpc("upsert_ledger_entry_for_payment", {
+      p_payment_id: paymentRow.id,
+    });
+
+    setSaving(false);
+    if (ledgerError) {
+      setToast("Payment saved, but ledger sync failed: " + ledgerError.message);
+    } else if (isAgencyOnly) {
+      setToast(`Payment recorded — ${agencyName || "agency"} ledger updated`);
+    } else {
+      setToast(`Payment recorded — ledger entry & receipt generated${agencyName ? ` (dealer & ${agencyName} ledgers updated)` : ""}`);
+    }
     setForm({ payment_type: "dealer", dealer_id: "", application_id: "", amount: "", payment_mode: "Cash", reference_no: "", remarks: "", paid_at_agency_id: "", paid_on: "" });
     loadRecent();
     loadAllPayments();
@@ -285,7 +292,7 @@ export default function Payments({ staff } = {}) {
   // directly by source_payment_id (no more voucher_no fallback matching,
   // no more two separate ledger tables to clean up).
   const deletePaymentAndLedger = async (p) => {
-    const { error: ledgerErr } = await supabase.from("ledger_entries").delete().eq("source_payment_id", p.id);
+    const { error: ledgerErr } = await supabase.rpc("delete_ledger_entry_for_payment", { p_payment_id: p.id });
     if (ledgerErr) {
       return { ok: false, message: "Failed to remove ledger entry: " + ledgerErr.message + " — payment was NOT deleted." };
     }
@@ -331,8 +338,6 @@ export default function Payments({ staff } = {}) {
   // source_payment_id now, no more voucher_no fallback / two-table sync.
   const savePaymentEdit = async (edited) => {
     const original = editingPayment;
-    const isAgencyOnly = !original.dealer_id;
-    const newEntryCode = edited.reference_no?.trim() || `PMT-${original.id}`;
     const newAmount = parseFloat(edited.amount);
     const { error } = await supabase
       .from("payments")
@@ -349,17 +354,9 @@ export default function Payments({ staff } = {}) {
       return;
     }
 
-    const { error: ledgerErr } = await supabase
-      .from("ledger_entries")
-      .update({
-        entry_code: newEntryCode,
-        amount: isAgencyOnly ? 0 : -newAmount,
-        agency_paid_amount: original.paid_at_agency_id ? newAmount : 0,
-        payment_mode: edited.payment_mode,
-        reference_no: edited.reference_no || null,
-        ...(edited.paid_on ? { entry_date: edited.paid_on } : {}),
-      })
-      .eq("source_payment_id", original.id);
+    const { error: ledgerErr } = await supabase.rpc("upsert_ledger_entry_for_payment", {
+      p_payment_id: original.id,
+    });
 
     if (ledgerErr) {
       setToast("Payment updated, but its ledger entry failed to sync: " + ledgerErr.message);
@@ -966,22 +963,21 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           applicationId = appRow?.id || null;
         }
 
-        // Same atomic RPC used by the manual "Add Payment" form — see
-        // supabase/migrations/010_atomic_payment_with_ledger.sql. A row
-        // whose ledger insert fails no longer leaves an orphaned payment
-        // behind; the whole row is rolled back and reported below instead.
-        const { data: paymentRow, error: insertError } = await supabase.rpc("record_payment_with_ledger", {
-          p_dealer_id: payload.dealer_id || null,
-          p_application_id: applicationId,
-          p_amount: payload.amount,
-          p_payment_mode: payload.payment_mode,
-          p_reference_no: payload.reference_no,
-          p_remarks: payload.remarks,
-          p_paid_at_agency_id: payload.agency_id || null,
-          p_received_by: staffRow?.id || null,
-          p_created_at: payload.paid_on || null,
-          p_entry_date: payload.paid_on || null,
-        });
+        const { data: paymentRow, error: insertError } = await supabase
+          .from("payments")
+          .insert({
+            dealer_id: payload.dealer_id || null,
+            application_id: applicationId,
+            amount: payload.amount,
+            payment_mode: payload.payment_mode,
+            reference_no: payload.reference_no,
+            remarks: payload.remarks,
+            paid_at_agency_id: payload.agency_id || null,
+            received_by: staffRow?.id || null,
+            ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
+          })
+          .select()
+          .single();
 
         if (insertError) {
           setError(
@@ -992,14 +988,17 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           setImporting(false);
           return;
         }
-        if (!paymentRow) {
+
+        const { error: ledgerError } = await supabase.rpc("upsert_ledger_entry_for_payment", {
+          p_payment_id: paymentRow.id,
+        });
+        if (ledgerError) {
           ledgerFailures.push({
             reference_no: payload.reference_no || voucherNo,
             amount: payload.amount,
             name: payload.dealer_name || payload.agency_name,
-            message: "Row wasn't saved — please re-check and re-import it.",
+            message: ledgerError.message,
           });
-          continue;
         }
         imported++;
       }

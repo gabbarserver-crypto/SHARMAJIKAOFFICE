@@ -203,29 +203,29 @@ export default function App() {
         }
       })
       .subscribe();
-    // New payments — a QR payment landing automatically, or a dealer
-    // reporting a bank-transfer payment, is work staff needs to see/verify,
-    // so it gets the same toast+sound treatment. Payments a staff member
-    // just entered themselves (submitted_by: "staff", from Payments.jsx)
-    // are skipped — no need to notify someone of their own action.
+    // New payments — a QR payment landing automatically is work staff
+    // needs to see, so it gets the same toast+sound treatment. Payments a
+    // staff member just entered themselves (submitted_by: "staff", from
+    // Payments.jsx) are skipped — no need to notify someone of their own
+    // action. Dealers no longer self-report payments (QR only), so this is
+    // effectively gateway-only now.
     const paymentsChannel = supabase
       .channel(`payments:new-payment:${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "payments" }, async (payload) => {
-        const p = payload.new;
-        if (!p || p.submitted_by === "staff") return;
-        let payerName = "Payment";
-        if (p.dealer_id) {
-          const { data: dealerRow } = await supabase.from("dealers").select("name").eq("id", p.dealer_id).maybeSingle();
-          payerName = dealerRow?.name || "A dealer";
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "ledger_entries", filter: "entry_type=eq.PAYMENT" },
+        (payload) => {
+          const p = payload.new;
+          if (!p || p.submitted_by === "staff") return;
+          const amountLabel = `₹${Number(Math.abs(p.amount) || p.agency_paid_amount || 0).toLocaleString("en-IN")}`;
+          notify({
+            kind: "payment",
+            title: "Payment received (QR)",
+            body: `${p.payer_name || "A dealer"} — ${amountLabel}`,
+            onClick: () => setActive("payments"),
+          });
         }
-        const amountLabel = `₹${Number(p.amount || 0).toLocaleString("en-IN")}`;
-        notify({
-          kind: "payment",
-          title: p.submitted_by === "gateway" ? "Payment received (QR)" : "Payment reported",
-          body: `${payerName} — ${amountLabel}${p.status === "pending" ? " · needs verification" : ""}`,
-          onClick: () => setActive("payments"),
-        });
-      })
+      )
       .subscribe();
     return () => {
       clearInterval(interval);
