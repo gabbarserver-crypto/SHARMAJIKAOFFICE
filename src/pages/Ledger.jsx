@@ -186,18 +186,27 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
     if (entityId) ledgerDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [entityId, entityMode]);
 
-  // Ledger rows don't carry the application's Draft ID themselves (only
-  // entry_code, which is the App No. / a placeholder) — so after loading
-  // a batch of ledger rows, do one batched lookup against applications
-  // (via source_application_id) to attach draft_code for display. Rows
-  // with no source_application_id (PAYMENT rows, or legacy SERVICE rows
-  // from before this column existed) just get "—" in that column.
+  // Ledger rows don't carry the application's Draft ID themselves. Worse,
+  // the dealer_ledger/agency_ledger views these rows actually come from
+  // don't expose source_application_id either — only the underlying
+  // ledger_entries table has it — so this first backfills
+  // source_application_id per row (direct table lookup by id, which is
+  // readable even though ledger_entries blocks direct writes), then uses
+  // that to fetch draft_code from applications. Rows with no
+  // source_application_id (PAYMENT rows, or legacy SERVICE rows from
+  // before this existed) just get "—" in that column.
   const attachDraftCodes = async (rowsIn) => {
-    const ids = [...new Set(rowsIn.map((r) => r.source_application_id).filter(Boolean))];
-    if (!ids.length) return rowsIn;
-    const { data: apps } = await supabase.from("applications").select("id, draft_code").in("id", ids);
+    if (!rowsIn.length) return rowsIn;
+    const rowIds = rowsIn.map((r) => r.id);
+    const { data: srcRows } = await supabase.from("ledger_entries").select("id, source_application_id").in("id", rowIds);
+    const sourceIdByRowId = Object.fromEntries((srcRows || []).map((s) => [s.id, s.source_application_id]));
+    let withSource = rowsIn.map((r) => ({ ...r, source_application_id: r.source_application_id || sourceIdByRowId[r.id] || null }));
+
+    const appIds = [...new Set(withSource.map((r) => r.source_application_id).filter(Boolean))];
+    if (!appIds.length) return withSource;
+    const { data: apps } = await supabase.from("applications").select("id, draft_code").in("id", appIds);
     const draftCodeById = Object.fromEntries((apps || []).map((a) => [a.id, a.draft_code]));
-    return rowsIn.map((r) => ({ ...r, draft_code: draftCodeById[r.source_application_id] || null }));
+    return withSource.map((r) => ({ ...r, draft_code: draftCodeById[r.source_application_id] || null }));
   };
 
   useEffect(() => {
