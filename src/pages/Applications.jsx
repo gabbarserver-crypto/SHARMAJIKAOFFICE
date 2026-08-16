@@ -764,41 +764,24 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (!row?.dealer_id) {
       // No dealer on the application yet — nothing to post against, so
       // just leave it as an application-only amount for now.
+      setToast("Amount saved (no dealer selected yet, so nothing posted to ledger)");
       return;
     }
-    const service = serviceList.find((s) => s.id === row.service_id);
-    const ledgerFields = {
-      entry_code: row.application_no || `APP-${id.slice(0, 8)}`,
-      entry_type: "SERVICE",
-      entry_date: row.application_date || new Date().toISOString().slice(0, 10),
-      dealer_id: row.dealer_id,
-      agency_id: row.agency_id || null,
-      applicant_name: row.applicant_name,
-      service_type: serviceLabel(service) || null,
-      amount: newAmount,
-      rto_fee: row.rto_fee || null,
-      agency_fee: row.agency_fee || null,
-      dob: row.date_of_birth || null,
-      license_no: row.ll_dl_no || null,
-      address: row.address || null,
-      contact_no: row.mobile || null,
-      source_application_id: id,
-    };
-    const { data: existingEntry, error: findErr } = await supabase
-      .from("ledger_entries")
-      .select("id")
-      .eq("source_application_id", id)
-      .maybeSingle();
-    if (findErr) {
-      setToast("Amount saved, but ledger lookup failed: " + findErr.message);
-      return;
-    }
-    const { error: ledgerErr } = existingEntry
-      ? await supabase.from("ledger_entries").update(ledgerFields).eq("id", existingEntry.id)
-      : await supabase.from("ledger_entries").insert(ledgerFields);
+    // Posting straight into ledger_entries from the client is blocked by
+    // its row-level security policy (same reason sync_ledger_entry_amounts
+    // and complete_application exist as RPCs rather than plain table
+    // writes) — so this goes through upsert_ledger_entry_for_amount(),
+    // a SECURITY DEFINER function that does the insert/update on our
+    // behalf, keyed off Amount instead of Completed status.
+    const { error: ledgerErr } = await supabase.rpc("upsert_ledger_entry_for_amount", {
+      p_application_id: id,
+    });
     if (ledgerErr) {
+      console.error("ledger post failed", ledgerErr);
       setToast("Amount saved, but ledger update failed: " + ledgerErr.message);
+      return;
     }
+    setToast(`Amount saved — ₹${newAmount.toLocaleString("en-IN")} posted to ${row.dealers?.name || "dealer"}'s ledger`);
   };
 
   // Agency Fee is a column on the SAME ledger_entries row as the rest of
