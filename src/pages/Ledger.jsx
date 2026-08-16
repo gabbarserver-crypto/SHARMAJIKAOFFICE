@@ -73,10 +73,16 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
   const [savingAmount, setSavingAmount] = useState(false);
   const [amountSaveError, setAmountSaveError] = useState("");
 
-  // Clicking a SERVICE row's name looks the application up by entry_code
-  // (== application_no for rows created from a real application) so staff
-  // don't have to leave the ledger to see what a line item was for.
-  // PAYMENT rows have no application behind them, so they're not clickable.
+  // Clicking a SERVICE row's name looks the application up. Prefer the
+  // direct id link (source_application_id) — entry_code only equals
+  // application_no when the application already had one filled in at the
+  // moment this row was posted. Rows posted purely from an Amount edit
+  // (before an App No. exists yet) use an APP-xxxxxxxx placeholder as
+  // entry_code instead, so matching on application_no alone would miss
+  // them; source_application_id works regardless. Old rows that predate
+  // source_application_id being set fall back to the old application_no
+  // match. PAYMENT rows have no application behind them, so they're not
+  // clickable.
   const openAppDetail = useCallback(async (row) => {
     if (row.entry_type !== "SERVICE") return;
     setAppDetailLoading(true);
@@ -84,11 +90,13 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
     setAmountSaveError("");
     setAppDetail(null);
     setAppDetailRow(row);
-    const { data, error } = await supabase
+    let query = supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name), staff:assigned_staff_id(full_name)")
-      .eq("application_no", row.entry_code)
-      .maybeSingle();
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name), staff:assigned_staff_id(full_name)");
+    query = row.source_application_id
+      ? query.eq("id", row.source_application_id)
+      : query.eq("application_no", row.entry_code);
+    const { data, error } = await query.maybeSingle();
     setAppDetailLoading(false);
     if (error || !data) {
       setAppDetailError(`No application found for App No: ${row.entry_code}`);
