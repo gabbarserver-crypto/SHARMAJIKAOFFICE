@@ -736,11 +736,16 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
   };
 
-  // Amount is special-cased: if this application has already been
-  // Completed, a matching row already sits in ledger_entries (posted by
-  // complete_application). Editing Amount here needs to keep that row in
-  // sync too — sync_ledger_entry_amounts() is a no-op if no ledger row
-  // exists yet (not Completed), so it's always safe to call.
+  // Amount is the ledger trigger now, independent of status — as soon as
+  // staff type an Amount, it should post (or update) a SERVICE row in
+  // ledger_entries, whatever the application's current status is (Draft,
+  // Under Review, Accepted, whatever). Previously this only kept an
+  // *existing* ledger row in sync (sync_ledger_entry_amounts is a no-op
+  // until the app is Completed), so an Approved-but-not-Completed
+  // application never showed in the ledger at all. We now look the row
+  // up ourselves and insert it the first time, update it on every edit
+  // after that — same shape as the Completed-import path above, just not
+  // gated on status.
   const updateApplicationAmount = async (id, value) => {
     const newAmount = value === "" || value === null ? 0 : value;
     const payload = { amount: newAmount };
@@ -753,11 +758,47 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setToast("Failed to update amount: " + error.message);
       return;
     }
-    const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: id });
-    if (syncErr) {
-      setToast("Amount saved, but ledger sync failed: " + syncErr.message);
-    }
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
+
+    const row = rows.find((r) => r.id === id);
+    if (!row?.dealer_id) {
+      // No dealer on the application yet — nothing to post against, so
+      // just leave it as an application-only amount for now.
+      return;
+    }
+    const service = serviceList.find((s) => s.id === row.service_id);
+    const ledgerFields = {
+      entry_code: row.application_no || `APP-${id.slice(0, 8)}`,
+      entry_type: "SERVICE",
+      entry_date: row.application_date || new Date().toISOString().slice(0, 10),
+      dealer_id: row.dealer_id,
+      agency_id: row.agency_id || null,
+      applicant_name: row.applicant_name,
+      service_type: serviceLabel(service) || null,
+      amount: newAmount,
+      rto_fee: row.rto_fee || null,
+      agency_fee: row.agency_fee || null,
+      dob: row.date_of_birth || null,
+      license_no: row.ll_dl_no || null,
+      address: row.address || null,
+      contact_no: row.mobile || null,
+      source_application_id: id,
+    };
+    const { data: existingEntry, error: findErr } = await supabase
+      .from("ledger_entries")
+      .select("id")
+      .eq("source_application_id", id)
+      .maybeSingle();
+    if (findErr) {
+      setToast("Amount saved, but ledger lookup failed: " + findErr.message);
+      return;
+    }
+    const { error: ledgerErr } = existingEntry
+      ? await supabase.from("ledger_entries").update(ledgerFields).eq("id", existingEntry.id)
+      : await supabase.from("ledger_entries").insert(ledgerFields);
+    if (ledgerErr) {
+      setToast("Amount saved, but ledger update failed: " + ledgerErr.message);
+    }
   };
 
   // Agency Fee is a column on the SAME ledger_entries row as the rest of
@@ -3083,7 +3124,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                       onClick={() => handleStatusChange("Accepted", remarks)}
                       className="!bg-emerald-600 hover:!bg-emerald-700"
                       disabled={!canApprove || statusChanging}
-                      title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
+                      title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
                     >
                       Approve
                     </PrimaryButton>
@@ -3323,7 +3364,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                   onClick={() => handleStatusChange("Accepted", remarks)}
                   className="!bg-emerald-600 hover:!bg-emerald-700"
                   disabled={!canApprove || statusChanging}
-                  title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
+                  title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
                 >
                   Approve
                 </PrimaryButton>
