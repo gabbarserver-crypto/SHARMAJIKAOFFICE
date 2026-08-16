@@ -19,11 +19,12 @@ function txnTypeClass(typeLabel) {
 // works (see lib/csv.js).
 function exportLedgerCSV(entityName, rows) {
   const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const header = ["Date", "Entry Code", "Type", "Name", "Debit", "Credit", "Running Balance"];
+  const header = ["Date", "Draft No", "Entry Code", "Type", "Name", "Debit", "Credit", "Running Balance"];
   const lines = [header.join(",")];
   rows.forEach((r) => {
     lines.push([
       escapeCsv(new Date(r.entry_date).toLocaleDateString()),
+      escapeCsv(r.draft_code || ""),
       escapeCsv(r.entry_code),
       escapeCsv(r.ledger_type),
       escapeCsv(r.display_name),
@@ -74,15 +75,13 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
   const [amountSaveError, setAmountSaveError] = useState("");
 
   // Clicking a SERVICE row's name looks the application up. Prefer the
-  // direct id link (source_application_id) — entry_code only equals
-  // application_no when the application already had one filled in at the
-  // moment this row was posted. Rows posted purely from an Amount edit
-  // (before an App No. exists yet) use an APP-xxxxxxxx placeholder as
-  // entry_code instead, so matching on application_no alone would miss
-  // them; source_application_id works regardless. Old rows that predate
-  // source_application_id being set fall back to the old application_no
-  // match. PAYMENT rows have no application behind them, so they're not
-  // clickable.
+  // direct id link (source_application_id) — this is always reliable when
+  // present. Older rows, or rows coming from a ledger view that doesn't
+  // expose source_application_id, fall back to matching on draft_code
+  // (the Draft ID, e.g. "KWN0083") instead of application_no — App No. is
+  // often still blank at the point a row gets posted, so it was never a
+  // safe key to match on. PAYMENT rows have no application behind them,
+  // so they're not clickable.
   const openAppDetail = useCallback(async (row) => {
     if (row.entry_type !== "SERVICE") return;
     setAppDetailLoading(true);
@@ -95,11 +94,11 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
       .select("*, dealers(name,code,short_name), services(parent_service,short_name), staff:assigned_staff_id(full_name)");
     query = row.source_application_id
       ? query.eq("id", row.source_application_id)
-      : query.eq("application_no", row.entry_code);
+      : query.eq("draft_code", row.draft_code);
     const { data, error } = await query.maybeSingle();
     setAppDetailLoading(false);
     if (error || !data) {
-      setAppDetailError(`No application found for App No: ${row.entry_code}`);
+      setAppDetailError(`No application found for Draft No: ${row.draft_code || "—"}`);
       return;
     }
     setAppDetail(data);
@@ -187,6 +186,20 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
     if (entityId) ledgerDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [entityId, entityMode]);
 
+  // Ledger rows don't carry the application's Draft ID themselves (only
+  // entry_code, which is the App No. / a placeholder) — so after loading
+  // a batch of ledger rows, do one batched lookup against applications
+  // (via source_application_id) to attach draft_code for display. Rows
+  // with no source_application_id (PAYMENT rows, or legacy SERVICE rows
+  // from before this column existed) just get "—" in that column.
+  const attachDraftCodes = async (rowsIn) => {
+    const ids = [...new Set(rowsIn.map((r) => r.source_application_id).filter(Boolean))];
+    if (!ids.length) return rowsIn;
+    const { data: apps } = await supabase.from("applications").select("id, draft_code").in("id", ids);
+    const draftCodeById = Object.fromEntries((apps || []).map((a) => [a.id, a.draft_code]));
+    return rowsIn.map((r) => ({ ...r, draft_code: draftCodeById[r.source_application_id] || null }));
+  };
+
   useEffect(() => {
     (async () => {
       if (!entityId) { setSummary(null); setRowsState([]); return; }
@@ -200,7 +213,7 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
           .eq("dealer_id", entityId)
           .order("entry_date", { ascending: false });
         setLoadError(rErr?.message || null);
-        setRowsState(r || []);
+        setRowsState(await attachDraftCodes(r || []));
       } else {
         const { data: agencyRow } = await supabase.from("agencies").select("name").eq("id", entityId).maybeSingle();
         if (agencyRow?.name) setEntityName(agencyRow.name);
@@ -211,7 +224,7 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
           .eq("agency_id", entityId)
           .order("entry_date", { ascending: false });
         setLoadError(rErr?.message || null);
-        setRowsState(r || []);
+        setRowsState(await attachDraftCodes(r || []));
       }
     })();
   }, [entityId, entityMode]);
@@ -406,6 +419,7 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
               <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
                 <tr>
                   <SortableTh label="Date" sortKeyName="entry_date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Draft No" sortKeyName="draft_code" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Entry Code" sortKeyName="entry_code" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <th className="px-3 py-2 text-left">Type</th>
                   <SortableTh label="Name" sortKeyName="display_name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -419,6 +433,7 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
                 {periodRows.map((r) => (
                   <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{new Date(r.entry_date).toLocaleDateString()}</td>
+                    <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{r.draft_code || "—"}</td>
                     <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{r.entry_code}</td>
                     <td className={`px-3 py-2 whitespace-nowrap ${txnTypeClass(r.ledger_type)}`}>{r.ledger_type || "—"}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
