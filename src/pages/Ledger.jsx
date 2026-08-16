@@ -186,27 +186,28 @@ export default function Ledger({ only, initialEntityId, isAdmin = false } = {}) 
     if (entityId) ledgerDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [entityId, entityMode]);
 
-  // Ledger rows don't carry the application's Draft ID themselves. Worse,
-  // the dealer_ledger/agency_ledger views these rows actually come from
-  // don't expose source_application_id either — only the underlying
-  // ledger_entries table has it — so this first backfills
-  // source_application_id per row (direct table lookup by id, which is
-  // readable even though ledger_entries blocks direct writes), then uses
-  // that to fetch draft_code from applications. Rows with no
-  // source_application_id (PAYMENT rows, or legacy SERVICE rows from
-  // before this existed) just get "—" in that column.
+  // Ledger rows don't carry the application's Draft ID themselves, and
+  // the dealer_ledger/agency_ledger views these rows come from don't
+  // expose source_application_id either. Worse, a direct client SELECT
+  // on the ledger_entries table itself is blocked by RLS too (views work
+  // because they run as their owner, bypassing RLS — a plain client
+  // query doesn't get that). So this goes through
+  // get_draft_codes_for_ledger_rows(), a SECURITY DEFINER RPC that reads
+  // both source_application_id and draft_code on our behalf in one call.
   const attachDraftCodes = async (rowsIn) => {
     if (!rowsIn.length) return rowsIn;
     const rowIds = rowsIn.map((r) => r.id);
-    const { data: srcRows } = await supabase.from("ledger_entries").select("id, source_application_id").in("id", rowIds);
-    const sourceIdByRowId = Object.fromEntries((srcRows || []).map((s) => [s.id, s.source_application_id]));
-    let withSource = rowsIn.map((r) => ({ ...r, source_application_id: r.source_application_id || sourceIdByRowId[r.id] || null }));
-
-    const appIds = [...new Set(withSource.map((r) => r.source_application_id).filter(Boolean))];
-    if (!appIds.length) return withSource;
-    const { data: apps } = await supabase.from("applications").select("id, draft_code").in("id", appIds);
-    const draftCodeById = Object.fromEntries((apps || []).map((a) => [a.id, a.draft_code]));
-    return withSource.map((r) => ({ ...r, draft_code: draftCodeById[r.source_application_id] || null }));
+    const { data: resolved, error } = await supabase.rpc("get_draft_codes_for_ledger_rows", { p_ledger_ids: rowIds });
+    if (error) {
+      console.error("get_draft_codes_for_ledger_rows failed", error);
+      return rowsIn;
+    }
+    const byRowId = Object.fromEntries((resolved || []).map((r) => [r.ledger_id, r]));
+    return rowsIn.map((r) => ({
+      ...r,
+      source_application_id: r.source_application_id || byRowId[r.id]?.source_application_id || null,
+      draft_code: byRowId[r.id]?.draft_code || null,
+    }));
   };
 
   useEffect(() => {
