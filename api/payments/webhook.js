@@ -87,43 +87,60 @@ export default async function handler(req, res) {
     const order = await fetchOrderStatus(orderId);
 
     if (order.order_status === "PAID") {
+      const { data: payment, error: paymentErr } = await supabaseAdmin
+        .from("payments")
+        .insert({
+          dealer_id: qrRequest.dealer_id,
+          application_id: qrRequest.application_id,
+          amount: qrRequest.amount,
+          payment_mode: "UPI",
+          reference_no: order.cf_order_id ? String(order.cf_order_id) : null,
+          remarks: `Auto-recorded from UPI QR payment (order ${orderId})`,
+          status: "verified", // the gateway confirming it IS the verification
+          submitted_by: "gateway",
+        })
+        .select()
+        .single();
+      if (paymentErr) {
+        console.error("webhook: failed to insert payment for", orderId, paymentErr.message);
+        return res.status(200).json({ ok: true, note: "payment insert failed, will retry on next webhook delivery" });
+      }
+
+      // Post this payment to the ledger too -- same as the staff "Record
+      // Payment" flow (src/pages/Payments.jsx submit()). The `payments` row
+      // alone only feeds the staff-side Receipts list and bank feed; the
+      // dealer's own Running Balance, Ledger tab, and Payments tab all read
+      // from ledger_entries, so without this insert a QR payment is fully
+      // visible to staff but invisible to the dealer who made it.
       const { data: dealerRow } = await supabaseAdmin
         .from("dealers")
         .select("name")
         .eq("id", qrRequest.dealer_id)
         .maybeSingle();
 
-      const referenceNo = order.cf_order_id ? String(order.cf_order_id) : null;
-
-      // Single insert straight into the ledger — this is now the only
-      // table payments live in, so a QR payment can no longer be visible
-      // to staff (old `payments` row) but invisible on the dealer's ledger
-      // (old separate `ledger_entries` insert failing).
-      const { data: ledgerRow, error: ledgerErr } = await supabaseAdmin
-        .from("ledger_entries")
-        .insert({
-          entry_code: referenceNo || `PMT-QR-${orderId}`,
-          entry_type: "PAYMENT",
-          entry_date: new Date().toISOString().slice(0, 10),
-          dealer_id: qrRequest.dealer_id,
-          source_application_id: qrRequest.application_id,
-          amount: -qrRequest.amount,
-          payment_mode: "UPI",
-          reference_no: referenceNo,
-          payer_name: dealerRow?.name || null,
-          remarks: `Auto-recorded from UPI QR payment (order ${orderId})`,
-          submitted_by: "gateway",
-        })
-        .select()
-        .single();
+      const { error: ledgerErr } = await supabaseAdmin.from("ledger_entries").insert({
+        entry_code: `PMT-${payment.id}`,
+        entry_type: "PAYMENT",
+        entry_date: new Date().toISOString().slice(0, 10),
+        dealer_id: qrRequest.dealer_id,
+        amount: -qrRequest.amount,
+        payment_mode: "UPI",
+        reference_no: order.cf_order_id ? String(order.cf_order_id) : null,
+        payer_name: dealerRow?.name || null,
+        source_payment_id: payment.id,
+      });
       if (ledgerErr) {
-        console.error("webhook: failed to insert ledger entry for", orderId, ledgerErr.message);
-        return res.status(200).json({ ok: true, note: "ledger insert failed, will retry on next webhook delivery" });
+        // Don't fail the webhook over this -- the payment itself is already
+        // safely recorded and Cashfree must not be told to retry (that would
+        // double-insert the payments row, since payment_qr_requests.status
+        // hasn't flipped to 'paid' yet below). Log loudly so it can be
+        // backfilled manually instead.
+        console.error("webhook: payment recorded but ledger insert failed for", orderId, ledgerErr.message);
       }
 
       await supabaseAdmin
         .from("payment_qr_requests")
-        .update({ status: "paid", payment_id: ledgerRow.id, paid_at: new Date().toISOString() })
+        .update({ status: "paid", payment_id: payment.id, paid_at: new Date().toISOString() })
         .eq("id", qrRequest.id);
 
       // Real push to every staff device, not just an in-app toast -- this
