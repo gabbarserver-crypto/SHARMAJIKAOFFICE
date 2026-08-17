@@ -252,6 +252,16 @@ export default function Payments({ staff } = {}) {
     const { data: userData } = await supabase.auth.getUser();
     const { data: staffRow } = await supabase.from("staff").select("id").eq("auth_user_id", userData?.user?.id).maybeSingle();
 
+    // Dealer-code-based receipt number, same idea as Applications' Draft
+    // ID (next_draft_code) — only makes sense when a dealer is actually
+    // involved; agency-only payments have no dealer code to build one from.
+    let receiptNo = null;
+    if (!isAgencyOnly) {
+      const { data: code, error: codeErr } = await supabase.rpc("next_payment_code", { p_dealer_id: form.dealer_id });
+      if (codeErr) console.error("next_payment_code failed", codeErr);
+      else receiptNo = code;
+    }
+
     const { data: paymentRow, error } = await supabase
       .from("payments")
       .insert({
@@ -260,6 +270,7 @@ export default function Payments({ staff } = {}) {
         amount: parseFloat(form.amount),
         payment_mode: form.payment_mode,
         reference_no: form.reference_no || null,
+        receipt_no: receiptNo,
         remarks: form.remarks || null,
         paid_at_agency_id: form.paid_at_agency_id || null,
         received_by: staffRow?.id || null,
@@ -979,6 +990,13 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
           applicationId = appRow?.id || null;
         }
 
+        let receiptNo = null;
+        if (payload.dealer_id) {
+          const { data: code, error: codeErr } = await supabase.rpc("next_payment_code", { p_dealer_id: payload.dealer_id });
+          if (codeErr) console.error("next_payment_code failed", codeErr);
+          else receiptNo = code;
+        }
+
         const { data: paymentRow, error: insertError } = await supabase
           .from("payments")
           .insert({
@@ -990,6 +1008,7 @@ function PaymentsImportModal({ dealers, agencies, onClose, onImported }) {
             remarks: payload.remarks,
             paid_at_agency_id: payload.agency_id || null,
             received_by: staffRow?.id || null,
+            receipt_no: receiptNo,
             ...(payload.paid_on ? { created_at: payload.paid_on } : {}),
           })
           .select()

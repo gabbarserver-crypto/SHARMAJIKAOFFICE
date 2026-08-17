@@ -87,6 +87,14 @@ export default async function handler(req, res) {
     const order = await fetchOrderStatus(orderId);
 
     if (order.order_status === "PAID") {
+      // Dealer-code-based receipt number, same as the staff-side "Record
+      // Payment" form (src/pages/Payments.jsx submit()) — QR payments
+      // always have a dealer, so this always runs.
+      const { data: receiptNo, error: codeErr } = await supabaseAdmin.rpc("next_payment_code", {
+        p_dealer_id: qrRequest.dealer_id,
+      });
+      if (codeErr) console.error("webhook: next_payment_code failed for", orderId, codeErr.message);
+
       const { data: payment, error: paymentErr } = await supabaseAdmin
         .from("payments")
         .insert({
@@ -98,6 +106,7 @@ export default async function handler(req, res) {
           remarks: `Auto-recorded from UPI QR payment (order ${orderId})`,
           status: "verified", // the gateway confirming it IS the verification
           submitted_by: "gateway",
+          receipt_no: receiptNo || null,
         })
         .select()
         .single();

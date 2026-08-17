@@ -56,7 +56,7 @@ const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
   { key: "applications", label: "Applications", Component: Applications },
   { key: "staffApplications", label: "Staff View", Component: StaffApplications },
-  { key: "draftApplications", label: "Draft Application", Component: DraftApplications },
+  { key: "draftApplications", label: "Draft", Component: DraftApplications },
   { key: "chats", label: "Call/Chat", Component: Chats },
   { key: "masters", label: "Masters", Component: Masters },
   { key: "payments", label: "Payments", Component: Payments },
@@ -112,6 +112,9 @@ export default function App() {
   const commsWindowRef = useRef(null);
   const initialEntityId = initialUrlParams.get("entity") || null;
   const [pendingChatCount, setPendingChatCount] = useState(0);
+  // Count of applications still sitting in "Draft Submitted" — shown as a
+  // badge on the Draft tab, mirroring the Call/Chat unread badge.
+  const [pendingDraftCount, setPendingDraftCount] = useState(0);
   const [permMap, setPermMap] = useState({}); // { [module]: permissions row } for the staff member's role
   const roleName = staff?.roles?.role_name || null;
   const isAdmin = roleName === "Admin";
@@ -161,6 +164,26 @@ export default function App() {
       // it should just leave the last-known count in place.
     }
   }, []);
+
+  const refreshPendingDraftCount = useCallback(async () => {
+    try {
+      const { count, error } = await supabase
+        .from("applications")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "Draft Submitted");
+      if (error) throw error;
+      setPendingDraftCount(count || 0);
+    } catch {
+      // Best-effort — same as chat count, leave the last-known value in place.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!staff) return;
+    refreshPendingDraftCount();
+    const draftInterval = setInterval(refreshPendingDraftCount, 30000);
+    return () => clearInterval(draftInterval);
+  }, [staff, refreshPendingDraftCount]);
 
   useEffect(() => {
     if (!staff) return;
@@ -509,9 +532,9 @@ export default function App() {
       <Sidebar
         nav={visibleNav.filter((n) => n.key !== "dealerLedger" && n.key !== "agencyLedger")}
         active={active}
-        onNavigate={(key) => { setActive(key); refreshPendingChatCount(); }}
+        onNavigate={(key) => { setActive(key); refreshPendingChatCount(); refreshPendingDraftCount(); }}
         staff={staff}
-        badges={{ chats: pendingChatCount }}
+        badges={{ chats: pendingChatCount, draftApplications: pendingDraftCount }}
         onLogout={() => supabase.auth.signOut()}
       />
       <main
@@ -525,7 +548,7 @@ export default function App() {
           initialEntityId={initialEntityId}
           call={directCall}
           visibleNav={visibleNav}
-          onNavigate={(key) => { setActive(key); refreshPendingChatCount(); }}
+          onNavigate={(key) => { setActive(key); refreshPendingChatCount(); refreshPendingDraftCount(); }}
           active={active}
           isAdmin={isAdmin}
         />
@@ -538,7 +561,7 @@ export default function App() {
           setActive(key);
           refreshPendingChatCount();
         }}
-        badges={{ chats: pendingChatCount }}
+        badges={{ chats: pendingChatCount, draftApplications: pendingDraftCount }}
       />
       <CommsWindow
         ref={commsWindowRef}

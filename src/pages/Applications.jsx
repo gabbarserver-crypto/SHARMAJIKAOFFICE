@@ -9,7 +9,7 @@ import { parseCSV, findByLabel } from "../lib/csv";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2, Link as LinkIcon } from "lucide-react";
+import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2, Link as LinkIcon, Pencil } from "lucide-react";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import PCCLetterModal from "../components/PCCLetterModal";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
@@ -331,6 +331,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [modalMode, setModalMode] = useState(null); // "customer" | "status"
   const [chatApp, setChatApp] = useState(null); // row whose small floating chat is open (point 10)
   const [detailPopup, setDetailPopup] = useState(null); // row shown in the Draft ID quick-detail popup (point 13)
+  // id of the row whose Draft ID is currently being hand-edited (pencil icon
+  // in the Draft ID cell) — only ever one at a time, and only offered while
+  // status is "Draft Submitted": once an application is Accepted its
+  // draft_code is referenced as the ledger voucher_no (see updateStatus),
+  // so renaming it after that point would silently break the ledger link.
+  const [editingDraftCodeId, setEditingDraftCodeId] = useState(null);
+  const [draftCodeInput, setDraftCodeInput] = useState("");
   const [staffIdentity, setStaffIdentity] = useState(null);
   useEffect(() => {
     (async () => {
@@ -719,6 +726,29 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     rto_fee: "fee",
     application_no: "application_no",
     ll_dl_no: "ll_dl_no",
+  };
+
+  // Draft IDs are unique per-dealer (not globally — see the CSV-import
+  // matcher above), so a manual rename has to check for a collision within
+  // that same dealer before saving, the same way the CSV import path does.
+  const updateDraftCode = async (id, rawValue, row) => {
+    const value = String(rawValue || "").trim();
+    if (!value) { setToast("Draft ID can't be empty"); return; }
+    if (value === row.draft_code) { setEditingDraftCodeId(null); return; }
+    const { data: clash, error: clashError } = await supabase
+      .from("applications")
+      .select("id")
+      .eq("dealer_id", row.dealer_id)
+      .eq("draft_code", value)
+      .neq("id", id)
+      .maybeSingle();
+    if (clashError) { setToast("Failed to check Draft ID: " + clashError.message); return; }
+    if (clash) { setToast(`${value} is already used by another application for this dealer`); return; }
+    const { error } = await supabase.from("applications").update({ draft_code: value }).eq("id", id);
+    if (error) { setToast("Failed to update Draft ID: " + error.message); return; }
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, draft_code: value } : r)));
+    setEditingDraftCodeId(null);
+    setToast(`Draft ID updated to ${value}`);
   };
 
   const updateRowField = async (id, field, value) => {
@@ -1346,28 +1376,55 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             {pagedRows.map((r) => (
               <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
                 <td className="px-3 py-2 font-medium whitespace-nowrap">
-                  <button
-                    onClick={() =>
-                      r.services?.chat_in_app
-                        ? setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })
-                        : setDetailPopup(r)
-                    }
-                    className={`inline-flex items-center gap-1.5 hover:underline font-medium ${
-                      chatStatus[r.id] ? "text-rose-600 dark:text-rose-400" : "text-blue-600 dark:text-blue-400"
-                    }`}
-                    title={
-                      r.services?.chat_in_app
-                        ? chatStatus[r.id] ? "Dealer sent a message — click to reply" : "Open chat"
-                        : "View full customer details and service charges"
-                    }
-                  >
-                    {r.draft_code}
-                    {chatStatus[r.id] > 0 && (
-                      <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                        {chatStatus[r.id]}
-                      </span>
-                    )}
-                  </button>
+                  {editingDraftCodeId === r.id ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        autoFocus
+                        value={draftCodeInput}
+                        onChange={(e) => setDraftCodeInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") updateDraftCode(r.id, draftCodeInput, r);
+                          if (e.key === "Escape") setEditingDraftCodeId(null);
+                        }}
+                        onBlur={() => updateDraftCode(r.id, draftCodeInput, r)}
+                        className="w-20 rounded border px-1.5 py-1 text-xs border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                    </div>
+                  ) : (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        onClick={() =>
+                          r.services?.chat_in_app
+                            ? setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })
+                            : setDetailPopup(r)
+                        }
+                        className={`inline-flex items-center gap-1.5 hover:underline font-medium ${
+                          chatStatus[r.id] ? "text-rose-600 dark:text-rose-400" : "text-blue-600 dark:text-blue-400"
+                        }`}
+                        title={
+                          r.services?.chat_in_app
+                            ? chatStatus[r.id] ? "Dealer sent a message — click to reply" : "Open chat"
+                            : "View full customer details and service charges"
+                        }
+                      >
+                        {r.draft_code}
+                        {chatStatus[r.id] > 0 && (
+                          <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                            {chatStatus[r.id]}
+                          </span>
+                        )}
+                      </button>
+                      {r.status === "Draft Submitted" && (
+                        <button
+                          onClick={() => { setEditingDraftCodeId(r.id); setDraftCodeInput(r.draft_code || ""); }}
+                          title="Edit Draft ID"
+                          className="text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </td>
                 {visibleCols.applicationDate && (
                   <td className="px-3 py-2">
