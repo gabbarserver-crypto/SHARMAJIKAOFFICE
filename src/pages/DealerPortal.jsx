@@ -240,7 +240,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   return (
-    <div className="min-h-screen md:h-screen bg-slate-100 dark:bg-slate-950 md:flex md:overflow-hidden">
+    <div className="min-h-screen md:h-screen bg-slate-100 dark:bg-slate-950 md:flex md:overflow-hidden overflow-x-hidden">
       <DealerSidebar
         dealer={dealer}
         identity={identity}
@@ -257,9 +257,13 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         onSetupPasskey={setUpPasskey}
       />
       <div className="flex-1 min-w-0 flex flex-col md:h-screen md:overflow-y-auto">
-      {/* Mobile-only header — desktop (md+) uses DealerSidebar above instead. */}
-      <header className="md:hidden bg-[#0f1b3d] text-white px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      {/* Mobile-only header — desktop (md+) uses DealerSidebar above instead.
+          flex-wrap + min-w-0/truncate keep this from ever forcing the page
+          wider than the viewport (which was cutting off the cards/button
+          below it) — the icon row simply wraps to its own line if the
+          dealer name eats into the available width. */}
+      <header className="md:hidden bg-[#0f1b3d] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex items-center gap-3 min-w-0">
           <input
             type="file"
             accept="image/*"
@@ -282,51 +286,51 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
               {uploadingPhoto ? "…" : "Edit"}
             </span>
           </button>
-          <div>
-            <p className="font-bold text-lg">{dealer.name}</p>
-            <p className="text-slate-300 text-xs">
+          <div className="min-w-0">
+            <p className="font-bold text-lg truncate">{dealer.name}</p>
+            <p className="text-slate-300 text-xs truncate">
               Dealer Portal · Code {dealer.code}
               {identity?.type === "dealer_staff" ? ` · ${identity.name}` : (dealer.contact_name ? ` · ${dealer.contact_name}` : "")}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <a
             href={APK_PATH}
             download
             title="Download Android App"
             aria-label="Download Android App"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            <Download size={16} />
+            <Download size={15} />
           </a>
           <button
             onClick={openGames}
             title="1 Infinity Games"
             aria-label="1 Infinity Games"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            <Gamepad2 size={16} />
+            <Gamepad2 size={15} />
           </button>
           <button
             onClick={setUpPasskey}
             title="Set up Fingerprint / Face ID login on this device"
             aria-label="Set up fingerprint login"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            <Fingerprint size={16} />
+            <Fingerprint size={15} />
           </button>
           <button
             onClick={toggleDark}
             title={dark ? "Switch to light mode" : "Switch to dark mode"}
             aria-label="Toggle dark mode"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            {dark ? <Sun size={16} /> : <Moon size={16} />}
+            {dark ? <Sun size={15} /> : <Moon size={15} />}
           </button>
           <button
             onClick={onLogout}
-            className="text-sm font-semibold bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg"
+            className="shrink-0 text-xs font-semibold bg-white/10 hover:bg-white/20 px-3 py-2 rounded-lg"
           >
             Logout
           </button>
@@ -365,7 +369,9 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           <h2 className="hidden md:block text-lg font-semibold text-slate-800 dark:text-slate-100">{tab}</h2>
-          <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto max-w-full justify-center whitespace-nowrap overflow-visible">+ New Application</PrimaryButton>
+          {tab === "Applications" && (
+            <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto max-w-full justify-center whitespace-nowrap overflow-visible">+ New Application</PrimaryButton>
+          )}
         </div>
 
         {tab === "Applications" && (
