@@ -352,6 +352,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // already done can be Accepted in one go, instead of opening each one.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkAccepting, setBulkAccepting] = useState(false);
+  const [bulkHolding, setBulkHolding] = useState(false);
   // Quick filter: Accepted applications still missing PCC No. or Learning
   // No. — the two fields that drive the auto-Completed flow.
   const [pendingOnly, setPendingOnly] = useState(false);
@@ -1309,6 +1310,27 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
+  // Bulk-Hold — mirrors bulkAcceptSelected, just moves status to "On Hold"
+  // via the same updateStatus() the detail modal's Put On Hold button uses.
+  // Skips anything already Accepted/Completed/Rejected/On Hold.
+  const bulkHoldSelected = async () => {
+    const targets = rows.filter((r) => selectedIds.has(r.id) && !["Accepted", "Completed", "Rejected", "On Hold"].includes(r.status));
+    if (!targets.length) {
+      setToast("Selected rows already On Hold/Accepted/Completed/Rejected hain — kuch karne ko nahi bacha");
+      return;
+    }
+    setBulkHolding(true);
+    let okCount = 0;
+    for (const r of targets) {
+      const { error } = await supabase.from("applications").update({ status: "On Hold" }).eq("id", r.id);
+      if (!error) okCount++;
+    }
+    setBulkHolding(false);
+    setSelectedIds(new Set());
+    setToast(`${okCount} of ${targets.length} application(s) put On Hold`);
+    load();
+  };
+
   return (
     <CanEditContext.Provider value={canEdit}>
     <div>
@@ -1393,6 +1415,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-emerald-600 text-white border-emerald-600 disabled:opacity-50"
             >
               {bulkAccepting ? "Accepting…" : `✓ Accept Selected (${selectedIds.size})`}
+            </button>
+          )}
+          {!restricted && selectedIds.size > 0 && (
+            <button
+              onClick={bulkHoldSelected}
+              disabled={bulkHolding}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-amber-500 text-white border-amber-500 disabled:opacity-50"
+            >
+              {bulkHolding ? "Putting On Hold…" : `⏸ Put On Hold (${selectedIds.size})`}
             </button>
           )}
         </div>
