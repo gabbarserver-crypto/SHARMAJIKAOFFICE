@@ -55,6 +55,14 @@ const STAFF_VISIBLE_KEYS = [
   "application", "lldl", "pccno", "rto", "agency", "slot", "mobile", "remark",
 ];
 
+// The "Draft" inbox (DraftApplications for admin, StaffDraftApplications for
+// staff) is a quick triage list — Accept / Put On Hold / Reject a fresh
+// submission — not a place to review financials or processing detail. Both
+// roles get the same trimmed-down column set here: just enough to identify
+// who the applicant is and whether an LL/DL No. was already supplied.
+// Column picker is locked (not offered) on this view, same as `restricted`.
+const DRAFT_VISIBLE_KEYS = ["applicationDate", "dealer", "service", "applicant", "dob", "lldl"];
+
 // Role-driven write lock. Applications() provides the current role's
 // can_edit permission here; EditableCell/EditableSelect read it so every
 // inline-edit control in the table is automatically locked for read-only
@@ -383,13 +391,20 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [showUpdateCsv, setShowUpdateCsv] = useState(false);
   const [toast, setToast] = useState(null);
   const [pccCheckRow, setPccCheckRow] = useState(null);
+  // Draft inbox quick actions: { row, status } — On Hold and Rejected both
+  // pop this remark modal instead of changing status immediately; Accept
+  // does not (see quickAccept below). null = popup closed.
+  const [remarkPrompt, setRemarkPrompt] = useState(null);
   const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: unreadCount } — omitted/0 when nothing's awaiting our reply
 
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [visibleCols, setVisibleCols] = useState(() =>
-    Object.fromEntries(TOGGLEABLE_COLUMNS.map((c) => [c.key, restricted ? STAFF_VISIBLE_KEYS.includes(c.key) : true]))
+    Object.fromEntries(TOGGLEABLE_COLUMNS.map((c) => [
+      c.key,
+      onlyDraft ? DRAFT_VISIBLE_KEYS.includes(c.key) : (restricted ? STAFF_VISIBLE_KEYS.includes(c.key) : true),
+    ]))
   );
   const toggleCol = (key) => setVisibleCols((v) => ({ ...v, [key]: !v[key] }));
   // Mobile and Remark are hidden by default and only shown together, via
@@ -686,20 +701,24 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
-  const updateStatus = async (newStatus, remarks) => {
+  // `targetApp` defaults to whatever's open in the detail modal (`selected`)
+  // so every existing call site keeps working unchanged. The quick Hold/
+  // Reject buttons on the Draft inbox row (see RemarkPopup below) pass the
+  // row directly instead, since nothing is open in a modal for those.
+  const updateStatus = async (newStatus, remarks, targetApp = selected) => {
     if (newStatus === "Accepted") {
-      const result = await approveApplication(selected, remarks);
+      const result = await approveApplication(targetApp, remarks);
       setToast(result.message);
       closeDetail();
       load();
       return;
     }
     if (newStatus === "Completed") {
-      const result = await completeApplication(selected);
-      if (result.ok && remarks !== selected.remarks) {
+      const result = await completeApplication(targetApp);
+      if (result.ok && remarks !== targetApp.remarks) {
         // complete_application() already set status/completed_at/application_date —
         // remarks is the only field it doesn't touch.
-        const { error } = await supabase.from("applications").update({ remarks }).eq("id", selected.id);
+        const { error } = await supabase.from("applications").update({ remarks }).eq("id", targetApp.id);
         if (error) {
           setToast("Ledger posted, but remarks failed to save: " + error.message);
           closeDetail();
@@ -717,13 +736,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // Moving an application to Under Review marks the day it was formally
     // taken up — auto-fill it the first time, but never overwrite a date
     // that's already set (auto-filled earlier, or hand-edited in the table).
-    if (newStatus === "Under Review" && !selected.application_date) {
+    if (newStatus === "Under Review" && !targetApp.application_date) {
       updatePayload.application_date = new Date().toISOString().slice(0, 10);
     }
     // "Accept" (Draft Submitted -> Under Review) has no separate assignment
     // step anymore — staff just accept. Record who accepted separately from
     // assigned_staff_id (which stays free for actual field/dealer assignment).
-    if (newStatus === "Under Review" && selected.status === "Draft Submitted" && staff?.id) {
+    if (newStatus === "Under Review" && targetApp.status === "Draft Submitted" && staff?.id) {
       updatePayload.accepted_by = staff.id;
       updatePayload.accepted_at = new Date().toISOString();
     }
@@ -731,7 +750,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     const { error } = await supabase
       .from("applications")
       .update(updatePayload)
-      .eq("id", selected.id);
+      .eq("id", targetApp.id);
     if (error) {
       setToast("Failed: " + error.message);
       return;
@@ -1256,6 +1275,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     });
   };
 
+  // Quick Accept from the Draft inbox row — same approveApplication used by
+  // bulk-accept and the status modal, just for a single row with no popup
+  // (Accept never needs a remark, only Hold/Reject do — see RemarkPopup).
+  const quickAccept = async (row) => {
+    const result = await approveApplication(row);
+    setToast(result.message);
+    load();
+  };
+
   // Bulk-Accept — for rows sitting in Draft/On Hold by mistake (already
   // done, just never got clicked through). Skips anything already
   // Accepted/Completed/Rejected rather than erroring on it.
@@ -1403,7 +1431,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         <GhostButton onClick={() => setShowFilters((s) => !s)}>
           Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
         </GhostButton>
-        {!restricted && (
+        {!restricted && !onlyDraft && (
           <div className="relative">
             <GhostButton onClick={() => setShowColumnPicker((s) => !s)}>Columns</GhostButton>
             {showColumnPicker && (
@@ -1512,6 +1540,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {visibleCols.slot && <SortableTh column="slot" label="Slot" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {showRemarkMobile && <SortableTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {showRemarkMobile && <SortableTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {onlyDraft && <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Action</th>}
               <SortableTh column="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Appointment</th>
             </tr>
@@ -1793,6 +1822,40 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     <EditableCell width="w-36" value={r.remarks} onSave={(v) => updateRowField(r.id, "remarks", v || null)} />
                   </td>
                 )}
+                {onlyDraft && (
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5 whitespace-nowrap">
+                      {(r.status === "Draft Submitted" || r.status === "On Hold") && (
+                        <>
+                          <PrimaryButton
+                            disabled={!canApprove}
+                            onClick={() => quickAccept(r)}
+                            className="!bg-emerald-600 hover:!bg-emerald-700 !px-2.5 !py-1 !text-xs"
+                            title={canApprove ? "Accept this application" : "You don't have approval rights for this role"}
+                          >
+                            Accept
+                          </PrimaryButton>
+                          {r.status !== "On Hold" && (
+                            <GhostButton
+                              onClick={() => setRemarkPrompt({ row: r, status: "On Hold" })}
+                              className="!px-2.5 !py-1 !text-xs"
+                            >
+                              Put On Hold
+                            </GhostButton>
+                          )}
+                        </>
+                      )}
+                      {r.status !== "Rejected" && r.status !== "Completed" && (
+                        <DangerButton
+                          onClick={() => setRemarkPrompt({ row: r, status: "Rejected" })}
+                          className="!px-2.5 !py-1 !text-xs"
+                        >
+                          Reject
+                        </DangerButton>
+                      )}
+                    </div>
+                  </td>
+                )}
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <button
@@ -1901,6 +1964,18 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           onSaveAnswers={updateAnswers}
           onSaveApplicant={updateApplicantDetails}
           onDocsChanged={() => openDetail(selected, modalMode)}
+        />
+      )}
+
+      {remarkPrompt && (
+        <RemarkPopup
+          row={remarkPrompt.row}
+          status={remarkPrompt.status}
+          onCancel={() => setRemarkPrompt(null)}
+          onConfirm={async (text) => {
+            await updateStatus(remarkPrompt.status, text, remarkPrompt.row);
+            setRemarkPrompt(null);
+          }}
         />
       )}
 
@@ -3180,6 +3255,51 @@ function EntryLog({ app }) {
         </p>
       ))}
     </div>
+  );
+}
+
+// Small popup that asks for a remark before Put On Hold / Reject go
+// through — used by the Draft inbox's quick action buttons. Reject can't
+// be confirmed with an empty remark (dealer needs a reason); Hold's remark
+// is optional, same rule the status modal already used.
+function RemarkPopup({ row, status, onCancel, onConfirm }) {
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const isReject = status === "Rejected";
+
+  const confirm = async () => {
+    if (isReject && !text.trim()) {
+      window.alert("Reject karne ke liye remark likhna zaroori hai.");
+      return;
+    }
+    setSaving(true);
+    await onConfirm(text);
+    setSaving(false);
+  };
+
+  return (
+    <Modal title={`${isReject ? "Reject" : "Put On Hold"} — ${row.draft_code}`} onClose={onCancel}>
+      <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+        {row.applicant_name}
+      </p>
+      <Field label="Remarks (shown to dealer)" required={isReject}>
+        <Input
+          as="textarea"
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={isReject ? "Reject karne ki wajah likhein" : "Optional — hold karne ki wajah likhein"}
+        />
+      </Field>
+      <div className="flex justify-end gap-2 mt-4">
+        <GhostButton onClick={onCancel} disabled={saving}>Cancel</GhostButton>
+        {isReject ? (
+          <DangerButton onClick={confirm} disabled={saving}>{saving ? "Rejecting…" : "Reject"}</DangerButton>
+        ) : (
+          <PrimaryButton onClick={confirm} disabled={saving}>{saving ? "Saving…" : "Put On Hold"}</PrimaryButton>
+        )}
+      </div>
+    </Modal>
   );
 }
 
