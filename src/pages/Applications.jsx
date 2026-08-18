@@ -357,8 +357,12 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [pendingOnly, setPendingOnly] = useState(false);
   // Defaults to current-year-only once the data set gets large (13k+ historical
   // rows made "show everything" the default choke point). "Show All" lets
-  // anyone drop back to the full history on demand.
-  const [showAllYears, setShowAllYears] = useState(false);
+  // anyone drop back to the full history on demand. The Draft inbox is the
+  // one exception: it defaults to ALL years, always, with the toggle hidden
+  // below — a draft submitted last year is still an unactioned draft, and
+  // hiding it by default was making this view under-count against the
+  // sidebar's "Draft" badge (which counts every open draft, no year filter).
+  const [showAllYears, setShowAllYears] = useState(() => onlyDraft);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -1394,15 +1398,17 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowAllYears((v) => !v)}
-              title={showAllYears ? "Currently showing every year — click to go back to this year only" : `Currently showing ${currentYear} only — click to see all years`}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-                showAllYears ? "bg-amber-500 text-white border-amber-500" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-              }`}
-            >
-              {showAllYears ? "📅 Showing All Years" : `📅 ${currentYear} Only`}
-            </button>
+            {!onlyDraft && (
+              <button
+                onClick={() => setShowAllYears((v) => !v)}
+                title={showAllYears ? "Currently showing every year — click to go back to this year only" : `Currently showing ${currentYear} only — click to see all years`}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                  showAllYears ? "bg-amber-500 text-white border-amber-500" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+                }`}
+              >
+                {showAllYears ? "📅 Showing All Years" : `📅 ${currentYear} Only`}
+              </button>
+            )}
             <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
             {canEdit && !restricted && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
             {canEdit && !restricted && <GhostButton onClick={() => setShowUpdateCsv(true)}>✎ Update via CSV</GhostButton>}
