@@ -331,19 +331,19 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       <main className="flex-1 min-w-0 max-w-5xl mx-auto p-6 pb-24">
         {(tab === "Applications" || tab === "Ledger") && (
           <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
+            <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
               <p className={`text-sm sm:text-2xl font-bold truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
                 {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
               </p>
             </div>
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
+            <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Credit Limit</h3>
               <p className="text-sm sm:text-2xl font-bold text-slate-800 dark:text-slate-100 truncate">
                 ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
               </p>
             </div>
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5 flex flex-col justify-between">
+            <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5 flex flex-col justify-between">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Pay by QR</h3>
               <GhostButton onClick={() => setShowQr(true)} className="!text-[10px] sm:!text-sm w-full justify-center">
                 Pay by QR
