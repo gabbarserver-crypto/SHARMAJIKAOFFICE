@@ -13,6 +13,13 @@ html, body, #root {
   overflow-x: hidden;
   max-width: 100%;
 }
+/* overflow: clip is stricter than hidden — it can't be scrolled past even
+   by a touch/swipe gesture on mobile WebViews where "hidden" is sometimes
+   only enforced for programmatic scrolling. Browsers that don't understand
+   "clip" simply ignore this line and keep the "hidden" above. */
+html, body, #root {
+  overflow-x: clip;
+}
 
 /* Any element that intentionally scrolls sideways (wide tables wrapped in
    overflow-x-auto, mainly on the mobile Ledger/PCC Status tabs) needs

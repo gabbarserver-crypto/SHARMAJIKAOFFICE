@@ -29,6 +29,7 @@ const ICONS = {
   dashboard: LayoutGrid,
   applications: FileOutput,
   staffApplications: Users,
+  staffDraftApplications: Inbox,
   draftApplications: Inbox,
   chats: MessageSquare,
   masters: Database,

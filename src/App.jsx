@@ -11,7 +11,7 @@ import Login from "./pages/Login";
 import Welcome from "./pages/Welcome";
 import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
-import Applications, { StaffApplications, DraftApplications } from "./pages/Applications";
+import Applications, { StaffApplications, StaffDraftApplications, DraftApplications } from "./pages/Applications";
 import Payments from "./pages/Payments";
 import Ledger from "./pages/Ledger";import Reports from "./pages/Reports";
 import Masters from "./pages/Masters";
@@ -55,7 +55,8 @@ function AgencyLedgerPage({ initialEntityId, isAdmin }) { return <Ledger only="a
 const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
   { key: "applications", label: "Applications", Component: Applications },
-  { key: "staffApplications", label: "Staff View", Component: StaffApplications },
+  { key: "staffApplications", label: "Applications", Component: StaffApplications },
+  { key: "staffDraftApplications", label: "Draft", Component: StaffDraftApplications },
   { key: "draftApplications", label: "Draft", Component: DraftApplications },
   { key: "chats", label: "Call/Chat", Component: Chats },
   { key: "masters", label: "Masters", Component: Masters },
@@ -76,6 +77,10 @@ const MODULE_BY_NAV_KEY = {
   dashboard: "dashboard",
   applications: "applications",
   staffApplications: "staffApplications",
+  // Same restricted permission row as "Applications" (Staff View) above —
+  // a staff role that can see the restricted Applications list gets this
+  // restricted Draft tab too, no separate permissions-table row needed.
+  staffDraftApplications: "staffApplications",
   // Reuses the "applications" permission row rather than needing its own —
   // anyone who can already view Applications sees this tab too, no new
   // permissions-table row required for existing roles.
@@ -140,7 +145,7 @@ export default function App() {
   // column-limited substitute for the full Applications tab).
   const visibleNav = React.useMemo(() => {
     if (!staff) return NAV;
-    if (isAdmin) return NAV.filter((n) => n.key !== "staffApplications");
+    if (isAdmin) return NAV.filter((n) => n.key !== "staffApplications" && n.key !== "staffDraftApplications");
     return NAV.filter((n) => permMap[MODULE_BY_NAV_KEY[n.key]]?.can_view);
   }, [staff, isAdmin, permMap]);
 
@@ -534,7 +539,7 @@ export default function App() {
         active={active}
         onNavigate={(key) => { setActive(key); refreshPendingChatCount(); refreshPendingDraftCount(); }}
         staff={staff}
-        badges={{ chats: pendingChatCount, draftApplications: pendingDraftCount }}
+        badges={{ chats: pendingChatCount, draftApplications: pendingDraftCount, staffDraftApplications: pendingDraftCount }}
         onLogout={() => supabase.auth.signOut()}
       />
       <main
@@ -561,7 +566,7 @@ export default function App() {
           setActive(key);
           refreshPendingChatCount();
         }}
-        badges={{ chats: pendingChatCount, draftApplications: pendingDraftCount }}
+        badges={{ chats: pendingChatCount, draftApplications: pendingDraftCount, staffDraftApplications: pendingDraftCount }}
       />
       <CommsWindow
         ref={commsWindowRef}

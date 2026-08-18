@@ -3900,6 +3900,14 @@ export function StaffApplications({ canEdit = true, canApprove = true, staff } =
   return <Applications restricted canEdit={canEdit} canApprove={canApprove} staff={staff} />;
 }
 
+// Same restricted column set as StaffApplications above, but locked to
+// Draft Submitted only — the staff-view counterpart to admin's
+// DraftApplications tab below. Wired up as its own nav tab in App.jsx,
+// right after "Applications" (Staff View).
+export function StaffDraftApplications({ canEdit = true, canApprove = true, staff } = {}) {
+  return <Applications restricted onlyDraft canEdit={canEdit} canApprove={canApprove} staff={staff} />;
+}
+
 // Locked to Draft Submitted applications only — no tab switcher, so this is
 // a dedicated "inbox" of everything still waiting on a first look. Wired up
 // as its own nav tab in App.jsx, sitting between Applications and Call/Chat.
