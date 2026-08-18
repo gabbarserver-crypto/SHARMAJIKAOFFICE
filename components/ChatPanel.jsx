@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck, Reply, X, Volume2, Volume1 } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
 import { sendPush, chatReadReceipt } from "../lib/serverApi";
+import { markThreadSeen } from "../lib/threadSeen";
 import { useCall } from "../lib/call";
 import CallTimer from "./CallTimer";
 
@@ -68,6 +69,11 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   // what powers the named "Seen by ..." line under our own messages, as
   // opposed to readStatus above which only drives the tick's grey/blue colour.
   const [readers, setReaders] = useState([]);
+  const lastLocallySeenAtRef = useRef(null);
+  const latestMessageAtRef = useRef(null);
+  useEffect(() => {
+    latestMessageAtRef.current = messages.length ? messages[messages.length - 1].created_at : null;
+  }, [messages]);
   // The message the composer is currently drafting a reply to, or null.
   // Cleared once that reply actually sends (or the user backs out of it).
   const [replyingTo, setReplyingTo] = useState(null);
@@ -113,6 +119,8 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
       setError("");
       setReplyingTo(null); // a reply target from the previous thread can't carry over
       setReaders([]);
+      lastLocallySeenAtRef.current = null;
+      latestMessageAtRef.current = null;
       try {
         const thread = await getOrCreateThread({ dealerId, applicationId });
         if (cancelled) return;
@@ -151,6 +159,15 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
     const markAndRefresh = async () => {
       try {
         const status = await chatReadReceipt({ threadId, markRead: true });
+        // The API receipt drives the message ticks; keep the local unread
+        // state in sync too. Only write/emit when the latest message has
+        // actually moved forward, otherwise the 4s read-status poll would
+        // cause unnecessary global badge refreshes.
+        const latestMessageAt = latestMessageAtRef.current;
+        if (latestMessageAt && lastLocallySeenAtRef.current !== latestMessageAt) {
+          lastLocallySeenAtRef.current = latestMessageAt;
+          markThreadSeen(identity, threadId);
+        }
         if (!cancelled) {
           setReadStatus(status);
           setReaders(status.readers || []);

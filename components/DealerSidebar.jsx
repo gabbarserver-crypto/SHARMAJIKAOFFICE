@@ -1,55 +1,44 @@
+// src/components/DealerSidebar.jsx
+// Desktop-only left sidebar for the Dealer Portal — gives dealers the same
+// dark, rounded, color-customizable nav shell as the admin app's Sidebar
+// (see components/Sidebar.jsx), instead of the old top header + pill-tab
+// row. Mobile is untouched: DealerPortal still shows its compact header
+// and DealerBottomTabBar below the md breakpoint, so this component is
+// only ever rendered with `hidden md:flex`.
 import React, { useState, useRef } from "react";
-import { supabase } from "../lib/supabase";
 import { useDarkMode } from "../lib/theme";
 import { useSidebarColor, SIDEBAR_COLORS } from "../lib/sidebarColor";
 import logoMark from "../assets/one-infinity-icon-mark.png";
 import {
-  LayoutGrid,
   FileOutput,
-  Inbox,
-  Database,
-  Receipt,
-  IndianRupee,
-  BookOpen,
-  BarChart2,
-  Settings as SettingsIcon,
+  ShieldCheck,
   MessageSquare,
-  LogOut,
-  ChevronRight,
-  ChevronLeft,
+  BookOpen,
+  ClipboardList,
+  Receipt,
+  Users,
+  Download,
+  Gamepad2,
+  Fingerprint,
   Sun,
   Moon,
-  Users,
   Palette,
   Check,
+  ChevronLeft,
+  ChevronRight,
+  LogOut,
 } from "lucide-react";
 
-// Maps each NAV key from App.jsx to an icon. Keep in sync if pages are added/removed.
 const ICONS = {
-  dashboard: LayoutGrid,
-  applications: FileOutput,
-  staffApplications: Users,
-  staffDraftApplications: Inbox,
-  draftApplications: Inbox,
-  chats: MessageSquare,
-  masters: Database,
-  payments: Receipt,
-  paymentsReport: IndianRupee,
-  ledger: BookOpen,
-  dealerLedger: BookOpen,
-  agencyLedger: BookOpen,
-  reports: BarChart2,
-  settings: SettingsIcon,
+  Applications: FileOutput,
+  "PCC Status": ShieldCheck,
+  "Call/Chat": MessageSquare,
+  Ledger: BookOpen,
+  Service: ClipboardList,
+  Payments: Receipt,
+  Staff: Users,
 };
 
-// Rounded "active pill" treatment, inspired by a floating icon-only mobile
-// sidebar reference. Kept the existing labels/badges/collapse functionality
-// rather than going fully icon-only — losing the chat-unread badges and
-// page labels would hurt usability more than the visual match is worth.
-// Text/icon colors here are deliberately color-agnostic (white-opacity based)
-// rather than tied to one hue, since the background is now user-selectable
-// (see sidebarColor.js) — this way every color option stays legible without
-// needing its own matching text-color variant.
 function NavItem({ icon: Icon, label, active, collapsed, badge, onClick }) {
   return (
     <button
@@ -86,43 +75,31 @@ function SectionLabel({ children, collapsed }) {
   );
 }
 
-// nav: [{ key, label }] — Menu section. staff: { full_name } | null.
-export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, onLogout }) {
+// tabs: string[] (from DealerPortal's TABS/visibleTabs). identity: { type, name } | null.
+export default function DealerSidebar({
+  dealer,
+  identity,
+  tabs,
+  active,
+  onNavigate,
+  unreadChats = 0,
+  photoUrl,
+  uploadingPhoto,
+  onUploadPhoto,
+  onLogout,
+  apkPath,
+  onOpenGames,
+  onSetupPasskey,
+}) {
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, toggleDark] = useDarkMode();
   const [colorKey, colorDef, setSidebarColor] = useSidebarColor();
   const [showColorPicker, setShowColorPicker] = useState(false);
-  const [photoUrl, setPhotoUrl] = useState(staff?.photo_url || null);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoInputRef = useRef(null);
-
-  const uploadProfilePhoto = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file || !staff?.id) return;
-    setUploadingPhoto(true);
-    try {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData?.user?.id;
-      if (!uid) return;
-      const ext = file.name.split(".").pop();
-      const path = `${uid}/staff-${staff.id}-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from("profile-photos").upload(path, file, { upsert: true });
-      if (upErr) throw upErr;
-      const { data: pub } = supabase.storage.from("profile-photos").getPublicUrl(path);
-      await supabase.from("staff").update({ photo_url: pub.publicUrl }).eq("id", staff.id);
-      setPhotoUrl(pub.publicUrl);
-    } catch (err) {
-      alert("Couldn't upload photo: " + err.message);
-    } finally {
-      setUploadingPhoto(false);
-    }
-  };
 
   const [from, to] = dark ? colorDef.dark : colorDef.light;
 
-  const initials = (staff?.full_name || "?")
+  const initials = (identity?.name || dealer?.name || "?")
     .split(" ")
     .map((s) => s[0])
     .filter(Boolean)
@@ -130,56 +107,24 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
     .join("")
     .toUpperCase();
 
-  // On phones (and the Android wrapper) the sidebar is hidden by default and
-  // slides in as a drawer over a dim backdrop; on tablets/desktop (md+) it
-  // behaves exactly as before — always visible, no backdrop.
-  const handleNavigate = (key) => {
-    onNavigate(key);
-    setMobileOpen(false);
-  };
-
   return (
-    <>
-      {/* Hamburger trigger — mobile only */}
-      <button
-        onClick={() => setMobileOpen(true)}
-        aria-label="Open menu"
-        className="no-print md:hidden fixed left-3 z-40 w-10 h-10 rounded-xl bg-white dark:bg-slate-900 shadow-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-200"
-        style={{ top: "calc(0.75rem + env(safe-area-inset-top, 0px))" }}
-      >
-        ☰
-      </button>
-
-      {/* Backdrop — mobile only, shown while drawer is open */}
-      {mobileOpen && (
-        <div
-          className="no-print md:hidden fixed inset-0 bg-black/40 z-40"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
     <aside
-      className={[
-        "no-print shrink-0 h-screen flex flex-col m-3 rounded-3xl shadow-lg transition-all duration-300",
-        "fixed top-0 left-0 z-50 md:sticky md:top-0",
-        mobileOpen ? "translate-x-0" : "-translate-x-[120%] md:translate-x-0",
-        collapsed ? "w-20" : "w-64",
-      ].join(" ")}
+      className="no-print hidden md:flex shrink-0 flex-col m-3 rounded-3xl shadow-lg transition-all duration-300"
       style={{
+        width: collapsed ? "5rem" : "16rem",
         height: "calc(100vh - 1.5rem)",
-        marginTop: "calc(0.75rem + env(safe-area-inset-top, 0px))",
         background: `linear-gradient(to bottom, ${from}, ${to})`,
       }}
     >
       {/* Header */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b border-white/15">
         <div className="w-10 h-10 shrink-0 rounded-xl bg-white flex items-center justify-center overflow-hidden">
-          <img src={logoMark} alt="One Infinity" className="w-8 h-8 object-contain" />
+          <img src={logoMark} alt="" className="w-8 h-8 object-contain" />
         </div>
         {!collapsed && (
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold truncate text-white">One Infinity</p>
-            <p className="text-xs truncate text-white/60">RTO Services ERP</p>
+            <p className="text-sm font-semibold truncate text-white">{dealer?.name}</p>
+            <p className="text-xs truncate text-white/60">Dealer Portal · Code {dealer?.code}</p>
           </div>
         )}
         {!collapsed && (
@@ -207,18 +152,48 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
       <div className="flex-1 px-3 py-4 overflow-y-auto">
         <SectionLabel collapsed={collapsed}>Menu</SectionLabel>
         <nav className="space-y-1">
-          {nav.map((item) => (
+          {tabs.map((t) => (
             <NavItem
-              key={item.key}
-              icon={ICONS[item.key] || LayoutGrid}
-              label={item.label}
-              active={active === item.key}
+              key={t}
+              icon={ICONS[t] || FileOutput}
+              label={t}
+              active={active === t}
               collapsed={collapsed}
-              badge={badges[item.key] || 0}
-              onClick={() => handleNavigate(item.key)}
+              badge={t === "Call/Chat" ? unreadChats : 0}
+              onClick={() => onNavigate(t)}
             />
           ))}
         </nav>
+      </div>
+
+      {/* Quick actions — app download / games / passkey, same shortcuts
+          that used to live as icon buttons in the old top header. */}
+      <div className={`px-4 py-3 border-t border-white/15 flex ${collapsed ? "flex-col items-center gap-2" : "items-center gap-2"}`}>
+        <a
+          href={apkPath}
+          download
+          title="Download Android App"
+          aria-label="Download Android App"
+          className="w-9 h-9 flex items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white"
+        >
+          <Download size={16} />
+        </a>
+        <button
+          onClick={onOpenGames}
+          title="1 Infinity Games"
+          aria-label="1 Infinity Games"
+          className="w-9 h-9 flex items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white"
+        >
+          <Gamepad2 size={16} />
+        </button>
+        <button
+          onClick={onSetupPasskey}
+          title="Set up Fingerprint / Face ID login on this device"
+          aria-label="Set up fingerprint login"
+          className="w-9 h-9 flex items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white"
+        >
+          <Fingerprint size={16} />
+        </button>
       </div>
 
       {/* Sidebar color picker */}
@@ -277,7 +252,7 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
           accept="image/*"
           ref={photoInputRef}
           className="hidden"
-          onChange={uploadProfilePhoto}
+          onChange={onUploadPhoto}
         />
         <button
           type="button"
@@ -297,7 +272,7 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
         </button>
         {!collapsed && (
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold truncate text-white">{staff?.full_name || "Signed in"}</p>
+            <p className="text-sm font-semibold truncate text-white">{identity?.name || dealer?.name || "Signed in"}</p>
             <button onClick={onLogout} className="text-xs font-semibold text-white/60 hover:text-white">
               Logout
             </button>
@@ -310,6 +285,5 @@ export default function Sidebar({ nav, active, onNavigate, staff, badges = {}, o
         )}
       </div>
     </aside>
-    </>
   );
 }

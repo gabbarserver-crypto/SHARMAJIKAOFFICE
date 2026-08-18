@@ -7,9 +7,9 @@ import { identityFor } from "../lib/chat";
 import { Phone, MessageCircle } from "lucide-react";
 import { createDealerLogin, createDealerStaffLogin } from "../lib/serverApi";
 
-const TABS = ["RTO", "Staff", "Service"];
+const TABS = ["RTO", "Staff", "Service", "Dealer", "Agency"];
 
-export default function Masters() {
+export default function Masters({ call, staff }) {
   const [tab, setTab] = useState("RTO");
   const [toast, setToast] = useState(null);
 
@@ -33,8 +33,10 @@ export default function Masters() {
       </div>
 
       {tab === "RTO" && <RTOMaster notify={notify} />}
-      {tab === "Staff" && <StaffMaster notify={notify} />}
+      {tab === "Staff" && <StaffMaster notify={notify} call={call} myStaffId={staff?.id} />}
       {tab === "Service" && <ServiceMaster notify={notify} />}
+      {tab === "Dealer" && <DealerMaster notify={notify} call={call} />}
+      {tab === "Agency" && <AgencyMaster notify={notify} />}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
@@ -166,7 +168,7 @@ function RTOForm({ initial, onSave, onClose }) {
 }
 
 /* ---------------- Staff Master ---------------- */
-function StaffMaster({ notify }) {
+function StaffMaster({ notify, call, myStaffId }) {
   const [rows, setRows] = useState([]);
   const [roles, setRoles] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -208,6 +210,19 @@ function StaffMaster({ notify }) {
           { key: "full_name", label: "Name" }, { key: "role", label: "Designation" },
           { key: "roles", label: "Permission Role", render: (r) => r.roles?.role_name || "—" },
           { key: "mobile", label: "Mobile" }, { key: "username", label: "Username" },
+          { key: "call", label: "Call", render: (r) => {
+            const isSelf = myStaffId && r.id === myStaffId;
+            return (
+              <button
+                onClick={() => call?.startCall({ type: "staff", id: r.id, name: r.full_name }, "audio")}
+                disabled={!call || call.status !== "idle" || isSelf}
+                title={isSelf ? "That's you" : `Call ${r.full_name}`}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+              >
+                <Phone size={16} />
+              </button>
+            );
+          } },
         ]}
         onAdd={() => { setEditing(null); setOpen(true); }}
         onEdit={(r) => { setEditing(r); setOpen(true); }}
@@ -283,6 +298,8 @@ function ServiceMaster({ notify }) {
       rto_required: form.rto_required, agency_required: form.agency_required,
       previous_ll_required: form.previous_ll_required,
       otp_required: form.otp_required, chat_in_app: form.chat_in_app,
+      age_limit_required: !!form.age_limit_required,
+      min_age: form.age_limit_required ? (parseInt(form.min_age, 10) || null) : null,
       gov_fee: parseFloat(form.gov_fee) || 0, processing_charges: parseFloat(form.processing_charges) || 0,
       other_charges: parseFloat(form.other_charges) || 0, pcc_fee: parseFloat(form.pcc_fee) || 0,
       post_timing: form.post_timing,
@@ -348,6 +365,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
   const [f, setF] = useState(initial || {
     parent_service: "", short_name: "", pcc_required: true, slot_booking_required: true,
     rto_required: false, agency_required: false, previous_ll_required: false, otp_required: false, chat_in_app: false,
+    age_limit_required: false, min_age: "",
     gov_fee: "", processing_charges: "", other_charges: "", pcc_fee: "", post_timing: "After Approval",
     next_service_id: "", next_service_wait_days: 30,
   });
@@ -417,7 +435,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
 
         <div>
           <Card title="Service Requirements" className="mb-4">
-            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"]].map(([k, label]) => (
+            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"], ["age_limit_required", "Age Limitation"]].map(([k, label]) => (
               <Field key={k} label={label}>
                 <Select value={String(!!f[k])} onChange={setBool(k)}>
                   <option value="false">Not Required</option>
@@ -425,6 +443,11 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
                 </Select>
               </Field>
             ))}
+            {f.age_limit_required && (
+              <Field label="Minimum Age">
+                <Input type="number" min="0" value={f.min_age} onChange={set("min_age")} placeholder="e.g. 18" />
+              </Field>
+            )}
           </Card>
 
           <Card title="Workflow Rules" className="mb-4">
@@ -445,7 +468,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
               <Field label="Wait Before Reminder (days)">
                 <Input type="number" min="0" value={f.next_service_wait_days} onChange={set("next_service_wait_days")} />
                 <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                  Once an application for this service is Completed for {f.next_service_wait_days || 0}+ day
+                  Once an application for this service is Accepted for {f.next_service_wait_days || 0}+ day
                   {String(f.next_service_wait_days) === "1" ? "" : "s"}, dealers get a "Book Appointment" option that
                   creates a draft for the Next Service above instead — e.g. Learner's Licence → Driving Licence (30
                   days), or Insurance → Fitness (1 day).
@@ -473,7 +496,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
                     />
                     Mandatory
                   </label>
-                  <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-500" title="Only shows up as required once the application is Accepted/Completed — e.g. a PCC Certificate or Learner Licence that only exists after approval">
+                  <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-500" title="Only shows up as required once the application is Accepted — e.g. a PCC Certificate or Learner Licence that only exists after approval">
                     <input
                       type="checkbox"
                       checked={!!d.post_approval}
@@ -518,7 +541,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
 }
 
 /* ---------------- Dealer Master ---------------- */
-function DealerMaster({ notify }) {
+function DealerMaster({ notify, call }) {
   const [rows, setRows] = useState([]);
   const [summaryByDealer, setSummaryByDealer] = useState({}); // dealer_id -> available_limit
   const [editing, setEditing] = useState(null);
@@ -531,8 +554,8 @@ function DealerMaster({ notify }) {
     setRows(data || []);
     // Best-effort — if the summary view isn't reachable for some reason, the
     // Status column just falls back to blank rather than breaking the list.
-    const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, available_limit");
-    setSummaryByDealer(Object.fromEntries((summaries || []).map((s) => [s.dealer_id, s.available_limit])));
+    const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, credit_limit, running_balance");
+    setSummaryByDealer(Object.fromEntries((summaries || []).map((s) => [s.dealer_id, Number(s.credit_limit || 0) + Number(s.running_balance || 0)])));
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -549,6 +572,7 @@ function DealerMaster({ notify }) {
       name: form.name, code: form.code, short_name: form.short_name || null, contact_name: form.contact_name, mobile: form.mobile, email: form.email,
       address: form.address, city: form.city, state: form.state, pincode: form.pincode,
       credit_limit: parseFloat(form.credit_limit) || 0,
+      opening_balance: parseFloat(form.opening_balance) || 0,
     };
     const { error } = editing
       ? await supabase.from("dealers").update(payload).eq("id", editing.id)
@@ -587,7 +611,6 @@ function DealerMaster({ notify }) {
               </a>
             </div>
           ) : <span className="text-slate-300 text-xs">—</span> },
-          { key: "wallet_balance", label: "Wallet", render: (r) => `₹${Number(r.wallet_balance||0).toLocaleString("en-IN")}` },
           { key: "credit_limit", label: "Credit Limit", render: (r) => `₹${Number(r.credit_limit||0).toLocaleString("en-IN")}` },
           { key: "status", label: "Status", render: (r) => {
             const avail = summaryByDealer[r.id];
@@ -604,13 +627,23 @@ function DealerMaster({ notify }) {
           { key: "chat", label: "Chat", render: (r) => (
             <GhostButton onClick={() => setChatDealer({ id: r.id, name: r.short_name || r.name })}>Chat</GhostButton>
           ) },
+          { key: "call", label: "Call", render: (r) => (
+            <button
+              onClick={() => call?.startCall({ type: "dealer", id: r.id, name: r.short_name || r.name }, "audio")}
+              disabled={!call || call.status !== "idle"}
+              title={`Call ${r.short_name || r.name}`}
+              className="w-8 h-8 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+            >
+              <Phone size={16} />
+            </button>
+          ) },
         ]}
         onAdd={() => { setEditing(null); setOpen(true); }}
         onEdit={(r) => { setEditing(r); setOpen(true); }}
         onDelete={remove}
         addLabel="Add Dealer"
       />
-      {open && <DealerForm initial={editing} onSave={save} onClose={() => setOpen(false)} />}
+      {open && <DealerForm initial={editing} onSave={save} onClose={() => setOpen(false)} call={call} />}
       {chatDealer && (
         <ApplicationChatModal
           dealerId={chatDealer.id}
@@ -624,8 +657,8 @@ function DealerMaster({ notify }) {
   );
 }
 
-export function DealerForm({ initial, onSave, onClose }) {
-  const [f, setF] = useState(initial || { name: "", code: "", short_name: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "" });
+export function DealerForm({ initial, onSave, onClose, call }) {
+  const [f, setF] = useState(initial || { name: "", code: "", short_name: "", contact_name: "", mobile: "", email: "", address: "", city: "", state: "", pincode: "", credit_limit: "", opening_balance: "" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -663,7 +696,10 @@ export function DealerForm({ initial, onSave, onClose }) {
         <Input value={f.state} onChange={set("state")} placeholder="State" />
         <Input value={f.pincode} onChange={set("pincode")} placeholder="Pincode" />
       </div>
-      <Field label="Credit Limit (₹)"><Input type="number" value={f.credit_limit} onChange={set("credit_limit")} /></Field>
+      <div className="grid sm:grid-cols-2 gap-x-4">
+        <Field label="Credit Limit (₹)"><Input type="number" value={f.credit_limit} onChange={set("credit_limit")} /></Field>
+        <Field label="Opening Balance (₹)"><Input type="number" value={f.opening_balance} onChange={set("opening_balance")} /></Field>
+      </div>
       <PrimaryButton onClick={() => onSave(f)}>Save Dealer</PrimaryButton>
 
       {initial && (
@@ -683,7 +719,7 @@ export function DealerForm({ initial, onSave, onClose }) {
         </div>
       )}
 
-      {initial && <DealerStaffManager dealerId={initial.id} />}
+      {initial && <DealerStaffManager dealerId={initial.id} call={call} />}
     </Modal>
   );
 }
@@ -691,7 +727,7 @@ export function DealerForm({ initial, onSave, onClose }) {
 // Sub-staff logins under this dealer (see dealer_staff table) — addable from
 // both here (admin) and the dealer's own portal (Masters isn't reachable by
 // dealers, so DealerPortal has its own copy of this manager).
-function DealerStaffManager({ dealerId }) {
+function DealerStaffManager({ dealerId, call }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -749,14 +785,24 @@ function DealerStaffManager({ dealerId }) {
                 <span className="font-medium text-slate-700 dark:text-slate-300">{r.full_name}</span>
                 <span className="text-slate-400 dark:text-slate-500 text-xs ml-2">{r.email}</span>
               </div>
-              <button
-                onClick={() => toggleActive(r)}
-                className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
-                  r.active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
-                }`}
-              >
-                {r.active ? "Active" : "Disabled"}
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => call?.startCall({ type: "dealer_staff", id: r.id, name: r.full_name }, "audio")}
+                  disabled={!call || call.status !== "idle" || !r.active}
+                  title={r.active ? `Call ${r.full_name}` : "Disabled — can't be called"}
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
+                >
+                  <Phone size={14} />
+                </button>
+                <button
+                  onClick={() => toggleActive(r)}
+                  className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                    r.active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
+                  }`}
+                >
+                  {r.active ? "Active" : "Disabled"}
+                </button>
+              </div>
             </div>
           ))}
         </div>

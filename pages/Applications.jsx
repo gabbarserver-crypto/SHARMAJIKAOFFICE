@@ -9,17 +9,24 @@ import { parseCSV, findByLabel } from "../lib/csv";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { MessageCircle, Phone, ArrowUp, ArrowDown, ArrowUpDown, Trash2, Link as LinkIcon, Pencil } from "lucide-react";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
+import PCCLetterModal from "../components/PCCLetterModal";
+import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
+import { ageHighlightClass, validateAgeForService } from "../lib/age";
+import DocUploadDropzone from "../components/DocUploadDropzone";
 
 
-const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted", "Completed"];
+const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejected", "Accepted"];
 
-// Columns a staff member can hide/show via the "Columns" button. Draft ID,
-// Status, and Chat stay pinned (always shown) since they're the primary way
-// to identify/act on a row; everything else is optional detail.
+// Columns a staff member can hide/show via the "Columns" button. Draft ID
+// and Status stay pinned (always shown) since they're the primary way to
+// identify/act on a row; everything else is optional detail. Mobile,
+// Remark, and Profit are deliberately left out of this list — they're
+// always hidden by default and only revealed together via the dedicated
+// toggle button next to "+ New Application".
 const TOGGLEABLE_COLUMNS = [
-  { key: "applicationDate", label: "Application Date" },
+  { key: "applicationDate", label: "Date" },
   { key: "amount", label: "Amount" },
   { key: "dealer", label: "Dealer" },
   { key: "service", label: "Service" },
@@ -28,25 +35,32 @@ const TOGGLEABLE_COLUMNS = [
   { key: "rtoFee", label: "Fee" },
   { key: "pccFee", label: "PCC Fee" },
   { key: "agencyFee", label: "Agency Fee" },
-  { key: "profit", label: "Profit" },
   { key: "application", label: "Application" },
   { key: "lldl", label: "LL/DL No." },
   { key: "pccno", label: "PCC No" },
   { key: "rto", label: "RTO" },
   { key: "agency", label: "Agency" },
   { key: "slot", label: "Slot" },
-  { key: "mobile", label: "Mobile" },
-  { key: "remark", label: "Remark" },
 ];
 
 // Columns a restricted "Staff View" is locked to — everything except the
-// financial / dealer-identifying columns (Amount, Dealer, Agency Fee,
-// Profit). Staff in this view can't toggle those back on (see `restricted`
-// prop on the Applications component below).
+// financial columns (Amount, Agency Fee, Profit). Dealer name is shown so
+// staff can tell whose application they're looking at; whether it's
+// editable there follows the same can_edit permission as every other cell
+// (via CanEditContext), same as before. Staff in this view can't toggle any
+// of these columns back on/off (see `restricted` prop on Applications).
 const STAFF_VISIBLE_KEYS = [
-  "applicationDate", "service", "applicant", "dob", "rtoFee", "pccFee",
+  "applicationDate", "dealer", "service", "applicant", "dob", "rtoFee", "pccFee",
   "application", "lldl", "pccno", "rto", "agency", "slot", "mobile", "remark",
 ];
+
+// The "Draft" inbox (DraftApplications for admin, StaffDraftApplications for
+// staff) is a quick triage list — Accept / Put On Hold / Reject a fresh
+// submission — not a place to review financials or processing detail. Both
+// roles get the same trimmed-down column set here: just enough to identify
+// who the applicant is and whether an LL/DL No. was already supplied.
+// Column picker is locked (not offered) on this view, same as `restricted`.
+const DRAFT_VISIBLE_KEYS = ["applicationDate", "dealer", "service", "applicant", "dob", "lldl"];
 
 // Role-driven write lock. Applications() provides the current role's
 // can_edit permission here; EditableCell/EditableSelect read it so every
@@ -73,9 +87,9 @@ function ddmmyyyyToISO(input) {
   return trimmed; // leave as-is, let DB flag invalid dates
 }
 
-function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false }) {
+function EditableCell({ value, onSave, type = "text", width = "w-24", placeholder = "", disabled = false, readOnly = false, readOnlyTitle, noSpinner = false }) {
   const canEdit = useContext(CanEditContext);
-  const locked = disabled || !canEdit;
+  const locked = disabled || readOnly || !canEdit;
   const [val, setVal] = useState(value ?? "");
   useEffect(() => { setVal(value ?? ""); }, [value]);
   return (
@@ -84,10 +98,10 @@ function EditableCell({ value, onSave, type = "text", width = "w-24", placeholde
       value={locked ? (disabled ? "" : val) : val}
       placeholder={disabled ? "Not required" : (!canEdit ? "" : placeholder)}
       disabled={locked}
-      title={!canEdit && !disabled ? "You don't have edit access for this section" : undefined}
+      title={readOnly ? (readOnlyTitle || "Locked after approval") : (!canEdit && !disabled ? "You don't have edit access for this section" : undefined)}
       onChange={(e) => setVal(e.target.value)}
       onBlur={() => { if (String(val) !== String(value ?? "")) onSave(val); }}
-      className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
+      className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${noSpinner ? "no-spinner" : ""} ${
         locked
           ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 placeholder:text-slate-300 dark:placeholder:text-slate-600 cursor-not-allowed"
           : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100"
@@ -114,6 +128,46 @@ function EditableSelect({ value, options, onSave, width = "w-32", placeholder = 
       <option value="">{disabled ? "Not required" : placeholder}</option>
       {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
     </select>
+  );
+}
+
+// Mirrors PCC_STAGE_ORDER/LABELS in PCCStatusCheckModal.jsx and
+// api/_lib/pccClient.js — the 6 granular stages the auto-sync cron writes
+// into pcc_stage every ~2 hours, shown here as a compact dot row so staff
+// can see progress at a glance without opening the modal.
+const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
+const PCC_STAGE_SHORT_LABELS = {
+  Pending: "Submitted",
+  Assigned: "Assigned",
+  "Field Verified": "Field Verified",
+  Approved: "Approved",
+  Verified: "Verified",
+  "Certificate Issued": "Cert. Issued",
+};
+
+function PCCStageDots({ pccStage, pccCertificatePath }) {
+  if (!pccStage) return null;
+  const currentIdx = PCC_STAGE_ORDER.indexOf(pccStage);
+  return (
+    <div className="flex items-center gap-1" title={`Auto-synced stage: ${PCC_STAGE_SHORT_LABELS[pccStage] || pccStage}`}>
+      {PCC_STAGE_ORDER.map((stage, i) => (
+        <span
+          key={stage}
+          className={`w-1.5 h-1.5 rounded-full ${i <= currentIdx ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"}`}
+        />
+      ))}
+      {pccCertificatePath && (
+        <a
+          href={supabase.storage.from("application-documents").getPublicUrl(pccCertificatePath).data.publicUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Download the saved certificate"
+          className="ml-1 text-emerald-600 hover:text-emerald-700"
+        >
+          📄
+        </a>
+      )}
+    </div>
   );
 }
 
@@ -218,9 +272,43 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
     </div>
   );
 }
+// Once an application is Accepted, status alone doesn't say how far along
+// the processing actually is — this derives that from the data staff have
+// typed in so far (no separate DB column, purely computed for display).
+// Services that don't require PCC (e.g. "LL RIC without PCC") never
+// mention PCC here, since it's not expected to be filled for them.
+function getProcessingStage(row) {
+  if (!row || row.status !== "Accepted") return null;
+  const pccRequired = !!row.services?.pcc_required;
+  const hasAppNo = !!row.application_no;
+  const hasPccNo = !!row.pcc_no;
+  if (!pccRequired) {
+    return hasAppNo ? "Application No. generated" : "Awaiting Application No.";
+  }
+  if (hasAppNo && hasPccNo) return "Application No. generated & PCC Under Process";
+  if (hasAppNo && !hasPccNo) return "Application No. generated & PCC Pending";
+  if (!hasAppNo && hasPccNo) return "PCC Under Process";
+  return "Awaiting Application No. & PCC";
+}
+
 function serviceLabel(s) {
   if (!s) return "";
   return s.short_name || s.parent_service;
+}
+// Any service whose name mentions PCC (e.g. "PCC" itself, or
+// "LL RIC (with PCC Required)") gets auto-tagged with the "PCC" RTO below,
+// so filtering/searching RTO="PCC" surfaces every PCC-related application
+// in one place — not just ones on a real RTO's docket.
+function isPccRelatedService(service) {
+  const label = `${service?.parent_service || ""} ${service?.short_name || ""}`.toLowerCase();
+  return label.includes("pcc");
+}
+function findPccRto(rtoList) {
+  return (
+    rtoList.find((r) => (r.name || "").trim().toLowerCase() === "pcc") ||
+    rtoList.find((r) => (r.name || "").toLowerCase().includes("pcc")) ||
+    null
+  );
 }
 function dealerLabel(d) {
   if (!d) return "";
@@ -243,17 +331,51 @@ function SortableTh({ column, label, sortKey, sortDir, onSort }) {
   );
 }
 
-export default function Applications({ restricted = false, canEdit = true, canApprove = true, staff } = {}) {
+// Service-answer keys are free text (typed by staff), so "Learner No",
+// "learner no", "Learner No.", " Learner No" etc. can all occur — match
+// loosely instead of requiring an exact key.
+function getLearnerNo(answers) {
+  if (!answers) return "";
+  const entry = Object.entries(answers).find(([k]) =>
+    k.replace(/[^a-z]/gi, "").toLowerCase().includes("learnerno")
+  );
+  return entry ? entry[1] || "" : "";
+}
+
+export default function Applications({ restricted = false, canEdit = true, canApprove = true, staff, onlyDraft = false } = {}) {
   const isAdmin = staff?.roles?.role_name === "Admin";
-  const [tab, setTab] = useState("All");
+  const [tab, setTab] = useState(onlyDraft ? "Draft Submitted" : "All");
   const [chatOnly, setChatOnly] = useState(false);
   const [compactView, setCompactView] = useState(false); // point 9
+  // Bulk-select (checkbox column) so misfiled Draft rows that are actually
+  // already done can be Accepted in one go, instead of opening each one.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkAccepting, setBulkAccepting] = useState(false);
+  const [bulkHolding, setBulkHolding] = useState(false);
+  // Quick filter: Accepted applications still missing PCC No. or Learning
+  // No. — the two fields that drive the auto-Completed flow.
+  const [pendingOnly, setPendingOnly] = useState(false);
+  // Defaults to current-year-only once the data set gets large (13k+ historical
+  // rows made "show everything" the default choke point). "Show All" lets
+  // anyone drop back to the full history on demand. The Draft inbox is the
+  // one exception: it defaults to ALL years, always, with the toggle hidden
+  // below — a draft submitted last year is still an unactioned draft, and
+  // hiding it by default was making this view under-count against the
+  // sidebar's "Draft" badge (which counts every open draft, no year filter).
+  const [showAllYears, setShowAllYears] = useState(() => onlyDraft);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [modalMode, setModalMode] = useState(null); // "customer" | "status"
   const [chatApp, setChatApp] = useState(null); // row whose small floating chat is open (point 10)
   const [detailPopup, setDetailPopup] = useState(null); // row shown in the Draft ID quick-detail popup (point 13)
+  // id of the row whose Draft ID is currently being hand-edited (pencil icon
+  // in the Draft ID cell) — only ever one at a time, and only offered while
+  // status is "Draft Submitted": once an application is Accepted its
+  // draft_code is referenced as the ledger voucher_no (see updateStatus),
+  // so renaming it after that point would silently break the ledger link.
+  const [editingDraftCodeId, setEditingDraftCodeId] = useState(null);
+  const [draftCodeInput, setDraftCodeInput] = useState("");
   const [staffIdentity, setStaffIdentity] = useState(null);
   useEffect(() => {
     (async () => {
@@ -270,18 +392,31 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [agencyList, setAgencyList] = useState([]);
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [backfilling, setBackfilling] = useState(false);
+  const [showUpdateCsv, setShowUpdateCsv] = useState(false);
   const [toast, setToast] = useState(null);
   const [pccCheckRow, setPccCheckRow] = useState(null);
-  const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: true } when awaiting our reply
+  // Draft inbox quick actions: { row, status } — On Hold and Rejected both
+  // pop this remark modal instead of changing status immediately; Accept
+  // does not (see quickAccept below). null = popup closed.
+  const [remarkPrompt, setRemarkPrompt] = useState(null);
+  const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: unreadCount } — omitted/0 when nothing's awaiting our reply
 
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [visibleCols, setVisibleCols] = useState(() =>
-    Object.fromEntries(TOGGLEABLE_COLUMNS.map((c) => [c.key, restricted ? STAFF_VISIBLE_KEYS.includes(c.key) : true]))
+    Object.fromEntries(TOGGLEABLE_COLUMNS.map((c) => [
+      c.key,
+      onlyDraft ? DRAFT_VISIBLE_KEYS.includes(c.key) : (restricted ? STAFF_VISIBLE_KEYS.includes(c.key) : true),
+    ]))
   );
   const toggleCol = (key) => setVisibleCols((v) => ({ ...v, [key]: !v[key] }));
+  // Mobile and Remark are hidden by default and only shown together, via
+  // the button under "+ New Application" — kept separate from the general
+  // column picker per how this table is meant to be used day-to-day.
+  // Profit rides along on the same toggle for admin (not restricted staff,
+  // who never see financial columns — see STAFF_VISIBLE_KEYS).
+  const [showRemarkMobile, setShowRemarkMobile] = useState(false);
   const [filterDealer, setFilterDealer] = useState("");
   const [filterRto, setFilterRto] = useState("");
   const [filterAgency, setFilterAgency] = useState("");
@@ -302,11 +437,47 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const load = useCallback(async () => {
     setLoading(true);
+    // The service embed needs !inner (forcing an inner join) only when we're
+    // filtering on one of its own columns (pcc_required) — using !inner
+    // unconditionally would silently drop any application whose service_id
+    // is somehow null.
+    const servicesEmbed = filterService === "__PCC_REQUIRED__"
+      ? "services!inner(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age)"
+      : "services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age)";
     let query = supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days), staff:assigned_staff_id(full_name)")
+      .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name)`)
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
+    // Dealer / RTO / Agency / Service filters used to run client-side after
+    // fetching the entire table (all ~15k rows every time, joins and all) —
+    // pushed into the query itself so only the rows that actually match
+    // come over the network.
+    if (filterDealer) query = query.eq("dealer_id", filterDealer);
+    if (filterRto) query = query.eq("rto_id", filterRto);
+    if (filterAgency) query = query.eq("agency_id", filterAgency);
+    if (filterService === "__PCC_REQUIRED__") {
+      query = query.eq("services.pcc_required", true);
+    } else if (filterService) {
+      query = query.eq("service_id", filterService);
+    }
+    // Date filtering: an explicit From/To range overrides the current-year
+    // default, exactly as it did client-side before — just evaluated by
+    // Postgres now instead of being fetched in full and thrown away in the
+    // browser. The current-year default mirrors the old logic: prefer
+    // application_date, fall back to submitted_at when application_date is
+    // unset.
+    if (filterDateFrom || filterDateTo) {
+      if (filterDateFrom) query = query.gte("submitted_at", `${filterDateFrom}T00:00:00`);
+      if (filterDateTo) query = query.lte("submitted_at", `${filterDateTo}T23:59:59`);
+    } else if (!showAllYears) {
+      const currentYear = new Date().getFullYear();
+      const yFrom = `${currentYear}-01-01`;
+      const yTo = `${currentYear}-12-31`;
+      query = query.or(
+        `and(application_date.gte.${yFrom},application_date.lte.${yTo}),and(application_date.is.null,submitted_at.gte.${yFrom}T00:00:00,submitted_at.lte.${yTo}T23:59:59)`
+      );
+    }
     const { data, error } = await query;
     if (error) {
       setToast("Couldn't load applications: " + error.message);
@@ -335,23 +506,29 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         .in("thread_id", threadIds)
         .order("created_at", { ascending: false });
       if (messagesError) { setChatStatus({}); return; }
-      // Latest message per thread (messages are already newest-first).
-      const latestByThread = {};
+      // Messages are newest-first, so walking from the top and counting the
+      // unbroken run of non-staff messages approximates "unread since our
+      // last reply" without needing separate read-receipt tracking. This
+      // count is what shows in the badge next to the Draft ID.
+      const messagesByThread = {};
       for (const m of messages || []) {
-        if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
+        (messagesByThread[m.thread_id] ||= []).push(m);
       }
       const statusByApp = {};
       for (const t of threads) {
-        const latest = latestByThread[t.id];
-        if (latest) {
-          statusByApp[t.application_id] = latest.sender_type !== "staff"; // true = awaiting our reply
+        const threadMsgs = messagesByThread[t.id] || [];
+        let count = 0;
+        for (const m of threadMsgs) {
+          if (m.sender_type === "staff") break;
+          count++;
         }
+        if (count > 0) statusByApp[t.application_id] = count;
       }
       setChatStatus(statusByApp);
     } catch {
       setChatStatus({});
     }
-  }, [tab]);
+  }, [tab, filterDealer, filterRto, filterAgency, filterService, filterDateFrom, filterDateTo, showAllYears]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -360,9 +537,9 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setStaffList(s || []);
       const { data: d } = await supabase.from("dealers").select("id, name, code, short_name").order("name");
       setDealerList(d || []);
-      const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, available_limit");
-      setDealerHold(Object.fromEntries((summaries || []).filter((s) => s.available_limit <= 0).map((s) => [s.dealer_id, true])));
-      const { data: sv } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, rto_required, agency_required, slot_booking_required, chat_in_app").order("parent_service");
+      const { data: summaries } = await supabase.from("dealer_ledger_summary").select("dealer_id, credit_limit, running_balance");
+      setDealerHold(Object.fromEntries((summaries || []).filter((s) => (Number(s.credit_limit || 0) + Number(s.running_balance || 0)) <= 0).map((s) => [s.dealer_id, true])));
+      const { data: sv } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, rto_required, agency_required, slot_booking_required, chat_in_app, age_limit_required, min_age").order("parent_service");
       setServiceList(sv || []);
       const { data: rt } = await supabase.from("rtos").select("id, name, code, type").order("name");
       setRtoList(rt || []);
@@ -372,13 +549,47 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   }, []);
 
   const openDetail = async (row, mode = "customer") => {
-    const { data: docs } = await supabase.from("application_documents").select("*").eq("application_id", row.id);
+    // Re-fetch this one application fresh (rather than trusting the row object
+    // from local list state, which can be stale — e.g. right after a staff
+    // assignment — and was causing "assigned staff not showing" on reopen).
+    const { data: freshRow } = await supabase
+      .from("applications")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), fee_staff:fee_entered_by(full_name), appno_staff:application_no_entered_by(full_name), lldl_staff:ll_dl_no_entered_by(full_name), amount_staff:amount_entered_by(full_name)")
+      .eq("id", row.id)
+      .maybeSingle();
+    let docs = (await supabase.from("application_documents").select("*").eq("application_id", row.id)).data || [];
+    // Safety net: a service's required documents can change after an
+    // application was created (e.g. a new "only after approval" doc gets
+    // added to the service later). application_documents is a one-time
+    // snapshot taken at creation, so older applications silently miss any
+    // doc type added afterwards — they don't even show as "Missing", the
+    // row just doesn't exist. Diff against the service's current required
+    // docs and backfill anything absent, rather than only handling the
+    // zero-docs case.
+    const serviceId = row.service_id || freshRow?.service_id;
+    if (serviceId) {
+      const { data: reqDocs } = await supabase
+        .from("service_documents")
+        .select("name, mandatory, post_approval")
+        .eq("service_id", serviceId);
+      const existingNames = new Set(docs.map((d) => d.name));
+      const missing = (reqDocs || []).filter((d) => !existingNames.has(d.name));
+      if (missing.length) {
+        const { error: backfillError } = await supabase.from("application_documents").upsert(
+          missing.map((d) => ({ application_id: row.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" })),
+          { onConflict: "application_id,name", ignoreDuplicates: true }
+        );
+        if (!backfillError) {
+          docs = (await supabase.from("application_documents").select("*").eq("application_id", row.id)).data || [];
+        }
+      }
+    }
     const { data: history } = await supabase
       .from("application_status_history")
       .select("*")
       .eq("application_id", row.id)
       .order("changed_at", { ascending: false });
-    setSelected({ ...row, docs, history });
+    setSelected({ ...row, ...(freshRow || {}), docs, history });
     setModalMode(mode);
   };
 
@@ -388,14 +599,24 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
+  // Staff type the PCC No. in by hand (no auto-sync from the PCC portal).
+  // Typing one in for the first time is treated as "PCC fee received" —
+  // it auto-fills the standard ₹350 PCC Fee if that field is still blank,
+  // so the ledger/processing stage don't sit waiting on a separate fee
+  // entry that's easy to forget.
   const updatePccFields = async (id, fields) => {
-    const { error } = await supabase.from("applications").update(fields).eq("id", id);
+    const row = rows.find((r) => r.id === id);
+    const payload = { ...fields };
+    if (fields.pcc_no && row && !row.pcc_fee) {
+      payload.pcc_fee = 350;
+    }
+    const { error } = await supabase.from("applications").update(payload).eq("id", id);
     if (error) {
       setToast("Failed to update PCC details: " + error.message);
       return;
     }
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...fields } : r)));
-    setToast("PCC details updated");
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
+    setToast(payload.pcc_fee ? "PCC details updated — PCC Fee ₹350 auto-filled" : "PCC details updated");
   };
 
   // Shared "approve" logic: flips an application to Accepted (unless it already
@@ -410,51 +631,71 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // Keep an application_date that was already set (e.g. auto-filled when it
     // moved to Under Review, or hand-edited) rather than clobbering it here.
     const applicationDate = app.application_date || new Date().toISOString().slice(0, 10);
+    // Accepted is now the final status — approval already implies the physical
+    // process is fulfilled, so this is also what starts the 30-day "eligible
+    // for next service" clock (write once, don't clobber an existing value).
+    const updatePayload = { status: "Accepted", remarks, application_date: applicationDate };
+    if (!app.completed_at) updatePayload.completed_at = new Date().toISOString();
 
-    const { error } = await supabase
+    // .neq("status", "Accepted") makes this update itself the atomic race
+    // guard: the `app.status` check above only catches a double-click if
+    // the first click's local state already re-rendered — it can't catch
+    // two near-simultaneous calls (fast double-click, or two staff members
+    // approving the same application). If a concurrent call already flipped
+    // the status, this matches zero rows and returns an empty array instead
+    // of updating again — so at most one caller ever proceeds to the ledger
+    // insert below, however tight the timing.
+    const { data: updatedRows, error } = await supabase
       .from("applications")
-      .update({ status: "Accepted", remarks, application_date: applicationDate })
-      .eq("id", app.id);
+      .update(updatePayload)
+      .eq("id", app.id)
+      .neq("status", "Accepted")
+      .select("id");
     if (error) {
       return { ok: false, message: "Failed: " + error.message };
     }
-
-    const descriptionParts = [
-      app.applicant_name ? `Customer: ${app.applicant_name}` : null,
-      `Service: ${serviceLabel(app.services) || "—"}`,
-      `Date: ${isoToDDMMYYYY(applicationDate)}`,
-      app.application_no ? `App No: ${app.application_no}` : null,
-      app.ll_dl_no ? `LL/DL No: ${app.ll_dl_no}` : null,
-      app.date_of_birth ? `DOB: ${isoToDDMMYYYY(app.date_of_birth)}` : null,
-      app.services?.pcc_required && app.pcc_no ? `PCC No: ${app.pcc_no}` : null,
-    ].filter(Boolean);
-
-    const { error: ledgerError } = await supabase.from("ledger_transactions").insert({
-      dealer_id: app.dealer_id,
-      type: "debit",
-      amount: app.amount || 0,
-      voucher_no: app.draft_code,
-      description: descriptionParts.join(" · "),
-    });
-    if (ledgerError) {
-      return { ok: false, message: "Status updated, but ledger entry failed: " + ledgerError.message };
+    if (!updatedRows || updatedRows.length === 0) {
+      return { ok: false, message: "Already accepted" };
     }
 
+    // Ledger no longer posts here — Accept is a workflow status, not a
+    // billing event. The ledger row now posts when staff explicitly mark
+    // the application Completed (see completeApplication below), so
+    // there's nothing further to do once the status flip itself lands.
     return {
       ok: true,
-      message: `Accepted on ${isoToDDMMYYYY(applicationDate)} — ₹${Number(app.amount || 0).toLocaleString("en-IN")} debited to dealer ledger`,
+      message: `Accepted on ${isoToDDMMYYYY(applicationDate)}`,
+    };
+  };
+
+  // Marks an application Completed and posts its SERVICE row to the
+  // ledger, atomically, via the complete_application() Postgres function —
+  // this is the actual billing event now (Accept, above, no longer is).
+  // Safe to call more than once: the function is a no-op if this
+  // application already has a ledger row.
+  const completeApplication = async (app) => {
+    if (app.status === "Completed") {
+      return { ok: false, message: "Already completed" };
+    }
+    const { error } = await supabase.rpc("complete_application", { p_application_id: app.id });
+    if (error) {
+      return { ok: false, message: "Failed: " + error.message };
+    }
+    return {
+      ok: true,
+      message: `Completed — ₹${Number(app.amount || 0).toLocaleString("en-IN")} posted to dealer ledger`,
     };
   };
 
   // Admin-only: deletes an application record outright. If it had already
   // been approved (debited to the dealer ledger, voucher_no = draft_code),
   // that ledger entry is removed too so the ledger doesn't keep a debit
-  // for a record that no longer exists.
+  // for a record that no longer exists. The Agency Fee agency ledger entry
+  // (voucher_no = draft_code-AGENCYFEE) isn't gated by status, so it's
+  // always cleaned up here too.
   const deleteApplication = async (app) => {
     if (!window.confirm(`Delete application ${app.draft_code} (${app.applicant_name})? This cannot be undone.`)) return;
-    if (app.status === "Accepted" || app.status === "Completed") {
-      await supabase.from("ledger_transactions").delete().eq("dealer_id", app.dealer_id).eq("voucher_no", app.draft_code);
-    }
+    await supabase.from("ledger_entries").delete().eq("source_application_id", app.id);
     await supabase.from("application_documents").delete().eq("application_id", app.id);
     const { error } = await supabase.from("applications").delete().eq("id", app.id);
     if (error) {
@@ -462,51 +703,35 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return;
     }
     setToast("Application deleted");
+    closeDetail();
     load();
   };
 
-  // Admin-only: finds any Accepted/Completed application that doesn't have
-  // a matching ledger_transactions entry (matched by voucher_no ===
-  // draft_code, the same key used everywhere else) and posts it. Safe to
-  // run repeatedly — it only ever fills in what's missing. Mainly for
-  // applications imported before the CSV-import ledger fix, or any other
-  // case where an approved application ended up without its debit.
-  const backfillLedger = async () => {
-    setBackfilling(true);
-    try {
-      const { data: approvedApps, error: appsErr } = await supabase
-        .from("applications")
-        .select("id, dealer_id, draft_code, amount, applicant_name, application_no, status")
-        .in("status", ["Accepted", "Completed"]);
-      if (appsErr) { setToast("Backfill check failed: " + appsErr.message); return; }
-
-      const { data: existing, error: ledgerErr } = await supabase.from("ledger_transactions").select("voucher_no");
-      if (ledgerErr) { setToast("Backfill check failed: " + ledgerErr.message); return; }
-      const existingVouchers = new Set((existing || []).map((e) => e.voucher_no));
-
-      const missing = (approvedApps || []).filter((a) => a.draft_code && !existingVouchers.has(a.draft_code));
-      if (missing.length === 0) {
-        setToast("Nothing to backfill — every Accepted/Completed application already has a ledger entry.");
-        return;
-      }
-      const ledgerRows = missing.map((a) => ({
-        dealer_id: a.dealer_id,
-        type: "debit",
-        amount: a.amount || 0,
-        voucher_no: a.draft_code,
-        description: `Backfilled — ${a.applicant_name || ""}${a.application_no ? ` · App No: ${a.application_no}` : ""}`,
-      }));
-      const { error: insertErr } = await supabase.from("ledger_transactions").insert(ledgerRows);
-      if (insertErr) { setToast("Backfill failed: " + insertErr.message); return; }
-      setToast(`Backfilled ${missing.length} missing ledger entr${missing.length !== 1 ? "ies" : "y"}`);
-    } finally {
-      setBackfilling(false);
-    }
-  };
-
-  const updateStatus = async (newStatus, remarks) => {
+  // `targetApp` defaults to whatever's open in the detail modal (`selected`)
+  // so every existing call site keeps working unchanged. The quick Hold/
+  // Reject buttons on the Draft inbox row (see RemarkPopup below) pass the
+  // row directly instead, since nothing is open in a modal for those.
+  const updateStatus = async (newStatus, remarks, targetApp = selected) => {
     if (newStatus === "Accepted") {
-      const result = await approveApplication(selected, remarks);
+      const result = await approveApplication(targetApp, remarks);
+      setToast(result.message);
+      closeDetail();
+      load();
+      return;
+    }
+    if (newStatus === "Completed") {
+      const result = await completeApplication(targetApp);
+      if (result.ok && remarks !== targetApp.remarks) {
+        // complete_application() already set status/completed_at/application_date —
+        // remarks is the only field it doesn't touch.
+        const { error } = await supabase.from("applications").update({ remarks }).eq("id", targetApp.id);
+        if (error) {
+          setToast("Ledger posted, but remarks failed to save: " + error.message);
+          closeDetail();
+          load();
+          return;
+        }
+      }
       setToast(result.message);
       closeDetail();
       load();
@@ -517,19 +742,21 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // Moving an application to Under Review marks the day it was formally
     // taken up — auto-fill it the first time, but never overwrite a date
     // that's already set (auto-filled earlier, or hand-edited in the table).
-    if (newStatus === "Under Review" && !selected.application_date) {
+    if (newStatus === "Under Review" && !targetApp.application_date) {
       updatePayload.application_date = new Date().toISOString().slice(0, 10);
     }
-    // Completed is when the 30-day "eligible for next service" clock starts
-    // — write it once, don't clobber it if somehow re-marked.
-    if (newStatus === "Completed" && !selected.completed_at) {
-      updatePayload.completed_at = new Date().toISOString();
+    // "Accept" (Draft Submitted -> Under Review) has no separate assignment
+    // step anymore — staff just accept. Record who accepted separately from
+    // assigned_staff_id (which stays free for actual field/dealer assignment).
+    if (newStatus === "Under Review" && targetApp.status === "Draft Submitted" && staff?.id) {
+      updatePayload.accepted_by = staff.id;
+      updatePayload.accepted_at = new Date().toISOString();
     }
 
     const { error } = await supabase
       .from("applications")
       .update(updatePayload)
-      .eq("id", selected.id);
+      .eq("id", targetApp.id);
     if (error) {
       setToast("Failed: " + error.message);
       return;
@@ -554,14 +781,187 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
+  // Fields where we additionally stamp who entered the value (and when),
+  // for the audit "Entry Log" — Fee, Application No, and LL/DL No.
+  const ENTRY_LOG_FIELDS = {
+    rto_fee: "fee",
+    application_no: "application_no",
+    ll_dl_no: "ll_dl_no",
+  };
+
+  // Draft IDs are unique per-dealer (not globally — see the CSV-import
+  // matcher above), so a manual rename has to check for a collision within
+  // that same dealer before saving, the same way the CSV import path does.
+  const updateDraftCode = async (id, rawValue, row) => {
+    const value = String(rawValue || "").trim();
+    if (!value) { setToast("Draft ID can't be empty"); return; }
+    if (value === row.draft_code) { setEditingDraftCodeId(null); return; }
+    const { data: clash, error: clashError } = await supabase
+      .from("applications")
+      .select("id")
+      .eq("dealer_id", row.dealer_id)
+      .eq("draft_code", value)
+      .neq("id", id)
+      .maybeSingle();
+    if (clashError) { setToast("Failed to check Draft ID: " + clashError.message); return; }
+    if (clash) { setToast(`${value} is already used by another application for this dealer`); return; }
+    const { error } = await supabase.from("applications").update({ draft_code: value }).eq("id", id);
+    if (error) { setToast("Failed to update Draft ID: " + error.message); return; }
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, draft_code: value } : r)));
+    setEditingDraftCodeId(null);
+    setToast(`Draft ID updated to ${value}`);
+  };
+
   const updateRowField = async (id, field, value) => {
-    const { error } = await supabase.from("applications").update({ [field]: value }).eq("id", id);
+    const payload = { [field]: value };
+    const logKey = ENTRY_LOG_FIELDS[field];
+    if (logKey && value !== "" && value !== null && staff?.id) {
+      payload[`${logKey}_entered_by`] = staff.id;
+      payload[`${logKey}_entered_at`] = new Date().toISOString();
+    }
+    const { error } = await supabase.from("applications").update(payload).eq("id", id);
     if (error) {
       setToast("Failed to update: " + error.message);
       return;
     }
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
+
+    // Learning No. (ll_dl_no) is the last manual data-entry step — as soon
+    // as it's typed in on an Accepted application, auto-mark the
+    // application Completed (posts its ledger row via complete_application,
+    // same as the old manual "Completed" action).
+    if (field === "ll_dl_no" && value) {
+      const row = rows.find((r) => r.id === id);
+      if (row && row.status === "Accepted") {
+        const result = await completeApplication({ ...row, ...payload });
+        if (result.ok) {
+          setRows((rs) => rs.map((r) => (r.id === id ? { ...r, status: "Completed" } : r)));
+          setToast(result.message);
+        } else {
+          setToast("Learning No. saved, but auto-complete failed: " + result.message);
+        }
+      }
+    }
   };
+
+  // Amount is the ledger trigger now, independent of status — as soon as
+  // staff type an Amount, it should post (or update) a SERVICE row in
+  // ledger_entries, whatever the application's current status is (Draft,
+  // Under Review, Accepted, whatever). Previously this only kept an
+  // *existing* ledger row in sync (sync_ledger_entry_amounts is a no-op
+  // until the app is Completed), so an Approved-but-not-Completed
+  // application never showed in the ledger at all. We now look the row
+  // up ourselves and insert it the first time, update it on every edit
+  // after that — same shape as the Completed-import path above, just not
+  // gated on status.
+  const updateApplicationAmount = async (id, value) => {
+    const newAmount = value === "" || value === null ? 0 : value;
+    const payload = { amount: newAmount };
+    if (staff?.id) {
+      payload.amount_entered_by = staff.id;
+      payload.amount_entered_at = new Date().toISOString();
+    }
+    const { error } = await supabase.from("applications").update(payload).eq("id", id);
+    if (error) {
+      setToast("Failed to update amount: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
+
+    const row = rows.find((r) => r.id === id);
+
+    // Typing an Amount is also treated as approval — staff shouldn't have
+    // to separately open the status modal and click Accept once a real
+    // amount has been entered. No-ops for rows that are already
+    // Accepted/Completed/Rejected.
+    let statusPatch = {};
+    if (row && !["Accepted", "Completed", "Rejected"].includes(row.status)) {
+      const approveResult = await approveApplication({ ...row, ...payload }, row.remarks);
+      if (approveResult.ok) {
+        statusPatch = { status: "Accepted" };
+        setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...statusPatch } : r)));
+      }
+    }
+
+    if (!row?.dealer_id) {
+      // No dealer on the application yet — nothing to post against, so
+      // just leave it as an application-only amount for now.
+      setToast(statusPatch.status ? "Amount saved, application Accepted (no dealer selected yet, so nothing posted to ledger)" : "Amount saved (no dealer selected yet, so nothing posted to ledger)");
+      return;
+    }
+    // Posting straight into ledger_entries from the client is blocked by
+    // its row-level security policy (same reason sync_ledger_entry_amounts
+    // and complete_application exist as RPCs rather than plain table
+    // writes) — so this goes through upsert_ledger_entry_for_amount(),
+    // a SECURITY DEFINER function that does the insert/update on our
+    // behalf, keyed off Amount instead of Completed status.
+    const { error: ledgerErr } = await supabase.rpc("upsert_ledger_entry_for_amount", {
+      p_application_id: id,
+    });
+    if (ledgerErr) {
+      console.error("ledger post failed", ledgerErr);
+      setToast("Amount saved, but ledger update failed: " + ledgerErr.message);
+      return;
+    }
+    setToast(`Amount saved${statusPatch.status ? " & Accepted" : ""} — ₹${newAmount.toLocaleString("en-IN")} posted to ${row.dealers?.name || "dealer"}'s ledger`);
+  };
+
+  // Agency Fee is a column on the SAME ledger_entries row as the rest of
+  // the application (not a separate ledger row anymore) — so keeping it
+  // in sync after Completion is just another call to
+  // sync_ledger_entry_amounts, same as an Amount edit.
+
+  // Agency Fee no longer needs an Agency selected up front to save — it's
+  // just a column on the application/ledger row now, not a separate
+  // ledger entry that has to post somewhere.
+  const updateAgencyFee = async (row, rawValue) => {
+    const value = rawValue === "" ? null : parseFloat(rawValue);
+    const { error } = await supabase.from("applications").update({ agency_fee: value }).eq("id", row.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, agency_fee: value } : r)));
+    const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: row.id });
+    if (syncErr) setToast("Agency Fee saved, but ledger sync failed: " + syncErr.message);
+  };
+
+  // Changing the Agency after Completion moves the agency ledger's running
+  // balance along with it (same sync call), since agency_id lives on the
+  // same ledger row as the Agency Fee.
+  const updateAgencyId = async (row, value) => {
+    const newAgencyId = value || null;
+    const { error } = await supabase.from("applications").update({ agency_id: newAgencyId }).eq("id", row.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, agency_id: newAgencyId } : r)));
+    const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: row.id });
+    if (syncErr) setToast("Agency updated, but ledger sync failed: " + syncErr.message);
+  };
+
+  // PCC Fee is the trigger for auto-stamping today's date into Slot — used
+  // here purely as a "fee received on" marker, not an actual slot booking.
+  // Only fills it in when Slot is currently blank, so it never overwrites a
+  // real slot time someone already typed in for a service that needs one.
+  const updatePccFee = async (row, rawValue) => {
+    const feeValue = rawValue === "" ? null : parseFloat(rawValue);
+    const fields = { pcc_fee: feeValue };
+    if (feeValue !== null && !row.slot_time) {
+      const today = new Date();
+      const dd = String(today.getDate()).padStart(2, "0");
+      const mm = String(today.getMonth() + 1).padStart(2, "0");
+      fields.slot_time = `${dd}-${mm}-${today.getFullYear()}`;
+    }
+    const { error } = await supabase.from("applications").update(fields).eq("id", row.id);
+    if (error) {
+      setToast("Failed to update: " + error.message);
+      return;
+    }
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, ...fields } : r)));
+  };
+
 
   // Changing dealer/service on a Draft mid-flight (point 5/6) needs to also
   // refresh the row's joined `dealers`/`services` objects locally — other
@@ -569,14 +969,20 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // those joined objects, not the raw *_id, so without this they'd show
   // stale requirements until the next full page reload.
   const updateDealerOrService = async (id, field, value, list) => {
-    const { error } = await supabase.from("applications").update({ [field]: value }).eq("id", id);
+    const picked = list.find((item) => item.id === value);
+    // Changing the service to a PCC-related one (e.g. "PCC" or "LL RIC
+    // (with PCC Required)") auto-tags RTO as "PCC" too — see
+    // isPccRelatedService/findPccRto above.
+    const extra = field === "service_id" && isPccRelatedService(picked)
+      ? { rto_id: findPccRto(rtoList)?.id || null }
+      : {};
+    const { error } = await supabase.from("applications").update({ [field]: value, ...extra }).eq("id", id);
     if (error) {
       setToast("Failed to update: " + error.message);
       return;
     }
-    const picked = list.find((item) => item.id === value);
     const joinedKey = field === "dealer_id" ? "dealers" : "services";
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value, [joinedKey]: picked || r[joinedKey] } : r)));
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value, ...extra, [joinedKey]: picked || r[joinedKey] } : r)));
   };
 
   const openSarathi = async (row) => {
@@ -658,6 +1064,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setToast("Failed: " + codeError.message);
       return;
     }
+    const selectedService = serviceList.find((s) => s.id === form.service_id);
+    const autoRtoId = isPccRelatedService(selectedService) ? findPccRto(rtoList)?.id || null : null;
     const { data: newApp, error } = await supabase.from("applications").insert({
       draft_code: draftCode,
       dealer_id: form.dealer_id,
@@ -667,8 +1075,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       date_of_birth: form.date_of_birth || null,
       mobile: form.mobile || null,
       address: form.address || null,
+      police_station: form.police_station || null,
+      stay_since: form.stay_since || null,
       service_answers: form.service_answers && Object.keys(form.service_answers).length ? form.service_answers : null,
       status: form.status,
+      rto_id: autoRtoId,
     }).select().single();
     if (error) {
       setToast("Failed to create: " + error.message);
@@ -702,14 +1113,46 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // hides "Book Appointment" once it's been used, so it can't be clicked twice.
   const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
 
+  // Flags a row's Applicant Name as a repeat when another application already
+  // in the table has the exact same name + DOB and was submitted earlier —
+  // helps staff spot the same person applying again (or a re-entered
+  // duplicate) at a glance. Only the later record is flagged, not the
+  // original one it matches.
+  const duplicateApplicantIds = useMemo(() => {
+    const byKey = new Map(); // "name|dob" -> [{ id, submitted_at }]
+    for (const r of rows) {
+      const name = (r.applicant_name || "").trim().toLowerCase();
+      if (!name || !r.date_of_birth) continue;
+      const key = `${name}|${r.date_of_birth}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push({ id: r.id, submitted_at: r.submitted_at || "" });
+    }
+    const flagged = new Set();
+    for (const entries of byKey.values()) {
+      if (entries.length < 2) continue;
+      const sorted = [...entries].sort((a, b) => a.submitted_at.localeCompare(b.submitted_at) || a.id.localeCompare(b.id));
+      // Everything after the first (earliest) submission is a repeat.
+      sorted.slice(1).forEach((e) => flagged.add(e.id));
+    }
+    return flagged;
+  }, [rows]);
+
+  const currentYear = new Date().getFullYear();
+  // Dealer/RTO/Agency/Service and date-range filtering now happen in the
+  // query itself (see load()) so a 15k-row table isn't fetched in full on
+  // every load — this only handles chatOnly and free-text search, which
+  // still run over whatever the query already narrowed down.
+  // Accepted, but still missing the data that would carry it to Completed.
+  const isPendingData = (r) => {
+    if (r.status !== "Accepted") return false;
+    if (!r.ll_dl_no) return true;
+    if (r.services?.pcc_required && !r.pcc_no) return true;
+    return false;
+  };
+
   const filteredRows = rows.filter((r) => {
     if (chatOnly && !chatStatus[r.id]) return false;
-    if (filterDealer && r.dealer_id !== filterDealer) return false;
-    if (filterRto && r.rto_id !== filterRto) return false;
-    if (filterAgency && r.agency_id !== filterAgency) return false;
-    if (filterService && r.service_id !== filterService) return false;
-    if (filterDateFrom && (!r.submitted_at || r.submitted_at.slice(0, 10) < filterDateFrom)) return false;
-    if (filterDateTo && (!r.submitted_at || r.submitted_at.slice(0, 10) > filterDateTo)) return false;
+    if (pendingOnly && !isPendingData(r)) return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       const haystack = [
@@ -740,7 +1183,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     application: (r) => r.application_no || "",
     lldl: (r) => r.ll_dl_no || "",
     pccno: (r) => r.pcc_no || "",
-    rto: (r) => rtoList.find((x) => x.id === r.rto_id)?.name || "",
+    rto: (r) => (r.services?.pcc_required ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name || ""),
     agency: (r) => agencyList.find((x) => x.id === r.agency_id)?.name || "",
     slot: (r) => r.slot_time || "",
     mobile: (r) => r.mobile || "",
@@ -761,15 +1204,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredRows, sortKey, sortDir, rtoList, agencyList]);
 
-  // Pagination — 10 rows per page (point 8). Export CSV still uses the full
+  // Pagination — 14 rows per page by default. Export CSV still uses the full
   // sortedRows (unpaginated), only the on-screen table is sliced.
-  const [pageSize, setPageSize] = useState(15);
+  const [pageSize, setPageSize] = useState(14);
   const PAGE_SIZE = pageSize;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
   useEffect(() => {
     setPage(1);
-  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly]);
+  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly, showAllYears, pendingOnly]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -781,7 +1224,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const exportCSV = () => {
     const headers = restricted
       ? ["Draft ID", "Service", "Applicant", "DOB", "Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
-      : ["Draft ID", "Amount", "Fee", "PCC Fee", "Agency Fee", "Profit", "Dealer", "Service",
+      : ["Draft ID", "Amount", "Fee", "PCC Fee", "Agency Fee", "Dealer", "Service",
       "Applicant", "DOB", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency",
       "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"];
     const escapeCsv = (val) => {
@@ -790,17 +1233,18 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     };
     const lines = [headers.join(",")];
     sortedRows.forEach((r) => {
+      const rtoCell = r.services?.pcc_required ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name;
       const fullRow = [
-        r.draft_code, r.amount, r.rto_fee, r.pcc_fee, r.agency_fee, profitOf(r),
+        r.draft_code, r.amount, r.rto_fee, r.pcc_fee, r.agency_fee,
         dealerLabel(r.dealers), serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
         r.application_no, r.ll_dl_no, r.pcc_no, r.pcc_status,
-        rtoList.find((x) => x.id === r.rto_id)?.name, agencyList.find((x) => x.id === r.agency_id)?.name,
+        rtoCell, agencyList.find((x) => x.id === r.agency_id)?.name,
         r.slot_time, r.mobile, r.remarks, r.application_date ? isoToDDMMYYYY(r.application_date) : "", r.status, r.submitted_at,
       ];
       const restrictedRow = [
         r.draft_code, serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
         r.rto_fee, r.pcc_fee, r.application_no, r.ll_dl_no, r.pcc_no, r.pcc_status,
-        rtoList.find((x) => x.id === r.rto_id)?.name, agencyList.find((x) => x.id === r.agency_id)?.name,
+        rtoCell, agencyList.find((x) => x.id === r.agency_id)?.name,
         r.slot_time, r.mobile, r.remarks, r.application_date ? isoToDDMMYYYY(r.application_date) : "", r.status, r.submitted_at,
       ];
       lines.push((restricted ? restrictedRow : fullRow).map(escapeCsv).join(","));
@@ -819,85 +1263,196 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const clearFilters = () => { setFilterDealer(""); setFilterRto(""); setFilterAgency(""); setFilterService(""); setFilterDateFrom(""); setFilterDateTo(""); };
   const activeFilterCount = [filterDealer, filterRto, filterAgency, filterService, filterDateFrom, filterDateTo].filter(Boolean).length;
-  // Count of applications currently awaiting a staff reply in chat — same
-  // "awaiting reply" definition as the Chats page/sidebar badge — shown as
-  // a chat-count badge next to the page title.
-  const openChatCount = Object.values(chatStatus).filter(Boolean).length;
+
+  const toggleSelected = (id) => {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const allPageSelected = pagedRows.length > 0 && pagedRows.every((r) => selectedIds.has(r.id));
+  const toggleSelectAllOnPage = () => {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (allPageSelected) pagedRows.forEach((r) => next.delete(r.id));
+      else pagedRows.forEach((r) => next.add(r.id));
+      return next;
+    });
+  };
+
+  // Quick Accept from the Draft inbox row — same approveApplication used by
+  // bulk-accept and the status modal, just for a single row with no popup
+  // (Accept never needs a remark, only Hold/Reject do — see RemarkPopup).
+  const quickAccept = async (row) => {
+    const result = await approveApplication(row);
+    setToast(result.message);
+    load();
+  };
+
+  // Bulk-Accept — for rows sitting in Draft/On Hold by mistake (already
+  // done, just never got clicked through). Skips anything already
+  // Accepted/Completed/Rejected rather than erroring on it.
+  const bulkAcceptSelected = async () => {
+    const targets = rows.filter((r) => selectedIds.has(r.id) && !["Accepted", "Completed", "Rejected"].includes(r.status));
+    if (!targets.length) {
+      setToast("Selected rows already Accepted/Completed/Rejected hain — kuch karne ko nahi bacha");
+      return;
+    }
+    setBulkAccepting(true);
+    let okCount = 0;
+    for (const r of targets) {
+      const result = await approveApplication(r);
+      if (result.ok) okCount++;
+    }
+    setBulkAccepting(false);
+    setSelectedIds(new Set());
+    setToast(`${okCount} of ${targets.length} application(s) Accepted`);
+    load();
+  };
+
+  // Bulk-Hold — mirrors bulkAcceptSelected, just moves status to "On Hold"
+  // via the same updateStatus() the detail modal's Put On Hold button uses.
+  // Skips anything already Accepted/Completed/Rejected/On Hold.
+  const bulkHoldSelected = async () => {
+    const targets = rows.filter((r) => selectedIds.has(r.id) && !["Accepted", "Completed", "Rejected", "On Hold"].includes(r.status));
+    if (!targets.length) {
+      setToast("Selected rows already On Hold/Accepted/Completed/Rejected hain — kuch karne ko nahi bacha");
+      return;
+    }
+    setBulkHolding(true);
+    let okCount = 0;
+    for (const r of targets) {
+      const { error } = await supabase.from("applications").update({ status: "On Hold" }).eq("id", r.id);
+      if (!error) okCount++;
+    }
+    setBulkHolding(false);
+    setSelectedIds(new Set());
+    setToast(`${okCount} of ${targets.length} application(s) put On Hold`);
+    load();
+  };
 
   return (
     <CanEditContext.Provider value={canEdit}>
     <div>
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Applications</h2>
-            {openChatCount > 0 && (
-              <span
-                title={`${openChatCount} chat${openChatCount !== 1 ? "s" : ""} awaiting your reply`}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-rose-500 text-white"
+      <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
+        <div className="flex gap-2 flex-wrap items-center">
+          {onlyDraft ? (
+            // Locked to Draft Submitted only — no tab switcher, so there's no
+            // way to accidentally wander into other statuses from this page.
+            <span className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-slate-900 text-white border-slate-900">
+              Draft Submitted
+              {rows.length > 0 && (
+                <span className="ml-1.5 inline-flex min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold items-center justify-center align-middle">
+                  {rows.length}
+                </span>
+              )}
+            </span>
+          ) : STATUS_TABS.map((t) => {
+            const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
+            return (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                  tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+                }`}
               >
-                <MessageCircle size={12} />
-                {openChatCount}
+                {STATUS_DISPLAY_LABELS[t] || t}
+                {t === "Draft Submitted" && draftCount > 0 && (
+                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                    {draftCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <span className="w-px h-5 bg-slate-200 mx-1" />
+          <button
+            onClick={() => setChatOnly((c) => !c)}
+            title="Show only applications with chat enabled"
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+              chatOnly ? "bg-blue-600 text-white border-blue-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+            }`}
+          >
+            💬 Chats
+            {Object.values(chatStatus).some(Boolean) && (
+              <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                {Object.values(chatStatus).filter(Boolean).length}
               </span>
             )}
-          </div>
-          <p className="text-sm text-slate-400 dark:text-slate-500">
-            {filteredRows.length} record{filteredRows.length !== 1 ? "s" : ""}
-            {filteredRows.length !== rows.length && ` (of ${rows.length})`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
-          {canEdit && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
-          {isAdmin && <GhostButton onClick={backfillLedger} disabled={backfilling}>{backfilling ? "Checking…" : "🧾 Backfill Ledger"}</GhostButton>}
-          {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
-        </div>
-      </div>
-
-      <div className="flex gap-2 mb-4 flex-wrap items-center">
-        {STATUS_TABS.map((t) => {
-          const draftCount = t === "Draft Submitted" ? rows.filter((r) => r.status === "Draft Submitted").length : 0;
-          return (
+          </button>
+          {!restricted && (
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
-                tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              onClick={() => setCompactView((c) => !c)}
+              title="Toggle a denser, grouped-column table layout"
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                compactView ? "bg-violet-600 text-white border-violet-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
               }`}
             >
-              {STATUS_DISPLAY_LABELS[t] || t}
-              {t === "Draft Submitted" && draftCount > 0 && (
+              ▦ Compact View
+            </button>
+          )}
+          {!restricted && (
+            <button
+              onClick={() => setPendingOnly((v) => !v)}
+              title="Accepted applications still missing PCC No. or Learning No."
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                pendingOnly ? "bg-amber-500 text-white border-amber-500" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              ⚠ PCC / Learning No. Pending
+              {!pendingOnly && rows.filter(isPendingData).length > 0 && (
                 <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                  {draftCount}
+                  {rows.filter(isPendingData).length}
                 </span>
               )}
             </button>
-          );
-        })}
-        <span className="w-px h-5 bg-slate-200 mx-1" />
-        <button
-          onClick={() => setChatOnly((c) => !c)}
-          title="Show only applications with chat enabled"
-          className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
-            chatOnly ? "bg-blue-600 text-white border-blue-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-          }`}
-        >
-          💬 Chats
-          {Object.values(chatStatus).some(Boolean) && (
-            <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-              {Object.values(chatStatus).filter(Boolean).length}
-            </span>
           )}
-        </button>
-        <button
-          onClick={() => setCompactView((c) => !c)}
-          title="Toggle a denser, grouped-column table layout"
-          className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-            compactView ? "bg-violet-600 text-white border-violet-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-          }`}
-        >
-          ▦ Compact View
-        </button>
+          {!restricted && selectedIds.size > 0 && (
+            <button
+              onClick={bulkAcceptSelected}
+              disabled={bulkAccepting}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-emerald-600 text-white border-emerald-600 disabled:opacity-50"
+            >
+              {bulkAccepting ? "Accepting…" : `✓ Accept Selected (${selectedIds.size})`}
+            </button>
+          )}
+          {!restricted && selectedIds.size > 0 && (
+            <button
+              onClick={bulkHoldSelected}
+              disabled={bulkHolding}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-amber-500 text-white border-amber-500 disabled:opacity-50"
+            >
+              {bulkHolding ? "Putting On Hold…" : `⏸ Put On Hold (${selectedIds.size})`}
+            </button>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            {!onlyDraft && (
+              <button
+                onClick={() => setShowAllYears((v) => !v)}
+                title={showAllYears ? "Currently showing every year — click to go back to this year only" : `Currently showing ${currentYear} only — click to see all years`}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                  showAllYears ? "bg-amber-500 text-white border-amber-500" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+                }`}
+              >
+                {showAllYears ? "📅 Showing All Years" : `📅 ${currentYear} Only`}
+              </button>
+            )}
+            <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
+            {canEdit && !restricted && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
+            {canEdit && !restricted && <GhostButton onClick={() => setShowUpdateCsv(true)}>✎ Update via CSV</GhostButton>}
+            {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
+          </div>
+          <button
+            onClick={() => setShowRemarkMobile((s) => !s)}
+            className="text-xs font-semibold text-slate-500 dark:text-slate-400 hover:text-blue-600"
+          >
+            {showRemarkMobile ? "Hide" : "Show"} Remark &amp; Mobile{!restricted && " & Profit"}
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -914,7 +1469,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         <GhostButton onClick={() => setShowFilters((s) => !s)}>
           Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
         </GhostButton>
-        {!restricted && (
+        {!restricted && !onlyDraft && (
           <div className="relative">
             <GhostButton onClick={() => setShowColumnPicker((s) => !s)}>Columns</GhostButton>
             {showColumnPicker && (
@@ -961,6 +1516,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           )}
           <Select value={filterService} onChange={(e) => setFilterService(e.target.value)}>
             <option value="">All Services</option>
+            <option value="__PCC_REQUIRED__">🔎 PCC Required (any service)</option>
             {serviceList.map((s) => <option key={s.id} value={s.id}>{serviceLabel(s)}</option>)}
           </Select>
           <Select value={filterRto} onChange={(e) => setFilterRto(e.target.value)}>
@@ -998,8 +1554,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
             <tr>
+              {!restricted && (
+                <th className="px-3 py-2 w-8">
+                  <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllOnPage} title="Select all on this page" />
+                </th>
+              )}
               <SortableTh column="draftId" label="Draft ID" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              {visibleCols.applicationDate && <SortableTh column="applicationDate" label="Application Date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {visibleCols.applicationDate && <SortableTh column="applicationDate" label="Date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.amount && <SortableTh column="amount" label="Amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.dealer && <SortableTh column="dealer" label="Dealer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.service && <SortableTh column="service" label="Service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
@@ -1008,32 +1569,78 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {visibleCols.rtoFee && <SortableTh column="rtoFee" label="Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.pccFee && <SortableTh column="pccFee" label="PCC Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.agencyFee && <SortableTh column="agencyFee" label="Agency Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.profit && <SortableTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {showRemarkMobile && !restricted && <SortableTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.application && <SortableTh column="application" label="Application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.lldl && <SortableTh column="lldl" label="LL/DL No." sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.pccno && <SortableTh column="pccno" label="PCC No" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.rto && <SortableTh column="rto" label="RTO" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.agency && <SortableTh column="agency" label="Agency" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.slot && <SortableTh column="slot" label="Slot" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.mobile && <SortableTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.remark && <SortableTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {showRemarkMobile && <SortableTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {showRemarkMobile && <SortableTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {onlyDraft && <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Action</th>}
               <SortableTh column="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Chat</th>
               <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Appointment</th>
-              {isAdmin && <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Delete</th>}
             </tr>
           </thead>
           <tbody>
             {pagedRows.map((r) => (
               <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
+                {!restricted && (
+                  <td className="px-3 py-2">
+                    <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelected(r.id)} />
+                  </td>
+                )}
                 <td className="px-3 py-2 font-medium whitespace-nowrap">
-                  <button
-                    onClick={() => setDetailPopup(r)}
-                    className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
-                    title="View full customer details and service charges"
-                  >
-                    {r.draft_code}
-                  </button>
+                  {editingDraftCodeId === r.id ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        autoFocus
+                        value={draftCodeInput}
+                        onChange={(e) => setDraftCodeInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") updateDraftCode(r.id, draftCodeInput, r);
+                          if (e.key === "Escape") setEditingDraftCodeId(null);
+                        }}
+                        onBlur={() => updateDraftCode(r.id, draftCodeInput, r)}
+                        className="w-20 rounded border px-1.5 py-1 text-xs border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                    </div>
+                  ) : (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        onClick={() =>
+                          r.services?.chat_in_app
+                            ? setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })
+                            : setDetailPopup(r)
+                        }
+                        className={`inline-flex items-center gap-1.5 hover:underline font-medium ${
+                          chatStatus[r.id] ? "text-rose-600 dark:text-rose-400" : "text-blue-600 dark:text-blue-400"
+                        }`}
+                        title={
+                          r.services?.chat_in_app
+                            ? chatStatus[r.id] ? "Dealer sent a message — click to reply" : "Open chat"
+                            : "View full customer details and service charges"
+                        }
+                      >
+                        {r.draft_code}
+                        {chatStatus[r.id] > 0 && (
+                          <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                            {chatStatus[r.id]}
+                          </span>
+                        )}
+                      </button>
+                      {r.status === "Draft Submitted" && (
+                        <button
+                          onClick={() => { setEditingDraftCodeId(r.id); setDraftCodeInput(r.draft_code || ""); }}
+                          title="Edit Draft ID"
+                          className="text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </td>
                 {visibleCols.applicationDate && (
                   <td className="px-3 py-2">
@@ -1047,11 +1654,14 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.amount && (
                   <td className="px-3 py-2">
-                    <EditableCell type="number" width="w-20" value={r.amount} onSave={(v) => updateRowField(r.id, "amount", v === "" ? null : parseFloat(v))} />
+                    <EditableCell type="number" width="w-14" noSpinner value={r.amount} onSave={(v) => updateApplicationAmount(r.id, v === "" ? null : parseFloat(v))} />
                   </td>
                 )}
                 {visibleCols.dealer && (
-                  <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                  <td
+                    className={`px-3 py-2 whitespace-nowrap ${dealerHold[r.dealer_id] ? "text-rose-600 font-bold" : "text-slate-600 dark:text-slate-300"}`}
+                    title={dealerHold[r.dealer_id] ? "This dealer is out of usable credit" : undefined}
+                  >
                     {r.status === "Draft Submitted" ? (
                       <EditableSelect
                         width="w-36"
@@ -1062,14 +1672,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       />
                     ) : (
                       dealerLabel(r.dealers)
-                    )}
-                    {dealerHold[r.dealer_id] && (
-                      <span
-                        title="This dealer is out of usable credit"
-                        className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-600 border border-rose-200 align-middle"
-                      >
-                        HOLD
-                      </span>
                     )}
                   </td>
                 )}
@@ -1090,17 +1692,26 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.applicant && (
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <button onClick={() => openDetail(r, "customer")} className="text-blue-600 font-semibold hover:underline text-left">
+                    <button
+                      onClick={() => openDetail(r, isAdmin ? "admin" : "customer")}
+                      title={duplicateApplicantIds.has(r.id) ? "Same name & DOB as an earlier application" : undefined}
+                      className={`font-semibold hover:underline text-left ${
+                        duplicateApplicantIds.has(r.id)
+                          ? "text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/40 px-1.5 py-0.5 rounded"
+                          : "text-blue-600"
+                      }`}
+                    >
                       {r.applicant_name}
                     </button>
                   </td>
                 )}
-                {visibleCols.dob && <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">{isoToDDMMYYYY(r.date_of_birth)}</td>}
+                {visibleCols.dob && <td className={`px-3 py-2 whitespace-nowrap ${ageHighlightClass(r.date_of_birth) || "text-slate-500 dark:text-slate-500"}`}>{isoToDDMMYYYY(r.date_of_birth)}</td>}
                 {visibleCols.rtoFee && (
                   <td className="px-3 py-2">
                     <EditableCell
                       type="number"
-                      width="w-20"
+                      width="w-14"
+                      noSpinner
                       value={r.rto_fee}
                       onSave={(v) => updateRowField(r.id, "rto_fee", v === "" ? null : parseFloat(v))}
                     />
@@ -1113,7 +1724,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-20"
                       value={r.pcc_fee}
                       disabled={!r.services?.pcc_required}
-                      onSave={(v) => updateRowField(r.id, "pcc_fee", v === "" ? null : parseFloat(v))}
+                      onSave={(v) => updatePccFee(r, v)}
                     />
                   </td>
                 )}
@@ -1124,11 +1735,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-20"
                       value={r.agency_fee}
                       disabled={!r.services?.agency_required}
-                      onSave={(v) => updateRowField(r.id, "agency_fee", v === "" ? null : parseFloat(v))}
+                      onSave={(v) => updateAgencyFee(r, v)}
                     />
                   </td>
                 )}
-                {visibleCols.profit && (
+                {showRemarkMobile && !restricted && (
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className={`font-semibold ${profitOf(r) < 0 ? "text-rose-600" : "text-emerald-600"}`}>
                       ₹{profitOf(r).toLocaleString("en-IN")}
@@ -1138,20 +1749,20 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 {visibleCols.application && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <EditableCell width="w-24" value={r.application_no} onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
+                      <EditableCell width="w-24" value={r.application_no} readOnly={r.status === "Completed"} readOnlyTitle="Application No. is locked after completion" onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
                       <button
                         onClick={() => openSarathi(r)}
                         title="Open on Sarathi Parivahan and copy DOB"
-                        className="text-blue-600 text-xs font-semibold underline shrink-0"
+                        className="text-blue-600 shrink-0"
                       >
-                        Link
+                        <LinkIcon size={14} />
                       </button>
                     </div>
                   </td>
                 )}
                 {visibleCols.lldl && (
                   <td className="px-3 py-2">
-                    <EditableCell width="w-24" value={r.ll_dl_no} onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
+                    <EditableCell width="w-24" value={r.ll_dl_no} readOnly={r.status === "Completed"} readOnlyTitle="LL/DL No. is locked after completion" onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
                   </td>
                 )}
                 {visibleCols.pccno && (
@@ -1164,6 +1775,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                           onOpenPortal={() => openPccPortal(r)}
                           onSave={(fields) => updatePccFields(r.id, fields)}
                         />
+                        <PCCStageDots pccStage={r.pcc_stage} pccCertificatePath={r.pcc_certificate_path} />
                         {r.pcc_no && (
                           <button
                             type="button"
@@ -1182,14 +1794,26 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.rto && (
                   <td className="px-3 py-2">
-                    <EditableSelect
-                      width="w-32"
-                      value={r.rto_id}
-                      options={rtoList}
-                      placeholder="Select RTO"
-                      disabled={!r.services?.rto_required}
-                      onSave={(v) => updateRowField(r.id, "rto_id", v || null)}
-                    />
+                    {r.services?.pcc_required ? (
+                      // PCC (and anything bundling it, like LL RIC) never
+                      // needs an actual RTO office — showing "PCC" here
+                      // instead of leaving it blank makes it a quick visual
+                      // marker: sort/scan the RTO column to see PCC rows
+                      // grouped together, separate from blank = no RTO
+                      // assigned yet on a service that actually needs one.
+                      <span className="inline-block px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs font-medium">
+                        PCC
+                      </span>
+                    ) : (
+                      <EditableSelect
+                        width="w-32"
+                        value={r.rto_id}
+                        options={rtoList}
+                        placeholder="Select RTO"
+                        disabled={!r.services?.rto_required}
+                        onSave={(v) => updateRowField(r.id, "rto_id", v || null)}
+                      />
+                    )}
                   </td>
                 )}
                 {visibleCols.agency && (
@@ -1200,7 +1824,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       options={agencyList}
                       placeholder="Select Agency"
                       disabled={!r.services?.agency_required}
-                      onSave={(v) => updateRowField(r.id, "agency_id", v || null)}
+                      onSave={(v) => updateAgencyId(r, v)}
                     />
                   </td>
                 )}
@@ -1211,11 +1835,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       value={r.slot_time}
                       disabled={!r.services?.slot_booking_required}
                       onSave={(v) => updateRowField(r.id, "slot_time", v || null)}
-                      placeholder="e.g. 15-07 11AM"
+                      placeholder="DD-MM-YYYY"
                     />
                   </td>
                 )}
-                {visibleCols.mobile && (
+                {showRemarkMobile && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
                       <EditableCell width="w-28" value={r.mobile} onSave={(v) => updateRowField(r.id, "mobile", v || null)} />
@@ -1231,36 +1855,58 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     </div>
                   </td>
                 )}
-                {visibleCols.remark && (
+                {showRemarkMobile && (
                   <td className="px-3 py-2">
                     <EditableCell width="w-36" value={r.remarks} onSave={(v) => updateRowField(r.id, "remarks", v || null)} />
                   </td>
                 )}
+                {onlyDraft && (
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5 whitespace-nowrap">
+                      {(r.status === "Draft Submitted" || r.status === "On Hold") && (
+                        <>
+                          <PrimaryButton
+                            disabled={!canApprove}
+                            onClick={() => quickAccept(r)}
+                            className="!bg-emerald-600 hover:!bg-emerald-700 !px-2.5 !py-1 !text-xs"
+                            title={canApprove ? "Accept this application" : "You don't have approval rights for this role"}
+                          >
+                            Accept
+                          </PrimaryButton>
+                          {r.status !== "On Hold" && (
+                            <GhostButton
+                              onClick={() => setRemarkPrompt({ row: r, status: "On Hold" })}
+                              className="!px-2.5 !py-1 !text-xs"
+                            >
+                              Put On Hold
+                            </GhostButton>
+                          )}
+                        </>
+                      )}
+                      {r.status !== "Rejected" && r.status !== "Completed" && (
+                        <DangerButton
+                          onClick={() => setRemarkPrompt({ row: r, status: "Rejected" })}
+                          className="!px-2.5 !py-1 !text-xs"
+                        >
+                          Reject
+                        </DangerButton>
+                      )}
+                    </div>
+                  </td>
+                )}
                 <td className="px-3 py-2">
-                  <button
-                    onClick={() => openDetail(r, "status")}
-                    title="Assign staff, update status, view history"
-                    className="hover:opacity-80"
-                  >
-                    <StatusBadge status={r.status} />
-                  </button>
-                </td>
-                <td className="px-3 py-2 whitespace-nowrap">
-                  {r.services?.chat_in_app ? (
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setChatApp({ id: r.id, dealer_id: r.dealer_id, label: `${r.draft_code} — ${r.applicant_name}` })}
-                      className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
-                        chatStatus[r.id]
-                          ? "bg-rose-50 text-rose-600 border-rose-200 animate-pulse"
-                          : "bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800"
-                      }`}
-                      title={chatStatus[r.id] ? "Dealer sent a message — awaiting your reply" : "Open chat"}
+                      onClick={() => openDetail(r, "status")}
+                      title={getProcessingStage(r) || (restricted ? "Accept or reject, view history" : "Assign staff, update status, view history")}
+                      className="hover:opacity-80"
                     >
-                      {chatStatus[r.id] ? "New message" : "Chat"}
+                      <StatusBadge status={r.status} />
                     </button>
-                  ) : (
-                    <span className="text-slate-300 text-xs">—</span>
-                  )}
+                    {getProcessingStage(r) && (
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500 whitespace-nowrap">{getProcessingStage(r)}</span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap">
                   {isEligibleForAppointment(r, convertedSourceIds) ? (
@@ -1274,15 +1920,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     <span className="text-slate-300 text-xs">—</span>
                   )}
                 </td>
-                {isAdmin && (
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <button onClick={() => deleteApplication(r)} className="text-xs font-semibold text-rose-500 hover:underline">Delete</button>
-                  </td>
-                )}
               </tr>
             ))}
             {!loading && filteredRows.length === 0 && (
-              <tr><td colSpan={21} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search / filters</td></tr>
+              <tr><td colSpan={19} className="text-center text-slate-400 dark:text-slate-500 py-10">No applications match your search / filters</td></tr>
             )}
           </tbody>
         </table>
@@ -1342,6 +1983,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           setPage={setPage}
           totalCount={sortedRows.length}
           pageSize={PAGE_SIZE}
+          duplicateApplicantIds={duplicateApplicantIds}
         />
       )}
 
@@ -1352,12 +1994,27 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           staffList={staffList}
           restricted={restricted}
           canApprove={canApprove}
+          isAdmin={isAdmin}
+          onlyDraft={onlyDraft}
           onClose={closeDetail}
           onStatusChange={updateStatus}
+          onDelete={deleteApplication}
           onAssign={assignStaff}
           onSaveAnswers={updateAnswers}
           onSaveApplicant={updateApplicantDetails}
           onDocsChanged={() => openDetail(selected, modalMode)}
+        />
+      )}
+
+      {remarkPrompt && (
+        <RemarkPopup
+          row={remarkPrompt.row}
+          status={remarkPrompt.status}
+          onCancel={() => setRemarkPrompt(null)}
+          onConfirm={async (text) => {
+            await updateStatus(remarkPrompt.status, text, remarkPrompt.row);
+            setRemarkPrompt(null);
+          }}
         />
       )}
 
@@ -1400,8 +2057,31 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         />
       )}
 
+      {showUpdateCsv && (
+        <UpdateApplicationsModal
+          dealerList={dealerList}
+          serviceList={serviceList}
+          rtoList={rtoList}
+          agencyList={agencyList}
+          onClose={() => setShowUpdateCsv(false)}
+          onUpdated={() => { setShowUpdateCsv(false); load(); }}
+        />
+      )}
+
       {pccCheckRow && (
-        <PCCStatusCheckModal row={pccCheckRow} onClose={() => setPccCheckRow(null)} />
+        <PCCStatusCheckModal
+          row={pccCheckRow}
+          onClose={() => setPccCheckRow(null)}
+          onCertificateSaved={(id) =>
+            setRows((rs) =>
+              rs.map((r) =>
+                r.id === id
+                  ? { ...r, pcc_certificate_path: `pcc-certificates/${id}.pdf`, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" }
+                  : r
+              )
+            )
+          }
+        />
       )}
 
       {bookingApp && (
@@ -1425,15 +2105,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 // PCC no, etc.) needs the full table's per-cell inputs, so switch back to
 // the normal view to edit — this view is for fast scanning across many
 // applications at once.
-function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rtoList, agencyList, page, totalPages, setPage, totalCount, pageSize }) {
+function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rtoList, agencyList, page, totalPages, setPage, totalCount, pageSize, duplicateApplicantIds }) {
   const fee = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
   const rtoName = (id) => rtoList.find((x) => x.id === id)?.name || "—";
   const agencyName = (id) => agencyList.find((x) => x.id === id)?.name || "—";
 
-  const Pair = ({ top, bottom }) => (
+  const Pair = ({ top, bottom, bottomClass = "" }) => (
     <div className="leading-tight">
       <div className="text-slate-800 dark:text-slate-100">{top}</div>
-      <div className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">{bottom}</div>
+      <div className={`text-xs mt-0.5 ${bottomClass || "text-slate-400 dark:text-slate-500"}`}>{bottom}</div>
     </div>
   );
 
@@ -1467,15 +2147,18 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
                   </div>
                 </td>
                 <td className="px-3 py-2"><Pair top={fee(r.amount)} bottom={serviceLabel(r.services)} /></td>
-                <td className="px-3 py-2"><Pair top={dealerLabel(r.dealers)} bottom={r.applicant_name} /></td>
+                <td className="px-3 py-2"><Pair top={dealerLabel(r.dealers)} bottom={r.applicant_name} bottomClass={duplicateApplicantIds?.has(r.id) ? "text-amber-700 dark:text-amber-400 font-semibold" : ""} /></td>
                 <td className="px-3 py-2"><Pair top={r.application_no || "—"} bottom={r.pcc_no || "—"} /></td>
                 <td className="px-3 py-2"><Pair top={fee(r.rto_fee)} bottom={fee(r.pcc_fee)} /></td>
                 <td className="px-3 py-2"><Pair top={fee(r.agency_fee)} bottom={fee(profitOf(r))} /></td>
-                <td className="px-3 py-2"><Pair top={r.ll_dl_no || "—"} bottom={r.date_of_birth ? isoToDDMMYYYY(r.date_of_birth) : "—"} /></td>
+                <td className="px-3 py-2"><Pair top={r.ll_dl_no || "—"} bottom={r.date_of_birth ? isoToDDMMYYYY(r.date_of_birth) : "—"} bottomClass={ageHighlightClass(r.date_of_birth)} /></td>
                 <td className="px-3 py-2"><Pair top={rtoName(r.rto_id)} bottom={agencyName(r.agency_id)} /></td>
                 <td className="px-3 py-2"><Pair top={r.slot_time || "—"} bottom={r.remarks || "—"} /></td>
                 <td className="px-3 py-2">
-                  <StatusBadge status={r.status} />
+                  <span title={getProcessingStage(r) || undefined}><StatusBadge status={r.status} /></span>
+                  {getProcessingStage(r) && (
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight mt-0.5">{getProcessingStage(r)}</div>
+                  )}
                   {r.services?.chat_in_app && (
                     <div className="mt-1">
                       <button onClick={() => onOpenChat(r)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
@@ -1519,7 +2202,7 @@ const IMPORT_HEADER_MAP = {
   mobile: "mobile", mobileno: "mobile", phone: "mobile",
   address: "address",
   amount: "amount",
-  rtofee: "rto_fee",
+  fee: "rto_fee", rtofee: "rto_fee",
   pccfee: "pcc_fee",
   agencyfee: "agency_fee",
   applicationno: "application_no", application: "application_no",
@@ -1541,7 +2224,7 @@ const IMPORT_STATUS_MAP = {
   rejected: "Rejected",
   accepted: "Accepted",
   approved: "Accepted", // display label round-trips back to the stored value
-  completed: "Completed",
+  completed: "Accepted", // legacy value — Completed was folded into Accepted
 };
 
 function normalizeHeader(h) {
@@ -1561,6 +2244,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
   const [preview, setPreview] = useState([]); // { included, errors: [], payload }
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(null); // { done, total }
   const [result, setResult] = useState(null); // { imported, skipped }
   const [error, setError] = useState("");
 
@@ -1624,8 +2308,10 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
 
         if (!row.applicant_name) errors.push("Applicant name is required");
 
-        const rto = row.rto ? findByLabel(rtoList, row.rto, ["name", "code"]) : null;
-        if (row.rto && !rto) errors.push(`RTO "${row.rto}" not found`);
+        const rto = row.rto && row.rto.trim().toUpperCase() !== "PCC"
+          ? findByLabel(rtoList, row.rto, ["name", "code"])
+          : null;
+        if (row.rto && row.rto.trim().toUpperCase() !== "PCC" && !rto) errors.push(`RTO "${row.rto}" not found`);
 
         const agency = row.agency ? findByLabel(agencyList, row.agency, ["name", "code"]) : null;
         if (row.agency && !agency) errors.push(`Agency "${row.agency}" not found`);
@@ -1662,7 +2348,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
           status: status || "Draft Submitted",
         };
 
-        return { raw, errors, payload, dealerRaw: row.dealer || "", serviceRaw: row.service || "", included: errors.length === 0 };
+        return { raw, errors, payload, dealerRaw: row.dealer || "", serviceRaw: row.service || "", rtoRaw: row.rto || "", rtoResolvedName: rto?.name || null, included: errors.length === 0 };
       });
 
       setPreview(built);
@@ -1680,64 +2366,135 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
   const includedCount = preview.filter((r) => r.included).length;
   const errorCount = preview.filter((r) => r.errors.length > 0).length;
 
+  // Batches this large go into a single insert() otherwise — and since insert()
+  // is all-or-nothing, one colliding/bad row anywhere in a 10,000+ row file
+  // fails the whole thing, every time it's retried. Chunking limits the blast
+  // radius, and falling back to row-by-row within a failed chunk means a
+  // duplicate draft_code (e.g. re-importing rows that already made it in on
+  // a prior attempt) gets skipped and reported instead of blocking everything
+  // else in that chunk.
+  const IMPORT_CHUNK_SIZE = 300;
+
+  const isDuplicateKeyError = (err) =>
+    err?.code === "23505" || /duplicate key value/i.test(err?.message || "");
+
   const runImport = async () => {
     const rowsToImport = preview.filter((r) => r.included && r.errors.length === 0);
     if (!rowsToImport.length) return;
     setImporting(true);
     setError("");
+    const totalSteps = rowsToImport.length * 2; // code-gen pass + insert pass, so the bar reflects real work either phase does
+    setProgress({ done: 0, total: totalSteps, label: "Assigning draft codes…" });
     try {
       // Assign each row's real sequential draft code now (not during preview) so
       // cancelling after preview doesn't burn/skip numbers in a dealer's counter.
       // Rows where the CSV itself specified a draft_code keep that value as-is.
       const payloads = [];
+      let codeGenDone = 0;
       for (const r of rowsToImport) {
         if (r.payload.draft_code) {
           payloads.push(r.payload);
-          continue;
+        } else {
+          const { data: generated, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: r.payload.dealer_id });
+          if (codeError) {
+            setError(`Import failed generating a draft code for "${r.payload.applicant_name}": ` + codeError.message);
+            setImporting(false);
+            setProgress(null);
+            return;
+          }
+          payloads.push({ ...r.payload, draft_code: generated });
         }
-        const { data: generated, error: codeError } = await supabase.rpc("next_draft_code", { p_dealer_id: r.payload.dealer_id });
-        if (codeError) {
-          setError(`Import failed generating a draft code for "${r.payload.applicant_name}": ` + codeError.message);
-          setImporting(false);
-          return;
+        codeGenDone += 1;
+        if (codeGenDone % 25 === 0 || codeGenDone === rowsToImport.length) {
+          setProgress({ done: codeGenDone, total: totalSteps, label: "Assigning draft codes…" });
         }
-        payloads.push({ ...r.payload, draft_code: generated });
       }
 
-      const { data: insertedRows, error: insertError } = await supabase.from("applications").insert(payloads).select();
-      if (insertError) {
-        setError("Import failed: " + insertError.message);
-        setImporting(false);
-        return;
+      const insertedRows = [];
+      const duplicates = []; // { draft_code, applicant_name } — skipped, already existed
+      const failures = []; // { draft_code, applicant_name, message } — unexpected errors
+
+      for (let i = 0; i < payloads.length; i += IMPORT_CHUNK_SIZE) {
+        const chunk = payloads.slice(i, i + IMPORT_CHUNK_SIZE);
+        const { data: chunkRows, error: chunkError } = await supabase.from("applications").insert(chunk).select();
+
+        if (!chunkError) {
+          insertedRows.push(...(chunkRows || []));
+        } else {
+          // Whole chunk failed — fall back to one-row-at-a-time so a single
+          // duplicate/bad row doesn't take the rest of the chunk down with it.
+          for (const row of chunk) {
+            const { data: rowData, error: rowError } = await supabase.from("applications").insert(row).select();
+            if (!rowError) {
+              insertedRows.push(...(rowData || []));
+            } else if (isDuplicateKeyError(rowError)) {
+              duplicates.push({ draft_code: row.draft_code, applicant_name: row.applicant_name });
+            } else {
+              failures.push({ draft_code: row.draft_code, applicant_name: row.applicant_name, message: rowError.message });
+            }
+          }
+        }
+
+        const insertDone = Math.min(i + IMPORT_CHUNK_SIZE, payloads.length);
+        setProgress({
+          done: rowsToImport.length + insertDone,
+          total: totalSteps,
+          label: `Importing rows ${insertDone.toLocaleString("en-IN")} of ${payloads.length.toLocaleString("en-IN")}…`,
+        });
       }
 
-      // Rows imported directly as Accepted/Completed skip the normal
-      // "Approve" action (and its ledger debit) entirely, so post the
-      // matching ledger entry here — same shape as approveApplication —
-      // for any imported row that's already at that stage.
-      const preApproved = (insertedRows || []).filter((r) => r.status === "Accepted" || r.status === "Completed");
-      if (preApproved.length) {
-        const ledgerRows = preApproved.map((r) => ({
-          dealer_id: r.dealer_id,
-          type: "debit",
-          amount: r.amount || 0,
-          voucher_no: r.draft_code,
-          description: `Imported — ${r.applicant_name || ""}${r.application_no ? ` · App No: ${r.application_no}` : ""}`,
-        }));
-        const { error: ledgerError } = await supabase.from("ledger_transactions").insert(ledgerRows);
+      // Rows imported directly as Completed skip the normal "Mark
+      // Completed" action entirely, so post the matching ledger row here
+      // — same shape as complete_application() — for any imported row
+      // that's already at that stage. Backdated to the row's own
+      // Application Date (when the CSV provided one) rather than
+      // defaulting to "now", and Agency Fee/Agency ride along on the same
+      // row (it's one ledger_entries row per application now, not a
+      // separate agency ledger table).
+      const preCompleted = insertedRows.filter((r) => r.status === "Completed");
+      if (preCompleted.length) {
+        const ledgerRows = preCompleted.map((r) => {
+          const service = serviceList.find((s) => s.id === r.service_id);
+          return {
+            entry_code: r.application_no || `APP-${r.id.slice(0, 8)}`,
+            entry_type: "SERVICE",
+            entry_date: r.application_date || new Date().toISOString().slice(0, 10),
+            dealer_id: r.dealer_id,
+            agency_id: r.agency_id || null,
+            applicant_name: r.applicant_name,
+            service_type: serviceLabel(service) || null,
+            amount: r.amount || 0,
+            rto_fee: r.rto_fee || null,
+            agency_fee: r.agency_fee || null,
+            dob: r.date_of_birth || null,
+            license_no: r.ll_dl_no || null,
+            address: r.address || null,
+            contact_no: r.mobile || null,
+            source_application_id: r.id,
+          };
+        });
+        const { error: ledgerError } = await supabase.from("ledger_entries").insert(ledgerRows);
         if (ledgerError) {
-          setError(`Applications imported, but ${preApproved.length} ledger entr${preApproved.length !== 1 ? "ies" : "y"} failed to post: ` + ledgerError.message);
+          setError(`Applications imported, but ${preCompleted.length} ledger entr${preCompleted.length !== 1 ? "ies" : "y"} failed to post: ` + ledgerError.message);
           setImporting(false);
+          setProgress(null);
           return;
         }
       }
 
-      setResult({ imported: rowsToImport.length, skipped: preview.length - rowsToImport.length });
+      setResult({
+        imported: insertedRows.length,
+        skipped: preview.length - rowsToImport.length,
+        duplicates,
+        failures,
+      });
       setImporting(false);
+      setProgress(null);
       onImported();
     } catch (err) {
       setError("Import failed: " + err.message);
       setImporting(false);
+      setProgress(null);
     }
   };
 
@@ -1779,6 +2536,7 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
                   <th className="px-3 py-2 text-left">Dealer</th>
                   <th className="px-3 py-2 text-left">Service</th>
                   <th className="px-3 py-2 text-left">Applicant</th>
+                  <th className="px-3 py-2 text-left">RTO</th>
                   <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-left">Issues</th>
                 </tr>
@@ -1798,6 +2556,13 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
                     <td className="px-3 py-2 whitespace-nowrap">{r.dealerRaw || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.serviceRaw || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.payload.applicant_name || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {r.rtoRaw
+                        ? (r.rtoResolvedName && r.rtoResolvedName.trim().toLowerCase() !== r.rtoRaw.trim().toLowerCase()
+                            ? <span title={`Typed "${r.rtoRaw}"`} className="text-amber-600 font-semibold">{r.rtoResolvedName}</span>
+                            : (r.rtoResolvedName || <span className="text-rose-500">{r.rtoRaw}</span>))
+                        : "—"}
+                    </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.payload.status}</td>
                     <td className="px-3 py-2 text-rose-600">{r.errors.join("; ")}</td>
                   </tr>
@@ -1808,6 +2573,24 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
           <PrimaryButton disabled={importing || includedCount === 0} onClick={runImport}>
             {importing ? "Importing…" : `Import ${includedCount} Row${includedCount !== 1 ? "s" : ""}`}
           </PrimaryButton>
+
+          {importing && progress && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span>{progress.label}</span>
+                <span>{Math.min(100, Math.round((progress.done / progress.total) * 100))}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-150"
+                  style={{ width: `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%` }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                A file this size can take a few minutes — this stays open until every row's been processed.
+              </p>
+            </div>
+          )}
         </>
       )}
 
@@ -1817,6 +2600,485 @@ function ImportApplicationsModal({ dealerList, serviceList, rtoList, agencyList,
             ✓ Imported {result.imported} record{result.imported !== 1 ? "s" : ""}
             {result.skipped > 0 && ` (${result.skipped} skipped due to errors)`}.
           </p>
+
+          {result.duplicates?.length > 0 && (
+            <div className="mt-2">
+              <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
+                ⚠ {result.duplicates.length} row{result.duplicates.length !== 1 ? "s" : ""} skipped — draft code already existed:
+              </p>
+              <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-amber-200 dark:border-amber-500/30 text-xs">
+                <table className="w-full">
+                  <tbody className="divide-y divide-amber-100 dark:divide-amber-500/10">
+                    {result.duplicates.map((d, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 whitespace-nowrap font-mono">{d.draft_code}</td>
+                        <td className="px-2 py-1">{d.applicant_name}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {result.failures?.length > 0 && (
+            <div className="mt-2">
+              <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">
+                ✕ {result.failures.length} row{result.failures.length !== 1 ? "s" : ""} failed with an unexpected error:
+              </p>
+              <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-rose-200 dark:border-rose-500/30 text-xs">
+                <table className="w-full">
+                  <tbody className="divide-y divide-rose-100 dark:divide-rose-500/10">
+                    {result.failures.map((f, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 whitespace-nowrap font-mono">{f.draft_code || "auto"}</td>
+                        <td className="px-2 py-1">{f.applicant_name}</td>
+                        <td className="px-2 py-1 text-rose-600 dark:text-rose-400">{f.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <GhostButton className="mt-3" onClick={onClose}>Close</GhostButton>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// Fields an Update-via-CSV file is allowed to change. `key` is the internal
+// name resolved from IMPORT_HEADER_MAP (so it reads the exact same headers
+// Export CSV writes and Import CSV accepts). `column` is the applications
+// table column it writes to. Dealer/Draft ID aren't here — they're the
+// match key, not something this flow edits.
+const UPDATE_FIELD_DEFS = [
+  { key: "applicant_name", label: "Applicant", column: "applicant_name", type: "text" },
+  { key: "father_husband_name", label: "Father/Husband", column: "father_husband_name", type: "text" },
+  { key: "date_of_birth", label: "DOB", column: "date_of_birth", type: "date" },
+  { key: "mobile", label: "Mobile", column: "mobile", type: "text" },
+  { key: "address", label: "Address", column: "address", type: "text" },
+  { key: "amount", label: "Amount", column: "amount", type: "number" },
+  { key: "rto_fee", label: "Fee", column: "rto_fee", type: "number" },
+  { key: "pcc_fee", label: "PCC Fee", column: "pcc_fee", type: "number" },
+  { key: "agency_fee", label: "Agency Fee", column: "agency_fee", type: "number" },
+  { key: "application_no", label: "Application No", column: "application_no", type: "text" },
+  { key: "ll_dl_no", label: "LL/DL No", column: "ll_dl_no", type: "text" },
+  { key: "pcc_no", label: "PCC No", column: "pcc_no", type: "text" },
+  { key: "pcc_status", label: "PCC Status", column: "pcc_status", type: "text" },
+  { key: "rto", label: "RTO", column: "rto_id", type: "rto" },
+  { key: "agency", label: "Agency", column: "agency_id", type: "agency" },
+  { key: "slot_time", label: "Slot", column: "slot_time", type: "text" },
+  { key: "remarks", label: "Remark", column: "remarks", type: "text" },
+  { key: "application_date", label: "Application Date", column: "application_date", type: "date" },
+  { key: "status", label: "Status", column: "status", type: "status" },
+  { key: "service", label: "Service", column: "service_id", type: "service" },
+];
+
+function formatOldDisplay(def, oldValue, serviceList, rtoList, agencyList) {
+  switch (def.type) {
+    case "number": return oldValue === null || oldValue === undefined ? "—" : `₹${Number(oldValue).toLocaleString("en-IN")}`;
+    case "date": return oldValue ? isoToDDMMYYYY(oldValue) : "—";
+    case "rto": return oldValue ? (rtoList.find((x) => x.id === oldValue)?.name || "—") : "—";
+    case "agency": return oldValue ? (agencyList.find((x) => x.id === oldValue)?.name || "—") : "—";
+    case "service": return oldValue ? serviceLabel(serviceList.find((s) => s.id === oldValue)) || "—" : "—";
+    default: return oldValue || "—";
+  }
+}
+
+// Compares a parsed CSV row against the application row it matched to in
+// the DB, field by field — but ONLY for fields whose header actually
+// appears in the uploaded file (presentKeys). A column left out of the
+// sheet entirely is never touched; a column that's present but left blank
+// clears that field (except Status/Service, where a blank cell means
+// "leave as-is" since those are required fields the app itself never lets
+// you clear).
+function diffFields(row, presentKeys, target, serviceList, rtoList, agencyList) {
+  const changes = [];
+  const fieldErrors = [];
+  for (const def of UPDATE_FIELD_DEFS) {
+    if (!presentKeys.has(def.key)) continue;
+    const raw = row[def.key];
+    let newValue;
+    let newDisplay;
+    let err = null;
+
+    if (def.type === "text") {
+      newValue = raw ? raw.trim() : null;
+      newDisplay = newValue || "—";
+    } else if (def.type === "number") {
+      newValue = toNumberOrNull(raw);
+      newDisplay = newValue === null ? "—" : `₹${Number(newValue).toLocaleString("en-IN")}`;
+    } else if (def.type === "date") {
+      newValue = raw ? ddmmyyyyToISO(raw) : null;
+      newDisplay = newValue ? isoToDDMMYYYY(newValue) : "—";
+    } else if (def.type === "status") {
+      const key = (raw || "").trim().toLowerCase();
+      if (!key) continue; // blank status cell — leave status as-is
+      const mapped = IMPORT_STATUS_MAP[key];
+      if (!mapped) { err = `Status "${raw}" not recognized`; }
+      else { newValue = mapped; newDisplay = mapped; }
+    } else if (def.type === "service") {
+      const trimmed = (raw || "").trim();
+      if (!trimmed) continue; // blank — leave service as-is, it's required
+      const service = findByLabel(serviceList, trimmed, ["parent_service", "short_name"]);
+      if (!service) { err = `Service "${raw}" not found`; }
+      else { newValue = service.id; newDisplay = serviceLabel(service); }
+    } else if (def.type === "rto") {
+      const trimmed = (raw || "").trim();
+      if (!trimmed) { newValue = null; newDisplay = "—"; }
+      else if (trimmed.toUpperCase() === "PCC") { newValue = null; newDisplay = "PCC"; }
+      else {
+        const rto = findByLabel(rtoList, trimmed, ["name", "code"]);
+        if (!rto) { err = `RTO "${raw}" not found`; }
+        else { newValue = rto.id; newDisplay = rto.name; }
+      }
+    } else if (def.type === "agency") {
+      const trimmed = (raw || "").trim();
+      if (!trimmed) { newValue = null; newDisplay = "—"; }
+      else {
+        const agency = findByLabel(agencyList, trimmed, ["name", "code"]);
+        if (!agency) { err = `Agency "${raw}" not found`; }
+        else { newValue = agency.id; newDisplay = agency.name; }
+      }
+    }
+
+    if (err) { fieldErrors.push(`${def.label}: ${err}`); continue; }
+
+    const oldValue = target[def.column];
+    const same = def.type === "number"
+      ? Number(oldValue ?? 0) === Number(newValue ?? 0)
+      : (oldValue ?? null) === (newValue ?? null);
+    if (same) continue;
+
+    changes.push({
+      key: def.key,
+      column: def.column,
+      label: def.label,
+      oldDisplay: formatOldDisplay(def, oldValue, serviceList, rtoList, agencyList),
+      newDisplay,
+      newValue,
+      // Flagged so the preview can warn that this particular change won't
+      // itself move any money already posted to the dealer ledger — same
+      // as editing Amount by hand on an Accepted row today.
+      warnLedger: def.key === "amount" && target.status === "Accepted",
+    });
+  }
+  return { changes, fieldErrors };
+}
+
+// Update-via-CSV: the round-trip counterpart to Export CSV. Upload a
+// previously-exported (or same-shaped) sheet with edited values — this
+// matches each row back to its application by Draft ID (+ Dealer, since
+// Draft IDs are only unique per-dealer) and updates ONLY the columns that
+// are both present in the file and actually different from what's stored.
+// Status→Accepted and Agency Fee/Agency changes reuse the exact same
+// ledger-posting logic as the single-row Approve button and inline Agency
+// Fee edit, so ledgers can't drift between the two entry points.
+function UpdateApplicationsModal({ dealerList, serviceList, rtoList, agencyList, onClose, onUpdated }) {
+  const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState([]);
+  const [parsing, setParsing] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [result, setResult] = useState(null); // { updated, failures }
+  const [error, setError] = useState("");
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    setError("");
+    setParsing(true);
+    try {
+      const text = await file.text();
+      const rawRows = parseCSV(text);
+      if (!rawRows.length) {
+        setError("No data rows found in that file.");
+        setPreview([]);
+        setParsing(false);
+        return;
+      }
+
+      const presentKeys = new Set();
+      Object.keys(rawRows[0]).forEach((h) => {
+        const key = IMPORT_HEADER_MAP[normalizeHeader(h)];
+        if (key) presentKeys.add(key);
+      });
+
+      if (!presentKeys.has("draft_code")) {
+        setError('This file has no "Draft ID" column — Update needs it to know which record each row belongs to. Use Export CSV, edit that file, then upload it here.');
+        setPreview([]);
+        setParsing(false);
+        return;
+      }
+
+      const parsedRows = rawRows.map((raw) => {
+        const row = {};
+        Object.entries(raw).forEach(([h, v]) => {
+          const key = IMPORT_HEADER_MAP[normalizeHeader(h)];
+          if (key) row[key] = v;
+        });
+        const dealer = row.dealer ? findByLabel(dealerList, row.dealer, ["name", "short_name", "code"]) : null;
+        return { raw, row, dealer, draftCode: (row.draft_code || "").trim() };
+      });
+
+      const draftCodes = [...new Set(parsedRows.map((r) => r.draftCode).filter(Boolean))];
+      const { data: existing, error: fetchError } = await supabase
+        .from("applications")
+        .select("*")
+        .in("draft_code", draftCodes);
+      if (fetchError) {
+        setError("Couldn't look up existing records: " + fetchError.message);
+        setPreview([]);
+        setParsing(false);
+        return;
+      }
+
+      const built = parsedRows.map(({ row, dealer, draftCode }) => {
+        const applicantRaw = row.applicant_name || "";
+        const dealerRaw = row.dealer || "";
+        if (!draftCode) {
+          return { draftCode: "", dealerRaw, applicantRaw, changes: [], fieldErrors: [], notFound: "Missing Draft ID", included: false };
+        }
+        const candidates = (existing || []).filter((a) => a.draft_code === draftCode);
+        const target = dealer
+          ? candidates.find((a) => a.dealer_id === dealer.id) || null
+          : (candidates.length === 1 ? candidates[0] : null);
+
+        if (!target) {
+          const notFound = candidates.length > 1
+            ? "Multiple applications share this Draft ID across dealers — add a Dealer column to disambiguate"
+            : "No application found with this Draft ID";
+          return { draftCode, dealerRaw, applicantRaw, changes: [], fieldErrors: [], notFound, included: false };
+        }
+
+        const { changes, fieldErrors } = diffFields(row, presentKeys, target, serviceList, rtoList, agencyList);
+        return {
+          draftCode,
+          dealerRaw: dealerRaw || dealerList.find((d) => d.id === target.dealer_id)?.name || "",
+          applicantRaw: applicantRaw || target.applicant_name || "",
+          target,
+          changes,
+          fieldErrors,
+          notFound: null,
+          included: changes.length > 0,
+        };
+      });
+
+      setPreview(built);
+    } catch (err) {
+      setError("Couldn't read that file: " + err.message);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const toggleIncluded = (i) => {
+    setPreview((rows) => rows.map((r, idx) => (idx === i && r.changes.length > 0 ? { ...r, included: !r.included } : r)));
+  };
+
+  const includedCount = preview.filter((r) => r.included).length;
+  const noChangeCount = preview.filter((r) => !r.notFound && r.changes.length === 0 && r.fieldErrors.length === 0).length;
+  const problemCount = preview.filter((r) => r.notFound || r.fieldErrors.length > 0).length;
+
+  const runUpdate = async () => {
+    const rowsToUpdate = preview.filter((r) => r.included);
+    if (!rowsToUpdate.length) return;
+    setUpdating(true);
+    setError("");
+    setProgress({ done: 0, total: rowsToUpdate.length });
+
+    let updated = 0;
+    const failures = [];
+
+    for (const r of rowsToUpdate) {
+      const fields = {};
+      r.changes.forEach((c) => { fields[c.column] = c.newValue; });
+
+      const statusChange = r.changes.find((c) => c.key === "status");
+      const becomingCompleted = statusChange && statusChange.newValue === "Completed" && r.target.status !== "Completed";
+
+      try {
+        if (becomingCompleted) {
+          // Same shape as the table's "Mark Completed" action / CSV
+          // Import's pre-completed path: flip status/ledger together via
+          // complete_application(), then apply any OTHER changed fields
+          // from this CSV row on top (the RPC only touches
+          // status/completed_at/application_date + the ledger row).
+          const { error: rpcErr } = await supabase.rpc("complete_application", { p_application_id: r.target.id });
+          if (rpcErr) throw rpcErr;
+
+          const otherFields = { ...fields };
+          delete otherFields.status;
+          if (Object.keys(otherFields).length) {
+            const { error: updErr } = await supabase.from("applications").update(otherFields).eq("id", r.target.id);
+            if (updErr) throw updErr;
+            const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: r.target.id });
+            if (syncErr) throw new Error("Saved, but ledger sync failed: " + syncErr.message);
+          }
+        } else {
+          const { error: updErr } = await supabase.from("applications").update(fields).eq("id", r.target.id);
+          if (updErr) throw updErr;
+
+          // Row was already Completed before this import (not becoming
+          // Completed just now, that path above already posts the ledger
+          // row fresh). If Amount/RTO Fee/Agency Fee/Agency changed, the
+          // existing ledger row needs to move with it — same sync as the
+          // inline table edits use. sync_ledger_entry_amounts() is a
+          // no-op if there's no ledger row (not Completed), so it's safe
+          // to call unconditionally whenever any of these changed.
+          const ledgerFieldsChanged = r.changes.some((c) => ["amount", "rto_fee", "agency_fee", "agency"].includes(c.key));
+          if (ledgerFieldsChanged) {
+            const { error: syncErr } = await supabase.rpc("sync_ledger_entry_amounts", { p_application_id: r.target.id });
+            if (syncErr) throw new Error("Saved, but ledger sync failed: " + syncErr.message);
+          }
+        }
+
+        updated += 1;
+      } catch (err) {
+        failures.push({ draft_code: r.draftCode, applicant_name: r.target?.applicant_name || r.applicantRaw, message: err.message });
+      }
+
+      setProgress((p) => ({ done: (p?.done || 0) + 1, total: p?.total || rowsToUpdate.length }));
+    }
+
+    setResult({ updated, failures });
+    setUpdating(false);
+    setProgress(null);
+    if (updated > 0) onUpdated();
+  };
+
+  return (
+    <Modal title="Update Applications via CSV" onClose={onClose} wide>
+      <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+        Upload a CSV exported from this page (or shaped like it) with edited values. Rows are matched to existing
+        records by <strong>Draft ID</strong> (plus Dealer, since Draft IDs repeat across dealers) — only columns
+        present in the file, and only cells that actually differ from what's saved, get updated. Nothing is inserted;
+        rows with no matching Draft ID are skipped.
+      </p>
+
+      <div className="flex items-center gap-3 mb-4">
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleFile}
+          className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-slate-700 dark:file:text-slate-300 file:font-semibold file:text-sm"
+        />
+        {fileName && <span className="text-xs text-slate-400 dark:text-slate-500">{fileName}</span>}
+      </div>
+
+      {parsing && <p className="text-sm text-slate-400 dark:text-slate-500">Reading file…</p>}
+      {error && <p className="text-sm text-rose-600 mb-3">{error}</p>}
+
+      {preview.length > 0 && !result && (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              {preview.length} row{preview.length !== 1 ? "s" : ""} found — {includedCount} with changes to update
+              {noChangeCount > 0 && `, ${noChangeCount} unchanged`}
+              {problemCount > 0 && `, ${problemCount} with issues`}.
+            </p>
+          </div>
+          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-auto max-h-96 mb-4">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">Update?</th>
+                  <th className="px-3 py-2 text-left">Draft ID</th>
+                  <th className="px-3 py-2 text-left">Dealer</th>
+                  <th className="px-3 py-2 text-left">Applicant</th>
+                  <th className="px-3 py-2 text-left">Changes</th>
+                  <th className="px-3 py-2 text-left">Issues</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {preview.map((r, i) => (
+                  <tr key={i} className={r.notFound || r.fieldErrors.length ? "bg-rose-50/50 dark:bg-rose-500/5" : !r.changes.length ? "opacity-50" : ""}>
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={r.included}
+                        disabled={r.changes.length === 0}
+                        onChange={() => toggleIncluded(i)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap font-mono">{r.draftCode || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.dealerRaw || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.applicantRaw || "—"}</td>
+                    <td className="px-3 py-2">
+                      {r.changes.length > 0 ? (
+                        <ul className="space-y-0.5">
+                          {r.changes.map((c, ci) => (
+                            <li key={ci}>
+                              <span className="font-semibold">{c.label}:</span> {c.oldDisplay} → <span className="text-blue-600 dark:text-blue-400 font-semibold">{c.newDisplay}</span>
+                              {c.warnLedger && <span className="text-amber-600 dark:text-amber-400"> (won't move the already-posted dealer ledger entry)</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="text-slate-400 dark:text-slate-500 italic">no changes</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-rose-600">
+                      {r.notFound || r.fieldErrors.join("; ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <PrimaryButton disabled={updating || includedCount === 0} onClick={runUpdate}>
+            {updating ? "Updating…" : `Update ${includedCount} Row${includedCount !== 1 ? "s" : ""}`}
+          </PrimaryButton>
+
+          {updating && progress && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span>Updating {progress.done} of {progress.total}…</span>
+                <span>{Math.min(100, Math.round((progress.done / progress.total) * 100))}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-150"
+                  style={{ width: `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {result && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30 px-3 py-2">
+          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+            ✓ Updated {result.updated} record{result.updated !== 1 ? "s" : ""}.
+          </p>
+
+          {result.failures?.length > 0 && (
+            <div className="mt-2">
+              <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">
+                ✕ {result.failures.length} row{result.failures.length !== 1 ? "s" : ""} failed:
+              </p>
+              <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-rose-200 dark:border-rose-500/30 text-xs">
+                <table className="w-full">
+                  <tbody className="divide-y divide-rose-100 dark:divide-rose-500/10">
+                    {result.failures.map((f, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 whitespace-nowrap font-mono">{f.draft_code}</td>
+                        <td className="px-2 py-1">{f.applicant_name}</td>
+                        <td className="px-2 py-1 text-rose-600 dark:text-rose-400">{f.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <GhostButton className="mt-3" onClick={onClose}>Close</GhostButton>
         </div>
       )}
@@ -1840,7 +3102,7 @@ function DraftDetailPopup({ row, profitOf, onClose }) {
             <span className="text-slate-400 dark:text-slate-500">Father/Husband</span>
             <span className="text-slate-700 dark:text-slate-200">{row.father_husband_name || "—"}</span>
             <span className="text-slate-400 dark:text-slate-500">DOB</span>
-            <span className="text-slate-700 dark:text-slate-200">{row.date_of_birth ? isoToDDMMYYYY(row.date_of_birth) : "—"}</span>
+            <span className={row.date_of_birth ? ageHighlightClass(row.date_of_birth) || "text-slate-700 dark:text-slate-200" : "text-slate-700 dark:text-slate-200"}>{row.date_of_birth ? isoToDDMMYYYY(row.date_of_birth) : "—"}</span>
             <span className="text-slate-400 dark:text-slate-500">Mobile</span>
             <span className="text-slate-700 dark:text-slate-200">{row.mobile || "—"}</span>
             <span className="text-slate-400 dark:text-slate-500">Address</span>
@@ -1884,8 +3146,9 @@ function DraftDetailPopup({ row, profitOf, onClose }) {
 function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   const [form, setForm] = useState({
     dealer_id: "", service_id: "", applicant_name: "", father_husband_name: "",
-    date_of_birth: "", mobile: "", address: "", status: "Draft Submitted",
+    date_of_birth: "", mobile: "", address: "", police_station: "", stay_since: "", status: "Draft Submitted",
   });
+  const selectedService = serviceList.find((s) => s.id === form.service_id);
   const [answers, setAnswers] = useState([
     { key: "Application No", value: "" },
     { key: "Learner No", value: "" },
@@ -1893,6 +3156,7 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   ]);
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.value }));
   const valid = form.dealer_id && form.service_id && form.applicant_name;
+  const [ageError, setAgeError] = useState("");
 
   const setAnswerKey = (i) => (e) => setAnswers((a) => a.map((row, idx) => idx === i ? { ...row, key: e.target.value } : row));
   const setAnswerValue = (i) => (e) => setAnswers((a) => a.map((row, idx) => idx === i ? { ...row, value: e.target.value } : row));
@@ -1900,11 +3164,15 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
   const addAnswer = () => setAnswers((a) => [...a, { key: "", value: "" }]);
 
   const handleCreate = () => {
+    const dobIso = ddmmyyyyToISO(form.date_of_birth);
+    const err = validateAgeForService(dobIso, selectedService);
+    if (err) { setAgeError(err); return; }
+    setAgeError("");
     const service_answers = {};
     answers.forEach(({ key, value }) => {
       if (key.trim() && value.trim()) service_answers[key.trim()] = value.trim();
     });
-    onCreate({ ...form, date_of_birth: ddmmyyyyToISO(form.date_of_birth), service_answers });
+    onCreate({ ...form, date_of_birth: dobIso, stay_since: ddmmyyyyToISO(form.stay_since), service_answers });
   };
 
   return (
@@ -1938,7 +3206,8 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
           <Input value={form.father_husband_name} onChange={set("father_husband_name")} />
         </Field>
         <Field label="Date of Birth">
-          <Input type="text" placeholder="DD-MM-YYYY" value={form.date_of_birth} onChange={set("date_of_birth")} />
+          <Input type="text" placeholder="DD-MM-YYYY" value={form.date_of_birth} onChange={set("date_of_birth")}
+            className={ageHighlightClass(ddmmyyyyToISO(form.date_of_birth)) ? "border-amber-400" : ""} />
         </Field>
         <Field label="Mobile">
           <Input value={form.mobile} onChange={set("mobile")} />
@@ -1956,6 +3225,23 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
         <Input value={form.address} onChange={set("address")} />
       </Field>
 
+      {selectedService?.pcc_required && (
+        <div className="grid sm:grid-cols-2 gap-x-4 -mt-1 mb-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30">
+          <p className="sm:col-span-2 text-xs text-blue-700 dark:text-blue-300 mb-1">
+            This service requires a PCC — fill these in now and they'll auto-fill the PCC request letter later.
+          </p>
+          <Field label="Police Station">
+            <SearchableSelect
+              value={form.police_station}
+              options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+              onChange={(name) => setForm((s) => ({ ...s, police_station: name }))}
+              placeholder="Search police station…"
+            />
+          </Field>
+          <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={form.stay_since} onChange={set("stay_since")} /></Field>
+        </div>
+      )}
+
       <div className="mb-4">
         <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
           Additional Details <span className="text-slate-400 dark:text-slate-500 font-normal">(Learner No, PCC No, Application No, etc.)</span>
@@ -1971,15 +3257,97 @@ function NewApplicationModal({ dealerList, serviceList, onClose, onCreate }) {
       </div>
 
       <PrimaryButton disabled={!valid} onClick={handleCreate}>Create Application</PrimaryButton>
+      {ageError && <p className="text-rose-500 text-xs mt-2">{ageError}</p>}
     </Modal>
   );
 }
 
-function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, onClose, onStatusChange, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
+// Small shared "who entered what" block — Accept, Fee, Application No,
+// LL/DL No, Amount — each only rendered once that field actually has a
+// value + a recorded staff. Used in both the staff Status modal and the
+// admin detail modal so the audit trail is visible in both places.
+function EntryLog({ app }) {
+  const rows = [
+    app.status !== "Draft Submitted" && app.accepted_staff?.full_name && {
+      label: "Accepted", name: app.accepted_staff.full_name, at: app.accepted_at,
+    },
+    app.rto_fee != null && app.fee_staff?.full_name && {
+      label: "Fee entered", name: app.fee_staff.full_name, at: app.fee_entered_at,
+    },
+    app.application_no && app.appno_staff?.full_name && {
+      label: "Application No entered", name: app.appno_staff.full_name, at: app.application_no_entered_at,
+    },
+    app.ll_dl_no && app.lldl_staff?.full_name && {
+      label: "LL/DL No entered", name: app.lldl_staff.full_name, at: app.ll_dl_no_entered_at,
+    },
+    app.amount != null && app.amount_staff?.full_name && {
+      label: "Amount entered", name: app.amount_staff.full_name, at: app.amount_entered_at,
+    },
+  ].filter(Boolean);
+  if (!rows.length) return null;
+  return (
+    <div className="mb-2 space-y-1">
+      {rows.map((r) => (
+        <p key={r.label} className="text-xs text-slate-500 dark:text-slate-500">
+          {r.label} by <span className="font-semibold text-slate-700 dark:text-slate-300">{r.name}</span>
+          {r.at && <span className="text-slate-400 dark:text-slate-500"> — {new Date(r.at).toLocaleString()}</span>}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+// Small popup that asks for a remark before Put On Hold / Reject go
+// through — used by the Draft inbox's quick action buttons. Reject can't
+// be confirmed with an empty remark (dealer needs a reason); Hold's remark
+// is optional, same rule the status modal already used.
+function RemarkPopup({ row, status, onCancel, onConfirm }) {
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const isReject = status === "Rejected";
+
+  const confirm = async () => {
+    if (isReject && !text.trim()) {
+      window.alert("Reject karne ke liye remark likhna zaroori hai.");
+      return;
+    }
+    setSaving(true);
+    await onConfirm(text);
+    setSaving(false);
+  };
+
+  return (
+    <Modal title={`${isReject ? "Reject" : "Put On Hold"} — ${row.draft_code}`} onClose={onCancel}>
+      <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+        {row.applicant_name}
+      </p>
+      <Field label="Remarks (shown to dealer)" required={isReject}>
+        <Input
+          as="textarea"
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={isReject ? "Reject karne ki wajah likhein" : "Optional — hold karne ki wajah likhein"}
+        />
+      </Field>
+      <div className="flex justify-end gap-2 mt-4">
+        <GhostButton onClick={onCancel} disabled={saving}>Cancel</GhostButton>
+        {isReject ? (
+          <DangerButton onClick={confirm} disabled={saving}>{saving ? "Rejecting…" : "Reject"}</DangerButton>
+        ) : (
+          <PrimaryButton onClick={confirm} disabled={saving}>{saving ? "Saving…" : "Put On Hold"}</PrimaryButton>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, isAdmin = false, onlyDraft = false, onClose, onStatusChange, onDelete, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
   const [remarks, setRemarks] = useState(app.remarks || "");
   const [staffId, setStaffId] = useState(app.assigned_staff_id || "");
   const [staffIdentity, setStaffIdentity] = useState(null);
   const [pccCheckApp, setPccCheckApp] = useState(null);
+  const [showPccLetter, setShowPccLetter] = useState(false);
   useEffect(() => {
     (async () => {
       const { data: userData } = await supabase.auth.getUser();
@@ -1993,18 +3361,102 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     date_of_birth: isoToDDMMYYYY(app.date_of_birth),
     mobile: app.mobile || "",
     address: app.address || "",
+    police_station: app.police_station || "",
+    stay_since: isoToDDMMYYYY(app.stay_since),
   });
   const [savingApplicant, setSavingApplicant] = useState(false);
+  const [applicantAgeError, setApplicantAgeError] = useState("");
   const setApplicantField = (k) => (e) => setApplicant((s) => ({ ...s, [k]: e.target.value }));
 
+  // Guards against double-clicking "Approve" (or Move to Review / On Hold /
+  // Reject) before the first click's request finishes — without this, a
+  // fast double-click fires onStatusChange twice with the same stale `app`,
+  // and Approve in particular ends up inserting two ledger debits for one
+  // approval. Disables the status buttons for the duration of the call.
+  const [statusChanging, setStatusChanging] = useState(false);
+  const handleStatusChange = async (newStatus, r) => {
+    if (statusChanging) return;
+    setStatusChanging(true);
+    try {
+      await onStatusChange(newStatus, r);
+    } finally {
+      setStatusChanging(false);
+    }
+  };
+
+  // Reject is the only action that requires a remark — Accept and Put On
+  // Hold can go through with the field left blank.
+  const handleReject = () => {
+    if (!remarks.trim()) {
+      window.alert("Reject karne ke liye remark likhna zaroori hai.");
+      return;
+    }
+    handleStatusChange("Rejected", remarks);
+  };
+
+  // "Auto mode": once an application has been Accepted (or gone all the
+  // way to Completed), Accept/Put On Hold stop being shown — from here on
+  // the status progresses on its own as Application No. / PCC No. /
+  // Learning No. / Amount get filled in (see updateRowField,
+  // updatePccFields and updateApplicationAmount in the parent). Reject
+  // stays available throughout as a manual override.
+  const showForwardActions = app.status === "Draft Submitted" || app.status === "On Hold";
+  const showReject = app.status !== "Rejected" && app.status !== "Completed";
+
+  // Draft-inbox quick actions (top of the modal, see openDetail(r, "admin"/
+  // "customer") from the row-click on the applicant name): same Accept /
+  // Put On Hold / Reject as the "Update Status" card further down, just
+  // surfaced immediately so staff/admin don't have to scroll to act. Hold
+  // and Reject both go through the RemarkPopup; Accept doesn't.
+  const [quickRemarkAction, setQuickRemarkAction] = useState(null); // "On Hold" | "Rejected" | null
+  const QuickActionBar = onlyDraft && (showForwardActions || showReject) ? (
+    <div className="flex flex-wrap gap-2 mb-4">
+      {showForwardActions && (
+        <>
+          <PrimaryButton
+            disabled={!canApprove || statusChanging}
+            onClick={() => handleStatusChange("Accepted", "")}
+            className="!bg-emerald-600 hover:!bg-emerald-700"
+            title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
+          >
+            Accept
+          </PrimaryButton>
+          {app.status !== "On Hold" && (
+            <GhostButton disabled={statusChanging} onClick={() => setQuickRemarkAction("On Hold")}>Put On Hold</GhostButton>
+          )}
+        </>
+      )}
+      {showReject && (
+        <DangerButton disabled={statusChanging} onClick={() => setQuickRemarkAction("Rejected")}>Reject</DangerButton>
+      )}
+    </div>
+  ) : null;
+  const QuickRemarkModal = quickRemarkAction ? (
+    <RemarkPopup
+      row={app}
+      status={quickRemarkAction}
+      onCancel={() => setQuickRemarkAction(null)}
+      onConfirm={async (text) => {
+        await handleStatusChange(quickRemarkAction, text);
+        setQuickRemarkAction(null);
+      }}
+    />
+  ) : null;
+
   const saveApplicant = async () => {
+    const dobIso = ddmmyyyyToISO(applicant.date_of_birth);
+    const err = validateAgeForService(dobIso, app.services);
+    if (err) { setApplicantAgeError(err); return; }
+    setApplicantAgeError("");
     setSavingApplicant(true);
     await onSaveApplicant({
       applicant_name: applicant.applicant_name || null,
       father_husband_name: applicant.father_husband_name || null,
-      date_of_birth: ddmmyyyyToISO(applicant.date_of_birth),
+      date_of_birth: dobIso,
       mobile: applicant.mobile || null,
       address: applicant.address || null,
+      police_station: applicant.police_station || null,
+      stay_since: ddmmyyyyToISO(applicant.stay_since),
     });
     setSavingApplicant(false);
   };
@@ -2035,10 +3487,13 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
 
   if (mode === "status") {
     return (
-      <Modal title={`Status & Assignment — ${app.draft_code}`} onClose={onClose} wide>
+      <Modal title={restricted ? `Accept — ${app.draft_code}` : `Status & Assignment — ${app.draft_code}`} onClose={onClose} wide>
         <div className="flex items-center gap-2 mb-5">
           <span className="text-sm text-slate-500 dark:text-slate-500">Current status:</span>
           <StatusBadge status={app.status} />
+          {getProcessingStage(app) && (
+            <span className="text-xs font-medium text-blue-600 dark:text-blue-400">{getProcessingStage(app)}</span>
+          )}
           {app.application_date && (
             <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">
               Approved on {isoToDDMMYYYY(app.application_date)}
@@ -2047,51 +3502,68 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </div>
         <div className="grid md:grid-cols-2 gap-6">
           <div>
-            <Card title="Assign Staff" className="mb-4">
-              <Field label="Responsible Staff">
-                <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
-                  <option value="">— Unassigned —</option>
-                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                </Select>
-              </Field>
-              <GhostButton onClick={() => onAssign(staffId || null)}>Save Assignment</GhostButton>
-            </Card>
+            {!restricted && (
+              <Card title="Assign Staff" className="mb-4">
+                <Field label="Responsible Staff">
+                  <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+                    <option value="">— Unassigned —</option>
+                    {staffList.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                  </Select>
+                </Field>
+                <GhostButton onClick={() => onAssign(staffId || null)}>Save Assignment</GhostButton>
+              </Card>
+            )}
 
             <Card title="Update Status">
-              <Field label="Remarks (shown to dealer)">
-                <Input
-                  as="textarea"
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="e.g. Please re-upload a clearer Aadhaar photo"
-                />
-              </Field>
+              {showForwardActions || showReject ? (
+                <Field label="Remarks (shown to dealer)">
+                  <Input
+                    as="textarea"
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="Reject karte waqt reason yahan likhein (Accept / Hold ke liye zaroori nahi)"
+                  />
+                </Field>
+              ) : (
+                <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+                  Accepted — status ab Application No. / PCC No. / Learning No. bharte hi khud-ba-khud aage badhega.
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
-                <PrimaryButton onClick={() => onStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
-                <GhostButton onClick={() => onStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
-                <PrimaryButton
-                  onClick={() => onStatusChange("Accepted", remarks)}
-                  className="!bg-emerald-600 hover:!bg-emerald-700"
-                  disabled={!canApprove}
-                  title={canApprove ? "Debits the application amount to the dealer's ledger" : "You don't have approval rights for this role"}
-                >
-                  Approve
-                </PrimaryButton>
-                {app.status === "Accepted" && (
-                  <GhostButton
-                    onClick={() => onStatusChange("Completed", remarks)}
-                    title="Marks the physical process as finished — starts the 30-day clock for booking a follow-up appointment, if this service has a Next Service configured"
-                  >
-                    Mark Completed
-                  </GhostButton>
+                {showForwardActions && (
+                  <>
+                    <PrimaryButton
+                      disabled={!canApprove || statusChanging}
+                      onClick={() => handleStatusChange("Accepted", remarks)}
+                      className="!bg-emerald-600 hover:!bg-emerald-700"
+                      title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
+                    >
+                      Accept
+                    </PrimaryButton>
+                    {app.status !== "On Hold" && (
+                      <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                    )}
+                  </>
                 )}
-                <DangerButton onClick={() => onStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                {showReject && (
+                  <DangerButton disabled={statusChanging} onClick={handleReject}>Reject</DangerButton>
+                )}
+                {isAdmin && (
+                  <DangerButton
+                    onClick={() => onDelete(app)}
+                    className="!bg-transparent !text-rose-600 border border-rose-300 hover:!bg-rose-50 dark:hover:!bg-rose-950"
+                    title={`Delete application ${app.draft_code}`}
+                  >
+                    🗑 Delete Application
+                  </DangerButton>
+                )}
               </div>
             </Card>
           </div>
 
           <div>
             <Card title="Application History">
+              <EntryLog app={app} />
               {(app.history || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No history yet</p>}
               {(app.history || []).map((h) => (
                 <div key={h.id} className="text-xs text-slate-500 dark:text-slate-500 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
@@ -2106,37 +3578,303 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     );
   }
 
+  if (mode === "admin") {
+    const fee = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+    const profit = Number(app.amount || 0) - Number(app.rto_fee || 0) - Number(app.pcc_fee || 0) - Number(app.agency_fee || 0);
+    return (
+      <>
+      <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="xl">
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 dark:text-slate-500 mb-4 -mt-1">
+          <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>
+          <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
+          <span className="flex items-center gap-1.5">
+            <StatusBadge status={app.status} />
+            {getProcessingStage(app) && (
+              <span className="text-xs font-medium text-blue-600 dark:text-blue-400">{getProcessingStage(app)}</span>
+            )}
+            {app.application_date && <span className="text-xs text-slate-400 dark:text-slate-500">Approved on {isoToDDMMYYYY(app.application_date)}</span>}
+          </span>
+        </div>
+        {QuickActionBar}
+
+        <div className="grid md:grid-cols-3 gap-6">
+          {/* Column 1: applicant details + staff assignment */}
+          <div>
+            <Card title="Applicant Details" className="mb-4">
+              <div className="grid grid-cols-2 gap-x-4">
+                <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
+                <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
+                <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
+                  className={ageHighlightClass(ddmmyyyyToISO(applicant.date_of_birth)) ? "border-amber-400" : ""} /></Field>
+                <Field label="Mobile">
+                  <div className="flex items-center gap-2">
+                    <Input value={applicant.mobile} onChange={setApplicantField("mobile")} />
+                    {applicant.mobile && (
+                      <a
+                        href={`tel:${applicant.mobile}`}
+                        title={`Call ${applicant.mobile}`}
+                        className="shrink-0 w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center hover:bg-emerald-100"
+                      >
+                        <Phone size={14} />
+                      </a>
+                    )}
+                  </div>
+                </Field>
+                <div className="col-span-2"><Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field></div>
+                {app.services?.pcc_required && (
+                  <>
+                    <Field label="Police Station">
+                      <SearchableSelect
+                        value={applicant.police_station}
+                        options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+                        onChange={(name) => setApplicant((s) => ({ ...s, police_station: name }))}
+                        placeholder="Search police station…"
+                      />
+                    </Field>
+                    <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.stay_since} onChange={setApplicantField("stay_since")} /></Field>
+                  </>
+                )}
+              </div>
+              <PrimaryButton disabled={savingApplicant} onClick={saveApplicant}>
+                {savingApplicant ? "Saving…" : "Save Applicant Details"}
+              </PrimaryButton>
+              {applicantAgeError && <p className="text-rose-500 text-xs mt-2">{applicantAgeError}</p>}
+            </Card>
+
+            <Card title="Assign Staff">
+              <Field label="Responsible Staff">
+                <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+                  <option value="">— Unassigned —</option>
+                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </Select>
+              </Field>
+              <GhostButton onClick={() => onAssign(staffId || null)}>Save Assignment</GhostButton>
+            </Card>
+          </div>
+
+          {/* Column 2: service answers, documents, chat */}
+          <div>
+            <Card title="Service Answers" className="mb-4">
+              {answers.map((row, i) => (
+                <div key={i} className="flex gap-2 mb-2">
+                  <Input placeholder="Field name" value={row.key} onChange={setAnswerKey(i)} className="w-2/5" />
+                  <Input placeholder="Value" value={row.value} onChange={setAnswerValue(i)} />
+                  <button onClick={() => removeAnswer(i)} className="text-rose-500 text-xs font-semibold px-2 shrink-0">Remove</button>
+                </div>
+              ))}
+              <div className="flex items-center justify-between mt-2">
+                <GhostButton onClick={addAnswer}>+ Add Field</GhostButton>
+                <PrimaryButton disabled={savingAnswers} onClick={saveAnswers}>
+                  {savingAnswers ? "Saving…" : "Save Details"}
+                </PrimaryButton>
+              </div>
+            </Card>
+
+            <Card title="Documents" className="mb-4">
+              {app.services?.pcc_required && (
+                <button
+                  onClick={() => setShowPccLetter(true)}
+                  className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 block"
+                >
+                  📄 Generate PCC Request Letter
+                </button>
+              )}
+              {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
+              {(app.docs || [])
+                .filter((d) => !d.post_approval || app.status === "Accepted")
+                .map((d) => (
+                  <div key={d.id}>
+                    {/learn/i.test(d.name) && app.application_no && (
+                      <button
+                        onClick={async () => {
+                          const learnerNo = getLearnerNo(app.service_answers);
+                          if (learnerNo) {
+                            try {
+                              await navigator.clipboard.writeText(learnerNo);
+                              setToast("Learner No copied: " + learnerNo);
+                            } catch {
+                              // clipboard may be blocked; ignore silently
+                            }
+                          }
+                          window.open(
+                            `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                            "_blank", "noopener,noreferrer"
+                          );
+                        }}
+                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                      >
+                        ↗ Download Learning (opens Sarathi)
+                      </button>
+                    )}
+                    {/aadhaar/i.test(d.name) && (
+                      <button
+                        onClick={() => window.open("https://myaadhaar.uidai.gov.in", "uidai_popup", "width=900,height=700,noopener,noreferrer")}
+                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                      >
+                        ↗ Download Aadhaar (opens UIDAI)
+                      </button>
+                    )}
+                    {/pcc/i.test(d.name) && app.pcc_no && (
+                      <button
+                        onClick={() => setPccCheckApp(app)}
+                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1 block"
+                      >
+                        ↗ Download PCC Certificate
+                      </button>
+                    )}
+                    <DocumentRow doc={d} applicationId={app.id} onChanged={onDocsChanged} />
+                  </div>
+                ))}
+            </Card>
+
+            {app.services?.chat_in_app && (
+              <Card title="Chat">
+                <div className="h-80 -mx-5 -mb-5 border-t border-slate-200 dark:border-slate-800 overflow-hidden rounded-b-xl">
+                  <ChatPanel
+                    dealerId={app.dealer_id}
+                    applicationId={app.id}
+                    identity={staffIdentity}
+                    emptyLabel="No messages on this application yet."
+                  />
+                </div>
+              </Card>
+            )}
+          </div>
+
+          {/* Column 3: fee details, history, update status */}
+          <div>
+            <Card title="Fee Details" className="mb-4">
+              <div className="grid grid-cols-2 gap-y-1.5 text-sm">
+                <span className="text-slate-400 dark:text-slate-500">Amount (charged)</span>
+                <span className="text-slate-800 dark:text-slate-100 font-medium">{fee(app.amount)}</span>
+                <span className="text-slate-400 dark:text-slate-500">Fee</span>
+                <span className="text-slate-700 dark:text-slate-200">{fee(app.rto_fee)}</span>
+                <span className="text-slate-400 dark:text-slate-500">PCC Fee</span>
+                <span className="text-slate-700 dark:text-slate-200">{fee(app.pcc_fee)}</span>
+                <span className="text-slate-400 dark:text-slate-500">Agency Fee</span>
+                <span className="text-slate-700 dark:text-slate-200">{fee(app.agency_fee)}</span>
+                <span className="text-slate-500 dark:text-slate-400 font-semibold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1">Profit</span>
+                <span className={`font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1 ${profit < 0 ? "text-rose-600" : "text-emerald-600"}`}>{fee(profit)}</span>
+              </div>
+            </Card>
+
+            <Card title="Application History" className="mb-4">
+              <EntryLog app={app} />
+              {(app.history || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No history yet</p>}
+              {(app.history || []).map((h) => (
+                <div key={h.id} className="text-xs text-slate-500 dark:text-slate-500 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">{h.status}</span> — {new Date(h.changed_at).toLocaleString()}
+                  {h.remarks && <div className="text-slate-400 dark:text-slate-500 mt-0.5">{h.remarks}</div>}
+                </div>
+              ))}
+            </Card>
+
+            <Card title="Update Status">
+              {showForwardActions || showReject ? (
+                <Field label="Remarks (shown to dealer)">
+                  <Input
+                    as="textarea"
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="Reject karte waqt reason yahan likhein (Accept / Hold ke liye zaroori nahi)"
+                  />
+                </Field>
+              ) : (
+                <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+                  Accepted — status ab Application No. / PCC No. / Learning No. bharte hi khud-ba-khud aage badhega.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {showForwardActions && (
+                  <>
+                    <PrimaryButton
+                      disabled={!canApprove || statusChanging}
+                      onClick={() => handleStatusChange("Accepted", remarks)}
+                      className="!bg-emerald-600 hover:!bg-emerald-700"
+                      title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
+                    >
+                      Accept
+                    </PrimaryButton>
+                    {app.status !== "On Hold" && (
+                      <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                    )}
+                  </>
+                )}
+                {showReject && (
+                  <DangerButton disabled={statusChanging} onClick={handleReject}>Reject</DangerButton>
+                )}
+                <DangerButton
+                  onClick={() => onDelete(app)}
+                  className="!bg-transparent !text-rose-600 border border-rose-300 hover:!bg-rose-50 dark:hover:!bg-rose-950"
+                  title={`Delete application ${app.draft_code}`}
+                >
+                  🗑 Delete Application
+                </DangerButton>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </Modal>
+      {pccCheckApp && (
+        <PCCStatusCheckModal row={pccCheckApp} onClose={() => setPccCheckApp(null)} />
+      )}
+      {showPccLetter && (
+        <PCCLetterModal app={app} onClose={() => setShowPccLetter(false)} />
+      )}
+      {QuickRemarkModal}
+      </>
+    );
+  }
+
   // mode === "customer": edit only customer-related details
   return (
     <>
-    <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="md">
+    <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="wide">
       <div>
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 dark:text-slate-500 mb-4 -mt-1">
-          {!restricted && <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>}
+          <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
         </div>
+        {QuickActionBar}
         <Card title="Applicant Details" className="mb-4">
-          <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
-          <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
-          <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")} /></Field>
-          <Field label="Mobile">
-            <div className="flex items-center gap-2">
-              <Input value={applicant.mobile} onChange={setApplicantField("mobile")} />
-              {applicant.mobile && (
-                <a
-                  href={`tel:${applicant.mobile}`}
-                  title={`Call ${applicant.mobile}`}
-                  className="shrink-0 w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center hover:bg-emerald-100"
-                >
-                  <Phone size={14} />
-                </a>
-              )}
-            </div>
-          </Field>
-          <Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field>
+          <div className="grid grid-cols-2 gap-x-4">
+            <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
+            <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
+            <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
+              className={ageHighlightClass(ddmmyyyyToISO(applicant.date_of_birth)) ? "border-amber-400" : ""} /></Field>
+            <Field label="Mobile">
+              <div className="flex items-center gap-2">
+                <Input value={applicant.mobile} onChange={setApplicantField("mobile")} />
+                {applicant.mobile && (
+                  <a
+                    href={`tel:${applicant.mobile}`}
+                    title={`Call ${applicant.mobile}`}
+                    className="shrink-0 w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center hover:bg-emerald-100"
+                  >
+                    <Phone size={14} />
+                  </a>
+                )}
+              </div>
+            </Field>
+            <div className="col-span-2"><Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field></div>
+            {app.services?.pcc_required && (
+              <>
+                <Field label="Police Station">
+                  <SearchableSelect
+                    value={applicant.police_station}
+                    options={DELHI_POLICE_STATIONS.map((name) => ({ id: name, name }))}
+                    onChange={(name) => setApplicant((s) => ({ ...s, police_station: name }))}
+                    placeholder="Search police station…"
+                  />
+                </Field>
+                <Field label="Staying at Address Since"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.stay_since} onChange={setApplicantField("stay_since")} /></Field>
+              </>
+            )}
+          </div>
           <PrimaryButton disabled={savingApplicant} onClick={saveApplicant}>
             {savingApplicant ? "Saving…" : "Save Applicant Details"}
           </PrimaryButton>
+          {applicantAgeError && <p className="text-rose-500 text-xs mt-2">{applicantAgeError}</p>}
         </Card>
 
         <Card title="Service Answers" className="mb-4">
@@ -2156,20 +3894,47 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </Card>
 
         <Card title="Documents">
+          {app.services?.pcc_required && (
+            <button
+              onClick={() => setShowPccLetter(true)}
+              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 block"
+            >
+              📄 Generate PCC Request Letter
+            </button>
+          )}
           {(app.docs || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No documents uploaded</p>}
           {(app.docs || [])
-            .filter((d) => !d.post_approval || app.status === "Accepted" || app.status === "Completed")
+            .filter((d) => !d.post_approval || app.status === "Accepted")
             .map((d) => (
               <div key={d.id}>
                 {/learn/i.test(d.name) && app.application_no && (
                   <button
-                    onClick={() => window.open(
-                      `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
-                      "sarathi_popup", "width=900,height=700,noopener,noreferrer"
-                    )}
+                    onClick={async () => {
+                      const learnerNo = getLearnerNo(app.service_answers);
+                      if (learnerNo) {
+                        try {
+                          await navigator.clipboard.writeText(learnerNo);
+                          setToast("Learner No copied: " + learnerNo);
+                        } catch {
+                          // clipboard may be blocked; ignore silently
+                        }
+                      }
+                      window.open(
+                        `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                        "_blank", "noopener,noreferrer"
+                      );
+                    }}
                     className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
                   >
                     ↗ Download Learning (opens Sarathi)
+                  </button>
+                )}
+                {/aadhaar/i.test(d.name) && (
+                  <button
+                    onClick={() => window.open("https://myaadhaar.uidai.gov.in", "uidai_popup", "width=900,height=700,noopener,noreferrer")}
+                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-1"
+                  >
+                    ↗ Download Aadhaar (opens UIDAI)
                   </button>
                 )}
                 {/pcc/i.test(d.name) && app.pcc_no && (
@@ -2202,6 +3967,10 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     {pccCheckApp && (
       <PCCStatusCheckModal row={pccCheckApp} onClose={() => setPccCheckApp(null)} />
     )}
+    {showPccLetter && (
+      <PCCLetterModal app={app} onClose={() => setShowPccLetter(false)} />
+    )}
+    {QuickRemarkModal}
     </>
   );
 }
@@ -2212,8 +3981,10 @@ const DOC_STATUS_STYLES = {
   Rejected: "bg-rose-50 text-rose-700",
 };
 
-function DocumentRow({ doc, onChanged }) {
+function DocumentRow({ doc, applicationId, onChanged }) {
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
 
   const setStatus = async (status) => {
     let reject_reason = doc.reject_reason;
@@ -2231,10 +4002,58 @@ function DocumentRow({ doc, onChanged }) {
     onChanged?.();
   };
 
+  // Same bucket + path convention as the dealer portal's own upload (see
+  // DealerPortal.jsx's `upload`), so a file uploaded from either side lands
+  // in the same place and neither side has to guess at the other's layout.
+  // Lets staff/admin upload directly here too — e.g. the Learning Licence
+  // PDF just downloaded from the Sarathi popup above — instead of only
+  // being able to Verify/Reject whatever the dealer already sent.
+  const uploadFile = async (file) => {
+    if (!file || !applicationId) return;
+    setUploading(true);
+    setUploadError("");
+    const path = `${applicationId}/${doc.id}-${file.name}`;
+    const { error: uploadErr } = await supabase
+      .storage
+      .from("application-documents")
+      .upload(path, file, { upsert: true });
+    if (uploadErr) {
+      setUploading(false);
+      setUploadError("Upload failed: " + uploadErr.message);
+      return;
+    }
+    const { data: urlData } = supabase.storage.from("application-documents").getPublicUrl(path);
+    const { error: updateErr } = await supabase
+      .from("application_documents")
+      .update({ file_url: urlData.publicUrl, status: "Pending", reject_reason: null })
+      .eq("id", doc.id);
+    setUploading(false);
+    if (updateErr) {
+      setUploadError("Saved file but failed to update record: " + updateErr.message);
+      return;
+    }
+    onChanged?.();
+  };
+
   return (
     <div className="py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
       <div className="flex items-center justify-between text-sm">
-        <span className="text-slate-700 dark:text-slate-300">{doc.name}</span>
+        <div className="flex items-center gap-2">
+          {doc.file_url ? (
+            /\.(png|jpe?g|gif|webp|bmp)$/i.test(doc.file_url) ? (
+              <img
+                src={doc.file_url}
+                alt={doc.name}
+                className="w-10 h-10 rounded border border-slate-200 dark:border-slate-800 object-cover shrink-0"
+              />
+            ) : (
+              <span className="w-10 h-10 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-center text-[9px] font-semibold text-slate-400 dark:text-slate-500 shrink-0">
+                FILE
+              </span>
+            )
+          ) : null}
+          <span className="text-slate-700 dark:text-slate-300">{doc.name}</span>
+        </div>
         <div className="flex items-center gap-2">
           {doc.file_url ? (
             <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-blue-600 text-xs font-semibold">View</a>
@@ -2246,14 +4065,30 @@ function DocumentRow({ doc, onChanged }) {
           </span>
         </div>
       </div>
-      {doc.file_url && doc.status !== "Verified" && doc.status !== "Rejected" && (
+      {doc.file_url && doc.status !== "Rejected" && (
         <div className="flex gap-2 mt-1.5">
-          <button disabled={busy} onClick={() => setStatus("Verified")} className="text-xs font-semibold text-emerald-600 disabled:opacity-50">Verify</button>
+          {/* Verify is only needed for a doc still sitting at Pending (e.g.
+              one staff uploaded themselves) — a dealer's own upload is
+              already auto-verified. Reject stays available even once
+              Verified, since an auto-verified doc can still turn out to be
+              wrong and needs to be catchable. */}
+          {doc.status !== "Verified" && (
+            <button disabled={busy} onClick={() => setStatus("Verified")} className="text-xs font-semibold text-emerald-600 disabled:opacity-50">Verify</button>
+          )}
           <button disabled={busy} onClick={() => setStatus("Rejected")} className="text-xs font-semibold text-rose-500 disabled:opacity-50">Reject</button>
         </div>
       )}
       {doc.status === "Rejected" && doc.reject_reason && (
         <p className="text-xs text-rose-500 mt-1">Reason: {doc.reject_reason}</p>
+      )}
+      {/* Verified docs are locked to avoid an accidental overwrite of an
+          already-approved file — Reject it first (above) if it genuinely
+          needs replacing. */}
+      {doc.status !== "Verified" && (
+        <div className="mt-2">
+          <DocUploadDropzone busy={uploading} onFile={uploadFile} />
+          {uploadError && <p className="text-rose-500 text-xs mt-1">{uploadError}</p>}
+        </div>
       )}
     </div>
   );
@@ -2266,4 +4101,19 @@ function DocumentRow({ doc, onChanged }) {
 // App.jsx so it's a distinct, bookmarkable view rather than a toggle.
 export function StaffApplications({ canEdit = true, canApprove = true, staff } = {}) {
   return <Applications restricted canEdit={canEdit} canApprove={canApprove} staff={staff} />;
+}
+
+// Same restricted column set as StaffApplications above, but locked to
+// Draft Submitted only — the staff-view counterpart to admin's
+// DraftApplications tab below. Wired up as its own nav tab in App.jsx,
+// right after "Applications" (Staff View).
+export function StaffDraftApplications({ canEdit = true, canApprove = true, staff } = {}) {
+  return <Applications restricted onlyDraft canEdit={canEdit} canApprove={canApprove} staff={staff} />;
+}
+
+// Locked to Draft Submitted applications only — no tab switcher, so this is
+// a dedicated "inbox" of everything still waiting on a first look. Wired up
+// as its own nav tab in App.jsx, sitting between Applications and Call/Chat.
+export function DraftApplications({ canEdit = true, canApprove = true, staff } = {}) {
+  return <Applications onlyDraft canEdit={canEdit} canApprove={canApprove} staff={staff} />;
 }

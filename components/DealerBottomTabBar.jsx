@@ -6,10 +6,11 @@
 // phone gets one-tap icon buttons instead of the horizontal pill row
 // (which still shows as-is on tablet/desktop, where there's room for it).
 import React from "react";
-import { FileOutput, MessageSquare, BookOpen, Receipt, Users, ClipboardList } from "lucide-react";
+import { FileOutput, MessageSquare, BookOpen, Receipt, Users, ClipboardList, ShieldCheck } from "lucide-react";
 
 const ICONS = {
   Applications: FileOutput,
+  "PCC Status": ShieldCheck,
   "Call/Chat": MessageSquare,
   Ledger: BookOpen,
   Service: ClipboardList,
@@ -20,7 +21,7 @@ const ICONS = {
 export default function DealerBottomTabBar({ tabs, active, onNavigate, unreadChats = 0 }) {
   return (
     <nav
-      className="no-print md:hidden fixed bottom-0 inset-x-0 z-40 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex"
+      className="no-print fixed bottom-0 inset-x-0 z-40 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {tabs.map((t) => {

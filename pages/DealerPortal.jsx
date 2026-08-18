@@ -13,7 +13,8 @@ import CallLogPanel from "../components/CallLogPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { getOrCreateThread, sendMessage, countDealerUnread } from "../lib/chat";
+import { getOrCreateThread, sendMessage, countDealerUnread, listRecentThreadsForDealer } from "../lib/chat";
+import { loadSeenMap, markThreadSeen, isThreadSeen } from "../lib/threadSeen";
 import { notify } from "../lib/notify";
 import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
@@ -23,12 +24,13 @@ import { scanAadhaarImage } from "../lib/aadhaarOcr";
 import { useDarkMode } from "../lib/theme";
 import { Sun, Moon, Fingerprint, Download, Phone, ScanLine, ScanText, Gamepad2 } from "lucide-react";
 import SearchableSelect from "../components/SearchableSelect";
+import QrPaymentPanel from "../components/QrPaymentPanel";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
 import PastelAvatar from "../components/PastelAvatar";
-import { Search } from "lucide-react";
+import { Search, Users } from "lucide-react";
 // (Ledger's description-parsing helpers are gone — dealer_ledger already
 // carries ledger_type / display_name as real columns, so nothing needs
 // importing from Ledger.jsx anymore.)
@@ -43,7 +45,7 @@ import { Browser } from "@capacitor/browser";
 // Android app's own assets at build time, so a self-hosted APK there ends
 // up bundled INSIDE the app itself, ballooning its size with every build
 // (this is what caused the app to balloon to ~100MB+ before).
-const APK_PATH = "https://github.com/gabbarserver-crypto/SHARMAJIKAOFFICE/releases/latest/download/sjo-app.apk";
+const APK_PATH = "https://github.com/gabbarserver-crypto/one-infinity/releases/latest/download/app-1infinity.apk";
 
 // 1 Infinity Games — same standalone games site linked from the staff Dashboard
 // (see src/pages/Dashboard.jsx), handing off the current Supabase session
@@ -69,7 +71,11 @@ const openGames = async () => {
   window.open(url, "_blank", "noopener,noreferrer");
 };
 
-const TABS = ["Applications", "Call/Chat", "Ledger", "Service", "Payments"];
+// "Service" and "Payments" used to be their own top-level tabs — they're
+// now folded into "Ledger" as an in-page sub-tab strip (My Ledger / Service
+// / Payments), so the bottom nav / sidebar only need to list "Ledger".
+const TABS = ["Applications", "PCC Status", "Call/Chat", "Ledger"];
+const LEDGER_SUBTABS = ["My Ledger", "Service", "Payments"];
 
 // Small reusable sortable <th> — click toggles asc/desc on that column,
 // clicking a different column switches to it (asc first). Shared by the
@@ -95,14 +101,17 @@ function SortableTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "lef
 // straight from the "Our Team" directory on the Call/Chat tab.
 export default function DealerPortal({ dealer, identity, call, onLogout }) {
   const [tab, setTab] = useState("Applications");
+  // Which of the three Ledger sub-views ("My Ledger" / "Service" /
+  // "Payments") is showing — see LEDGER_SUBTABS above.
+  const [ledgerSubTab, setLedgerSubTab] = useState("My Ledger");
   const [showNew, setShowNew] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [toast, setToast] = useState(null);
   const [docsForApp, setDocsForApp] = useState(null); // { id, applicant_name } | null
   const [chatApp, setChatApp] = useState(null); // { id, label } | null
   const [unreadChats, setUnreadChats] = useState(0);
-  const [showTopUp, setShowTopUp] = useState(false);
   const [runningBalance, setRunningBalance] = useState(null);
+  const [showQr, setShowQr] = useState(false);
   // Ref into the shared CommsWindow (Recent Chats/Recent Calls/New Call/
   // Customer Chat) so the mobile bottom tab bar can open it directly —
   // see DealerBottomTabBar's "Call/Chat" handling below.
@@ -129,7 +138,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
 
   const refreshUnreadChats = useCallback(async () => {
     try {
-      setUnreadChats(await countDealerUnread(dealer.id));
+      setUnreadChats(await countDealerUnread(dealer.id, identity));
     } catch {
       // Best-effort — a failed badge refresh just leaves the last-known count.
     }
@@ -158,8 +167,11 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         });
       })
       .subscribe();
+    const onThreadSeen = () => refreshUnreadChats();
+    window.addEventListener("sjo:thread-seen", onThreadSeen);
     return () => {
       clearInterval(interval);
+      window.removeEventListener("sjo:thread-seen", onThreadSeen);
       supabase.removeChannel(channel);
     };
   }, [refreshUnreadChats]);
@@ -230,9 +242,16 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950">
-      <header className="bg-[#0f1b3d] text-white px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+    <div className="dealer-portal min-h-screen w-full max-w-full min-w-0 overflow-x-hidden bg-slate-100 dark:bg-slate-950">
+      <div className="flex-1 w-full max-w-full min-w-0 flex flex-col">
+      {/* Dealer Portal is mobile-only now — no desktop sidebar/breakpoint
+          switch, always this compact header + DealerBottomTabBar below.
+          flex-wrap + min-w-0/truncate keep this from ever forcing the page
+          wider than the viewport (which was cutting off the cards/button
+          below it) — the icon row simply wraps to its own line if the
+          dealer name eats into the available width. */}
+      <header className="bg-[#0f1b3d] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex items-center gap-3 min-w-0 flex-1 basis-0">
           <input
             type="file"
             accept="image/*"
@@ -255,51 +274,51 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
               {uploadingPhoto ? "…" : "Edit"}
             </span>
           </button>
-          <div>
-            <p className="font-bold text-lg">{dealer.name}</p>
-            <p className="text-slate-300 text-xs">
+          <div className="min-w-0 flex-1">
+            <p className="font-bold text-lg truncate">{dealer.name}</p>
+            <p className="text-slate-300 text-xs truncate">
               Dealer Portal · Code {dealer.code}
               {identity?.type === "dealer_staff" ? ` · ${identity.name}` : (dealer.contact_name ? ` · ${dealer.contact_name}` : "")}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 shrink-0">
           <a
             href={APK_PATH}
             download
             title="Download Android App"
             aria-label="Download Android App"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            <Download size={16} />
+            <Download size={15} />
           </a>
           <button
             onClick={openGames}
             title="1 Infinity Games"
             aria-label="1 Infinity Games"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            <Gamepad2 size={16} />
+            <Gamepad2 size={15} />
           </button>
           <button
             onClick={setUpPasskey}
             title="Set up Fingerprint / Face ID login on this device"
             aria-label="Set up fingerprint login"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            <Fingerprint size={16} />
+            <Fingerprint size={15} />
           </button>
           <button
             onClick={toggleDark}
             title={dark ? "Switch to light mode" : "Switch to dark mode"}
             aria-label="Toggle dark mode"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-slate-200"
           >
-            {dark ? <Sun size={16} /> : <Moon size={16} />}
+            {dark ? <Sun size={15} /> : <Moon size={15} />}
           </button>
           <button
             onClick={onLogout}
-            className="text-sm font-semibold bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg"
+            className="shrink-0 text-xs font-semibold bg-white/10 hover:bg-white/20 px-3 py-2 rounded-lg"
           >
             Logout
           </button>
@@ -312,55 +331,34 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
       )}
 
-      <main className="max-w-5xl mx-auto p-6 pb-24 md:pb-6">
+      <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto box-border p-6 pb-24">
         {(tab === "Applications" || tab === "Ledger") && (
-          <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
-              <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Wallet Balance</h3>
-              <div className="flex items-center justify-between gap-1">
-                <p className="text-sm sm:text-2xl font-bold text-emerald-600 truncate">
-                  ₹{Number(dealer.wallet_balance || 0).toLocaleString("en-IN")}
-                </p>
-                <GhostButton onClick={() => setShowTopUp(true)} className="!px-2 !py-1 !text-[10px] sm:!text-sm shrink-0">
-                  Top Up
-                </GhostButton>
-              </div>
-            </div>
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
+          <div className="w-full min-w-0 grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 mb-6">
+            <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
               <p className={`text-sm sm:text-2xl font-bold truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
                 {runningBalance === null ? "…" : `₹${runningBalance.toLocaleString("en-IN")}`}
               </p>
             </div>
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
+            <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Credit Limit</h3>
               <p className="text-sm sm:text-2xl font-bold text-slate-800 dark:text-slate-100 truncate">
                 ₹{Number(dealer.credit_limit || 0).toLocaleString("en-IN")}
               </p>
             </div>
+            <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5 flex flex-col justify-between">
+              <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Pay by QR</h3>
+              <GhostButton onClick={() => setShowQr(true)} className="!text-[10px] sm:!text-sm w-full justify-center">
+                Pay by QR
+              </GhostButton>
+            </div>
           </div>
         )}
 
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
-          <div className="hidden md:flex flex-wrap gap-2">
-            {visibleTabs.map((t) => (
-              <button
-                key={t}
-                onClick={() => { setTab(t); if (t === "Call/Chat") refreshUnreadChats(); }}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5 ${
-                  tab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-                }`}
-              >
-                {t}
-                {t === "Call/Chat" && unreadChats > 0 && (
-                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-                    {unreadChats}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-          <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center">+ New Application</PrimaryButton>
+        <div className="w-full min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+          {tab === "Applications" && (
+            <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto min-w-0 justify-center whitespace-nowrap">+ New Application</PrimaryButton>
+          )}
         </div>
 
         {tab === "Applications" && (
@@ -371,17 +369,38 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
             onChat={(app) => setChatApp({ id: app.id, label: `${app.draft_code} — ${app.applicant_name}` })}
           />
         )}
+        {tab === "PCC Status" && <DealerPccStatus dealerId={dealer.id} refreshKey={refreshKey} />}
         {tab === "Call/Chat" && (
           <div className="space-y-5">
             <StaffDirectory call={call} />
             <DealerChats dealerId={dealer.id} identity={identity} onMessage={refreshUnreadChats} />
           </div>
         )}
-        {tab === "Ledger" && <DealerLedger dealerId={dealer.id} />}
-        {tab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
-        {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} />}
+        {tab === "Ledger" && (
+          <>
+            <div className="flex items-center gap-1 mb-5 border-b border-slate-200 dark:border-slate-800">
+              {LEDGER_SUBTABS.map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setLedgerSubTab(st)}
+                  className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+                    ledgerSubTab === st
+                      ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                      : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                  }`}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+            {ledgerSubTab === "My Ledger" && <DealerLedger dealerId={dealer.id} refreshKey={refreshKey} />}
+            {ledgerSubTab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
+            {ledgerSubTab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} refreshKey={refreshKey} />}
+          </>
+        )}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
+      </div>
 
       {showNew && (
         <NewApplicationModal
@@ -416,9 +435,19 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         />
       )}
 
-      {showTopUp && <TopUpModal dealer={dealer} onClose={() => setShowTopUp(false)} />}
-
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+
+      {showQr && (
+        <QrPaymentPanel
+          dealerId={dealer.id}
+          onClose={() => setShowQr(false)}
+          onPaid={() => {
+            setRefreshKey((k) => k + 1);
+            setTab("Ledger");
+            setLedgerSubTab("Payments");
+          }}
+        />
+      )}
 
       <CommsWindow ref={commsRef} variant="dealer" dealerId={dealer.id} dealerName={dealer.name} identity={identity} call={call} />
 
@@ -692,10 +721,22 @@ const DEALER_STATUS_GROUPS = {
   Approved: (s) => s === "Accepted",
 };
 
+// Same categories/colors as PCC_STATUS_STYLES in Applications.jsx (admin
+// side) — kept as a separate copy here since dealer's table is read-only
+// and doesn't need the rest of that file's editing machinery.
+const PCC_STATUS_STYLES = {
+  "Under Verification": "bg-yellow-50 text-yellow-800 border-yellow-300",
+  "Certificate Issued": "bg-green-50 text-green-700 border-green-300",
+  Rejected: "bg-red-50 text-red-700 border-red-300",
+  "Police Case": "bg-orange-50 text-orange-700 border-orange-300",
+};
+
 function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState("All");
+  // Opens on "Draft" by default (dealer's most actionable bucket — apps
+  // still needing documents/submission) instead of "All".
+  const [statusFilter, setStatusFilter] = useState("Draft");
   const [search, setSearch] = useState("");
   const [serviceList, setServiceList] = useState([]);
   const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null
@@ -721,7 +762,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
     setLoading(true);
     const { data, error } = await supabase
       .from("applications")
-      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, pcc_status, pcc_stage, pcc_timeline, pcc_certificate_path, pcc_last_synced_at, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days)")
+      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, pcc_status, pcc_stage, pcc_timeline, pcc_certificate_path, pcc_last_synced_at, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days, pcc_required)")
       .eq("dealer_id", dealerId)
       .order("submitted_at", { ascending: false });
     if (error) {
@@ -784,7 +825,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   };
 
   return (
-    <Card title="My Applications">
+    <Card title="My Applications" className="w-full min-w-0">
       <div className="flex items-center justify-between -mt-1 mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           {["All", "Draft", "Process", "Approved"].map((f) => (
@@ -827,14 +868,16 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
       {loading ? (
         <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        <div className="dealer-scroll-x w-full min-w-0">
+          <table className="scroll-table w-max min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <SortableTh label="Ref No." sortKeyName="ref" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Applicant" sortKeyName="applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Submitted" sortKeyName="submitted_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Service" sortKeyName="service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th className="text-left font-medium px-3 py-2">PCC No</th>
+                <th className="text-left font-medium px-3 py-2">PCC Status</th>
                 <th className="text-left font-medium px-3 py-2">Mobile</th>
                 <SortableTh label="Status" sortKeyName="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="text-left font-medium px-3 py-2">Chat</th>
@@ -865,6 +908,35 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
                     {r.services?.short_name || r.services?.parent_service || "—"}
                   </td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                    {r.services?.pcc_required ? (r.pcc_no || "—") : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {r.services?.pcc_required ? (
+                      <div className="flex items-center gap-1.5">
+                        {r.pcc_status ? (
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${PCC_STATUS_STYLES[r.pcc_status] || "bg-slate-50 text-slate-500 border-slate-300"}`}>
+                            {r.pcc_status}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300 text-xs">—</span>
+                        )}
+                        {r.pcc_certificate_path && (
+                          <a
+                            href={supabase.storage.from("application-documents").getPublicUrl(r.pcc_certificate_path).data.publicUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Download the PCC certificate"
+                            className="text-emerald-600 hover:text-emerald-700"
+                          >
+                            📄
+                          </a>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-slate-300 text-xs">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.mobile || "—"}</td>
                   <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
                   <td className="px-3 py-2">
@@ -894,7 +966,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
                 </tr>
               ))}
               {visibleRows.length === 0 && (
-                <tr><td colSpan={8} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
+                <tr><td colSpan={10} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
               )}
             </tbody>
           </table>
@@ -931,6 +1003,120 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
         </Modal>
       )}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+    </Card>
+  );
+}
+
+// Read-only PCC tracker — its own tab so a dealer can see every PCC-bearing
+// application's stage without digging through the main Applications table.
+// Deliberately has NO editing controls anywhere (no PCCNoPopup, no status
+// dropdown, nothing clickable to change pcc_status/pcc_no) — staff manage
+// that from the admin Applications page; this tab is view-only for dealers.
+function DealerPccStatus({ dealerId, refreshKey = 0 }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("applications")
+        .select("id, draft_code, application_no, applicant_name, submitted_at, pcc_no, pcc_status, pcc_certificate_path, services(parent_service, short_name, pcc_required)")
+        .eq("dealer_id", dealerId)
+        .order("submitted_at", { ascending: false });
+      if (error) {
+        console.error("Couldn't load PCC status:", error.message);
+        setLoadError(error.message);
+        setLoading(false);
+        return;
+      }
+      setLoadError(null);
+      setRows((data || []).filter((r) => r.services?.pcc_required));
+      setLoading(false);
+    })();
+    // refreshKey bumps after a QR payment or new application, matching the
+    // same reload trigger the other tabs use — harmless here, keeps this
+    // tab from ever showing stale data if a new PCC-requiring application
+    // lands while the dealer's on this tab.
+  }, [dealerId, refreshKey]);
+
+  const q = search.trim().toLowerCase();
+  const visibleRows = !q ? rows : rows.filter((r) =>
+    [r.applicant_name, r.pcc_no, r.application_no, r.draft_code].some((v) => (v || "").toLowerCase().includes(q))
+  );
+
+  return (
+    <Card title="PCC Status">
+      <div className="relative mb-3 max-w-sm">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search name, PCC no, application no…"
+          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+        />
+      </div>
+      {loading ? (
+        <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
+      ) : loadError ? (
+        <p className="text-center text-rose-600 py-8">Couldn't load PCC status — please refresh and try again.</p>
+      ) : visibleRows.length === 0 ? (
+        <p className="text-center text-slate-400 dark:text-slate-500 py-8">No PCC-requiring applications yet</p>
+      ) : (
+        <div className="dealer-scroll-x w-full min-w-0">
+          <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
+              <tr>
+                <th className="text-left font-medium px-3 py-2">Date</th>
+                <th className="text-left font-medium px-3 py-2">Applicant</th>
+                <th className="text-left font-medium px-3 py-2">Service</th>
+                <th className="text-left font-medium px-3 py-2">PCC No</th>
+                <th className="text-left font-medium px-3 py-2">Status</th>
+                <th className="text-left font-medium px-3 py-2">Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((r) => (
+                <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500 whitespace-nowrap">
+                    {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.applicant_name || "—"}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                    {r.services?.short_name || r.services?.parent_service || "—"}
+                  </td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.pcc_no || "—"}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {r.pcc_status ? (
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${PCC_STATUS_STYLES[r.pcc_status] || "bg-slate-50 text-slate-500 border-slate-300"}`}>
+                        {r.pcc_status}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {r.pcc_certificate_path ? (
+                      <a
+                        href={supabase.storage.from("application-documents").getPublicUrl(r.pcc_certificate_path).data.publicUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-emerald-600 hover:text-emerald-700 font-semibold text-xs"
+                      >
+                        📄 Download
+                      </a>
+                    ) : (
+                      <span className="text-slate-300 text-xs">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   );
 }
@@ -1107,6 +1293,12 @@ function ApplicationDocsModal({ application, onUploaded, onClose }) {
         )}
         {application.address && (
           <p className="text-xs text-slate-400 dark:text-slate-500">Address: {application.address}</p>
+        )}
+        {application.ll_dl_no && (
+          <p className="text-xs text-slate-400 dark:text-slate-500">Learning/DL No: {application.ll_dl_no}</p>
+        )}
+        {application.pcc_no && (
+          <p className="text-xs text-slate-400 dark:text-slate-500">PCC No: {application.pcc_no}</p>
         )}
       </div>
       {loading ? (
@@ -1356,52 +1548,14 @@ function DealerChats({ dealerId, identity, onMessage }) {
   const [error, setError] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState(null);
   const [query, setQuery] = useState("");
+  const [seenMap, setSeenMap] = useState(() => loadSeenMap(identity));
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const { data: threadRows, error: threadsError } = await supabase
-        .from("chat_threads")
-        .select("id, application_id, applications(draft_code, application_no, applicant_name)")
-        .eq("dealer_id", dealerId);
-      if (threadsError) throw threadsError;
-
-      const threadIds = (threadRows || []).map((t) => t.id);
-      let latestByThread = {};
-      if (threadIds.length) {
-        const { data: messages, error: messagesError } = await supabase
-          .from("chat_messages")
-          .select("thread_id, sender_type, body, created_at")
-          .in("thread_id", threadIds)
-          .order("created_at", { ascending: false });
-        if (messagesError) throw messagesError;
-        for (const m of messages || []) {
-          if (!latestByThread[m.thread_id]) latestByThread[m.thread_id] = m;
-        }
-      }
-
-      const enriched = (threadRows || [])
-        .map((t) => {
-          const latest = latestByThread[t.id];
-          return {
-            threadId: t.id,
-            applicationId: t.application_id,
-            label: t.application_id
-              ? `${t.applications?.application_no || t.applications?.draft_code || "—"} — ${t.applications?.applicant_name || "—"}`
-              : "General",
-            lastMessage: latest?.body || null,
-            lastAt: latest?.created_at || null,
-            awaitingReply: latest ? latest.sender_type === "staff" : false,
-          };
-        })
-        .sort((a, b) => {
-          // General thread first, then most recently active.
-          if (!a.applicationId !== !b.applicationId) return a.applicationId ? 1 : -1;
-          return new Date(b.lastAt || 0) - new Date(a.lastAt || 0);
-        });
-
-      setThreads(enriched);
+      const rows = await listRecentThreadsForDealer(dealerId, 60);
+      setThreads(rows);
     } catch (e) {
       setError(e.message || "Couldn't load chats");
     } finally {
@@ -1412,6 +1566,21 @@ function DealerChats({ dealerId, identity, onMessage }) {
   useEffect(() => { load(); }, [load]);
 
   const selected = threads.find((t) => t.threadId === selectedThreadId) || null;
+
+  const selectThread = (t) => {
+    setSelectedThreadId(t.threadId);
+    setSeenMap(markThreadSeen(identity, t.threadId));
+  };
+
+  useEffect(() => {
+    const onThreadSeen = (event) => {
+      const currentKey = identity ? `${identity.type || "unknown"}:${identity.id || "unknown"}` : "anon";
+      if (event?.detail?.identityKey && event.detail.identityKey !== currentKey) return;
+      setSeenMap(loadSeenMap(identity));
+    };
+    window.addEventListener("sjo:thread-seen", onThreadSeen);
+    return () => window.removeEventListener("sjo:thread-seen", onThreadSeen);
+  }, [identity?.type, identity?.id]);
 
   const handleMessage = () => {
     load();
@@ -1449,27 +1618,47 @@ function DealerChats({ dealerId, identity, onMessage }) {
                 {query.trim() ? "No matching chats." : "No conversations yet."}
               </p>
             ) : (
-              filtered.map((t) => (
-                <button
-                  key={t.threadId}
-                  onClick={() => setSelectedThreadId(t.threadId)}
-                  className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3 ${
-                    selectedThreadId === t.threadId ? "bg-slate-50 dark:bg-slate-800/60" : ""
-                  }`}
-                >
-                  <PastelAvatar name={t.label} size={40} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{t.label}</span>
-                      {t.lastAt && <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0">{timeAgo(t.lastAt)}</span>}
+              filtered.map((t) => {
+                const isGeneral = !t.applicationId;
+                const unread = t.unreadCount > 0 && !isThreadSeen(seenMap, t.threadId, t.lastAt);
+                return (
+                  <button
+                    key={t.threadId}
+                    onClick={() => selectThread(t)}
+                    className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3 ${
+                      selectedThreadId === t.threadId ? "bg-slate-50 dark:bg-slate-800/60" : ""
+                    }`}
+                  >
+                    <div className="relative shrink-0">
+                      <PastelAvatar name={isGeneral ? "Support Team" : t.label} size={40} />
+                      {isGeneral && (
+                        <span
+                          title="Group chat — you, your staff, and our team"
+                          className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center border-2 border-white dark:border-slate-900"
+                        >
+                          <Users size={9} />
+                        </span>
+                      )}
                     </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                      {t.lastMessage || "No messages yet"}
-                    </p>
-                  </div>
-                  {t.awaitingReply && <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />}
-                </button>
-              ))
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                          {isGeneral ? "Support Team" : t.label}
+                        </span>
+                        {t.lastAt && <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0">{timeAgo(t.lastAt)}</span>}
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {t.lastMessage || "No messages yet"}
+                      </p>
+                    </div>
+                    {unread && (
+                      <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">
+                        {t.unreadCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
@@ -1494,77 +1683,6 @@ function DealerChats({ dealerId, identity, onMessage }) {
         </div>
       </div>
     </Card>
-  );
-}
-
-const TOPUP_AMOUNTS = [10000, 20000];
-
-// Your UPI ID + display name — set these as Vite env vars
-// (VITE_UPI_ID / VITE_UPI_PAYEE_NAME) so they aren't hardcoded here.
-const UPI_ID = import.meta.env.VITE_UPI_ID || "your-upi-id@bank";
-const UPI_PAYEE_NAME = import.meta.env.VITE_UPI_PAYEE_NAME || "SJO Services";
-
-function TopUpModal({ dealer, onClose }) {
-  const [amount, setAmount] = useState(TOPUP_AMOUNTS[0]);
-  const [customAmount, setCustomAmount] = useState("");
-  const [useCustom, setUseCustom] = useState(false);
-
-  const finalAmount = useCustom ? parseFloat(customAmount) || 0 : amount;
-  const note = `Wallet top-up — ${dealer.code}`;
-  const upiLink = finalAmount > 0
-    ? `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_PAYEE_NAME)}&am=${finalAmount}&cu=INR&tn=${encodeURIComponent(note)}`
-    : null;
-  const qrSrc = upiLink
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(upiLink)}`
-    : null;
-
-  return (
-    <Modal title="Top Up Wallet" onClose={onClose}>
-      <Field label="Amount">
-        <div className="grid grid-cols-3 gap-2 mb-2">
-          {TOPUP_AMOUNTS.map((a) => (
-            <button
-              key={a}
-              onClick={() => { setAmount(a); setUseCustom(false); }}
-              className={`py-2 rounded-lg text-sm font-semibold border ${
-                !useCustom && amount === a ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-              }`}
-            >
-              ₹{a.toLocaleString("en-IN")}
-            </button>
-          ))}
-          <button
-            onClick={() => setUseCustom(true)}
-            className={`py-2 rounded-lg text-sm font-semibold border ${
-              useCustom ? "bg-slate-900 text-white border-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-            }`}
-          >
-            Other
-          </button>
-        </div>
-        {useCustom && (
-          <Input type="number" placeholder="Enter amount (₹)" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)} />
-        )}
-      </Field>
-
-      {finalAmount > 0 ? (
-        <div className="text-center py-2">
-          <img src={qrSrc} alt="UPI QR code" className="mx-auto rounded-lg border border-slate-200 dark:border-slate-800" width={220} height={220} />
-          <p className="text-sm text-slate-500 dark:text-slate-500 mt-3">Scan with any UPI app, or tap below on your phone</p>
-          <a
-            href={upiLink}
-            className="inline-block mt-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg"
-          >
-            Pay ₹{finalAmount.toLocaleString("en-IN")} via UPI App
-          </a>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">
-            After paying, your wallet balance will be updated once our team confirms the payment.
-          </p>
-        </div>
-      ) : (
-        <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-4">Enter an amount to generate a payment QR.</p>
-      )}
-    </Modal>
   );
 }
 
@@ -1663,8 +1781,8 @@ function DealerServiceAmounts({ dealerId }) {
       ) : filteredRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No applications yet</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+        <div className="dealer-scroll-x w-full min-w-0">
+          <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <th className="text-left font-medium px-3 py-2">Date</th>
@@ -1706,7 +1824,7 @@ function DealerServiceAmounts({ dealerId }) {
 // what they've paid without SERVICE charge rows mixed in. Running Balance
 // shown here is still the dealer's real overall balance at that point in
 // time (services + payments combined) — just the row list is filtered.
-function DealerPaymentHistory({ dealerId }) {
+function DealerPaymentHistory({ dealerId, refreshKey = 0 }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -1732,7 +1850,10 @@ function DealerPaymentHistory({ dealerId }) {
       setRows(data || []);
       setLoading(false);
     })();
-  }, [dealerId]);
+    // refreshKey is bumped after a QR payment succeeds (see DealerPortal's
+    // onPaid handler) so this tab picks up the new ledger entry right away
+    // instead of only refetching on next tab switch or page load.
+  }, [dealerId, refreshKey]);
 
   const filteredRows = rows.filter((r) => {
     const d = r.entry_date;
@@ -1775,8 +1896,8 @@ function DealerPaymentHistory({ dealerId }) {
       ) : filteredRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No payments yet</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+        <div className="dealer-scroll-x w-full min-w-0">
+          <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <th className="text-left font-medium px-3 py-2">Date</th>
@@ -1810,7 +1931,7 @@ function DealerPaymentHistory({ dealerId }) {
   );
 }
 
-function DealerLedger({ dealerId }) {
+function DealerLedger({ dealerId, refreshKey = 0 }) {
   const [txns, setTxns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -1851,7 +1972,9 @@ function DealerLedger({ dealerId }) {
       setTxns(data || []);
       setLoading(false);
     })();
-  }, [dealerId]);
+    // refreshKey is bumped after a QR payment succeeds (see DealerPortal's
+    // onPaid handler) so this tab picks up the new ledger entry right away.
+  }, [dealerId, refreshKey]);
 
   // dealer_ledger already carries the service name / payment description
   // as display_name and ledger_type as real columns — no more matching
@@ -2006,7 +2129,7 @@ function DealerLedger({ dealerId }) {
       ) : (
         <div className="space-y-6">
           {displayedGroups.map((group) => (
-            <div key={group.key} className="overflow-x-auto">
+            <div key={group.key} className="dealer-scroll-x w-full min-w-0">
               <div className="flex items-center justify-between mb-1 px-1">
                 <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                   {group.key === "range"
@@ -2018,7 +2141,7 @@ function DealerLedger({ dealerId }) {
                   <span>Closing: <span className="font-semibold text-slate-700 dark:text-slate-300">₹{group.closing.toLocaleString("en-IN")}</span></span>
                 </div>
               </div>
-              <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+              <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
                 <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
                   <tr>
                     <SortableTh label="Date" sortKeyName="created_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />

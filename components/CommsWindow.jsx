@@ -30,7 +30,7 @@ import ChatPanel from "./ChatPanel";
 import PastelAvatar from "./PastelAvatar";
 import { Modal } from "./UI";
 import { listRecentThreadsForStaff, listRecentThreadsForDealer } from "../lib/chat";
-import { loadSeenMap, saveSeenMap, isThreadSeen } from "../lib/threadSeen";
+import { loadSeenMap, markThreadSeen, isThreadSeen } from "../lib/threadSeen";
 import { fetchAllCallLogs, fetchCallLogs } from "../lib/callLog";
 
 function timeAgo(iso) {
@@ -144,12 +144,26 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
         .select("name, short_name, contact_name, mobile, address")
         .eq("id", thread.dealerId)
         .maybeSingle();
+      // A general (non-application) thread is shared by the dealer, every
+      // active sub-staff login of theirs, AND every one of our staff — see
+      // the RLS policy referenced at the top of this file. Surface that
+      // full participant list here instead of just the dealer's own
+      // contact card, so "who's actually in this conversation" is visible.
+      const [{ data: dealerStaffRows }, { data: staffRows }] = await Promise.all([
+        supabase.from("dealer_staff").select("id, full_name").eq("dealer_id", thread.dealerId).eq("active", true).order("full_name"),
+        supabase.from("staff").select("id, full_name, role").order("full_name"),
+      ]);
       setThreadDetail({
         kind: "dealer",
         name: dealer?.short_name || dealer?.name || thread.label,
         phone: dealer?.mobile || null,
         contactName: dealer?.contact_name || null,
         address: dealer?.address || null,
+        members: [
+          { label: dealer?.short_name || dealer?.name || "Dealer", role: "Dealer" },
+          ...(dealerStaffRows || []).map((s) => ({ label: s.full_name, role: "Dealer staff" })),
+          ...(staffRows || []).map((s) => ({ label: s.full_name, role: s.role || "Our team" })),
+        ],
       });
     }
     setThreadDetailLoading(false);
@@ -164,20 +178,27 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
     isOpen: () => open,
   }));
 
-  // Marks a thread as viewed right now, so its unread badge clears — this
-  // is what fixes "I opened it, but it still shows as a new message": the
-  // badge used to be driven purely by "has staff/dealer replied yet", with
-  // nothing tracking whether you'd actually looked. See lib/threadSeen.js.
+  // Marks a thread as viewed right now. The shared helper persists the
+  // timestamp AND emits an event so App.jsx can clear the sidebar badge
+  // immediately.
   const openThread = (thread) => {
     setSelectedThread(thread);
     if (thread?.threadId) {
-      setSeenMap((prev) => {
-        const next = { ...prev, [thread.threadId]: new Date().toISOString() };
-        saveSeenMap(identity, next);
-        return next;
-      });
+      setSeenMap(markThreadSeen(identity, thread.threadId));
     }
   };
+
+  useEffect(() => {
+    const onThreadSeen = (event) => {
+      if (event?.detail?.identityKey && identity) {
+        const currentKey = `${identity.type || "unknown"}:${identity.id || "unknown"}`;
+        if (event.detail.identityKey !== currentKey) return;
+      }
+      setSeenMap(loadSeenMap(identity));
+    };
+    window.addEventListener("sjo:thread-seen", onThreadSeen);
+    return () => window.removeEventListener("sjo:thread-seen", onThreadSeen);
+  }, [identity?.type, identity?.id]);
 
   if (variant === "staff" && !staff) return null;
   if (variant === "dealer" && !dealerId) return null;
@@ -298,7 +319,7 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
       )}
 
       {showThreadDetail && (
-        <Modal title="Details" onClose={() => setShowThreadDetail(false)}>
+        <Modal title={threadDetail?.kind === "dealer" && threadDetail.members?.length > 1 ? "Group Info" : "Details"} onClose={() => setShowThreadDetail(false)}>
           {threadDetailLoading ? (
             <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
           ) : threadDetail ? (
@@ -340,6 +361,23 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
                   </>
                 )}
               </div>
+
+              {threadDetail.kind === "dealer" && threadDetail.members?.length > 0 && (
+                <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+                  <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase mb-2">
+                    Group Members ({threadDetail.members.length})
+                  </p>
+                  <div className="space-y-0">
+                    {threadDetail.members.map((m, i) => (
+                      <div key={i} className="flex items-center gap-2.5 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                        <PastelAvatar name={m.label} size={28} />
+                        <span className="text-sm text-slate-700 dark:text-slate-200 flex-1 truncate">{m.label}</span>
+                        <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0">{m.role}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {threadDetail.kind === "application" && (
                 <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
@@ -395,6 +433,12 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
 });
 
 export default CommsWindow;
+
+// Exported so a full-page view (e.g. src/pages/Chats.jsx) can reuse the
+// exact same tab bodies — search, avatars, timeAgo, call history, contact
+// directory — behind its own top-level tab bar instead of the floating
+// window's bottom nav, without duplicating any of this logic.
+export { ThreadsTab, CallsTab, NewCallTab, timeAgo, TABS, TAB_TITLE };
 
 // ============================================================
 // Threads tab — powers BOTH "Recent Chats" (scope="general", the dealer's
@@ -462,7 +506,17 @@ function ThreadsTab({ variant, dealerId, scope, seenMap, onOpenThread }) {
                 onClick={() => onOpenThread({ threadId: t.threadId, dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: scope === "application" ? t.label : title, dealerName: t.dealerLabel })}
                 className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3"
               >
-                <PastelAvatar name={title} size={40} />
+                <div className="relative shrink-0">
+                  <PastelAvatar name={title} size={40} />
+                  {scope === "general" && (
+                    <span
+                      title="Group chat — dealer, their staff, and our team"
+                      className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center border-2 border-white dark:border-slate-900"
+                    >
+                      <Users size={9} />
+                    </span>
+                  )}
+                </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{title}</span>
