@@ -240,7 +240,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   return (
-    <div className="min-h-screen md:h-screen bg-slate-100 dark:bg-slate-950 md:flex md:overflow-hidden overflow-x-hidden">
+    <div className="min-h-screen md:h-screen bg-slate-100 dark:bg-slate-950 md:flex md:overflow-hidden">
       <DealerSidebar
         dealer={dealer}
         identity={identity}
@@ -263,7 +263,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           below it) — the icon row simply wraps to its own line if the
           dealer name eats into the available width. */}
       <header className="md:hidden bg-[#0f1b3d] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-3 min-w-0 flex-1 basis-0">
           <input
             type="file"
             accept="image/*"
@@ -286,7 +286,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
               {uploadingPhoto ? "…" : "Edit"}
             </span>
           </button>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="font-bold text-lg truncate">{dealer.name}</p>
             <p className="text-slate-300 text-xs truncate">
               Dealer Portal · Code {dealer.code}
@@ -294,7 +294,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <a
             href={APK_PATH}
             download

@@ -14,6 +14,14 @@ html, body, #root {
   max-width: 100%;
 }
 
+/* Any element that intentionally scrolls sideways (wide tables wrapped in
+   overflow-x-auto, mainly on the mobile Ledger/PCC Status tabs) needs
+   momentum/touch scrolling explicitly on iOS Safari & WebViews, or a swipe
+   gesture can fail to move it at all. */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Accent color — kept in sync with whichever sidebar color is picked in
    Settings (see src/lib/sidebarColor.js, which writes these three
    variables on document.documentElement any time it changes). Defaults
