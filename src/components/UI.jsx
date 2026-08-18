@@ -65,7 +65,7 @@ export function StatusBadge({ status }) {
 
 export function Card({ title, children, className = "" }) {
   return (
-    <div className={`bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 ${className}`}>
+    <div className={`max-w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 ${className}`}>
       {title && <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100 mb-4">{title}</h3>}
       {children}
     </div>

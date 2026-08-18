@@ -865,7 +865,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
       {loading ? (
         <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-w-full">
           <table className="scroll-table min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
@@ -1062,7 +1062,7 @@ function DealerPccStatus({ dealerId, refreshKey = 0 }) {
       ) : visibleRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No PCC-requiring applications yet</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-w-full">
           <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
@@ -1772,7 +1772,7 @@ function DealerServiceAmounts({ dealerId }) {
       ) : filteredRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No applications yet</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-w-full">
           <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
@@ -1887,7 +1887,7 @@ function DealerPaymentHistory({ dealerId, refreshKey = 0 }) {
       ) : filteredRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No payments yet</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-w-full">
           <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
@@ -2120,7 +2120,7 @@ function DealerLedger({ dealerId, refreshKey = 0 }) {
       ) : (
         <div className="space-y-6">
           {displayedGroups.map((group) => (
-            <div key={group.key} className="overflow-x-auto">
+            <div key={group.key} className="overflow-x-auto max-w-full">
               <div className="flex items-center justify-between mb-1 px-1">
                 <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                   {group.key === "range"
