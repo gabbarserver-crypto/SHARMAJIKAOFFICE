@@ -265,6 +265,25 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
     </div>
   );
 }
+// Once an application is Accepted, status alone doesn't say how far along
+// the processing actually is — this derives that from the data staff have
+// typed in so far (no separate DB column, purely computed for display).
+// Services that don't require PCC (e.g. "LL RIC without PCC") never
+// mention PCC here, since it's not expected to be filled for them.
+function getProcessingStage(row) {
+  if (!row || row.status !== "Accepted") return null;
+  const pccRequired = !!row.services?.pcc_required;
+  const hasAppNo = !!row.application_no;
+  const hasPccNo = !!row.pcc_no;
+  if (!pccRequired) {
+    return hasAppNo ? "Application No. generated" : "Awaiting Application No.";
+  }
+  if (hasAppNo && hasPccNo) return "Application No. generated & PCC Under Process";
+  if (hasAppNo && !hasPccNo) return "Application No. generated & PCC Pending";
+  if (!hasAppNo && hasPccNo) return "PCC Under Process";
+  return "Awaiting Application No. & PCC";
+}
+
 function serviceLabel(s) {
   if (!s) return "";
   return s.short_name || s.parent_service;
@@ -552,14 +571,24 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     load();
   };
 
+  // Staff type the PCC No. in by hand (no auto-sync from the PCC portal).
+  // Typing one in for the first time is treated as "PCC fee received" —
+  // it auto-fills the standard ₹350 PCC Fee if that field is still blank,
+  // so the ledger/processing stage don't sit waiting on a separate fee
+  // entry that's easy to forget.
   const updatePccFields = async (id, fields) => {
-    const { error } = await supabase.from("applications").update(fields).eq("id", id);
+    const row = rows.find((r) => r.id === id);
+    const payload = { ...fields };
+    if (fields.pcc_no && row && !row.pcc_fee) {
+      payload.pcc_fee = 350;
+    }
+    const { error } = await supabase.from("applications").update(payload).eq("id", id);
     if (error) {
       setToast("Failed to update PCC details: " + error.message);
       return;
     }
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...fields } : r)));
-    setToast("PCC details updated");
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
+    setToast(payload.pcc_fee ? "PCC details updated — PCC Fee ₹350 auto-filled" : "PCC details updated");
   };
 
   // Shared "approve" logic: flips an application to Accepted (unless it already
@@ -764,6 +793,23 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       return;
     }
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
+
+    // Learning No. (ll_dl_no) is the last manual data-entry step — as soon
+    // as it's typed in on an Accepted application, auto-mark the
+    // application Completed (posts its ledger row via complete_application,
+    // same as the old manual "Completed" action).
+    if (field === "ll_dl_no" && value) {
+      const row = rows.find((r) => r.id === id);
+      if (row && row.status === "Accepted") {
+        const result = await completeApplication({ ...row, ...payload });
+        if (result.ok) {
+          setRows((rs) => rs.map((r) => (r.id === id ? { ...r, status: "Completed" } : r)));
+          setToast(result.message);
+        } else {
+          setToast("Learning No. saved, but auto-complete failed: " + result.message);
+        }
+      }
+    }
   };
 
   // Amount is the ledger trigger now, independent of status — as soon as
@@ -791,10 +837,24 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...payload } : r)));
 
     const row = rows.find((r) => r.id === id);
+
+    // Typing an Amount is also treated as approval — staff shouldn't have
+    // to separately open the status modal and click Accept once a real
+    // amount has been entered. No-ops for rows that are already
+    // Accepted/Completed/Rejected.
+    let statusPatch = {};
+    if (row && !["Accepted", "Completed", "Rejected"].includes(row.status)) {
+      const approveResult = await approveApplication({ ...row, ...payload }, row.remarks);
+      if (approveResult.ok) {
+        statusPatch = { status: "Accepted" };
+        setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...statusPatch } : r)));
+      }
+    }
+
     if (!row?.dealer_id) {
       // No dealer on the application yet — nothing to post against, so
       // just leave it as an application-only amount for now.
-      setToast("Amount saved (no dealer selected yet, so nothing posted to ledger)");
+      setToast(statusPatch.status ? "Amount saved, application Accepted (no dealer selected yet, so nothing posted to ledger)" : "Amount saved (no dealer selected yet, so nothing posted to ledger)");
       return;
     }
     // Posting straight into ledger_entries from the client is blocked by
@@ -811,7 +871,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setToast("Amount saved, but ledger update failed: " + ledgerErr.message);
       return;
     }
-    setToast(`Amount saved — ₹${newAmount.toLocaleString("en-IN")} posted to ${row.dealers?.name || "dealer"}'s ledger`);
+    setToast(`Amount saved${statusPatch.status ? " & Accepted" : ""} — ₹${newAmount.toLocaleString("en-IN")} posted to ${row.dealers?.name || "dealer"}'s ledger`);
   };
 
   // Agency Fee is a column on the SAME ledger_entries row as the rest of
@@ -1533,7 +1593,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 {visibleCols.application && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <EditableCell width="w-24" value={r.application_no} readOnly={r.status === "Accepted"} readOnlyTitle="Application No. is locked after approval" onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
+                      <EditableCell width="w-24" value={r.application_no} readOnly={r.status === "Completed"} readOnlyTitle="Application No. is locked after completion" onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
                       <button
                         onClick={() => openSarathi(r)}
                         title="Open on Sarathi Parivahan and copy DOB"
@@ -1546,7 +1606,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.lldl && (
                   <td className="px-3 py-2">
-                    <EditableCell width="w-24" value={r.ll_dl_no} readOnly={r.status === "Accepted"} readOnlyTitle="LL/DL No. is locked after approval" onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
+                    <EditableCell width="w-24" value={r.ll_dl_no} readOnly={r.status === "Completed"} readOnlyTitle="LL/DL No. is locked after completion" onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
                   </td>
                 )}
                 {visibleCols.pccno && (
@@ -1648,11 +1708,14 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => openDetail(r, "status")}
-                      title={restricted ? "Accept or reject, view history" : "Assign staff, update status, view history"}
+                      title={getProcessingStage(r) || (restricted ? "Accept or reject, view history" : "Assign staff, update status, view history")}
                       className="hover:opacity-80"
                     >
                       <StatusBadge status={r.status} />
                     </button>
+                    {getProcessingStage(r) && (
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500 whitespace-nowrap">{getProcessingStage(r)}</span>
+                    )}
                   </div>
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap">
@@ -1889,7 +1952,10 @@ function CompactApplicationsTable({ rows, onOpenDetail, onOpenChat, profitOf, rt
                 <td className="px-3 py-2"><Pair top={rtoName(r.rto_id)} bottom={agencyName(r.agency_id)} /></td>
                 <td className="px-3 py-2"><Pair top={r.slot_time || "—"} bottom={r.remarks || "—"} /></td>
                 <td className="px-3 py-2">
-                  <StatusBadge status={r.status} />
+                  <span title={getProcessingStage(r) || undefined}><StatusBadge status={r.status} /></span>
+                  {getProcessingStage(r) && (
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight mt-0.5">{getProcessingStage(r)}</div>
+                  )}
                   {r.services?.chat_in_app && (
                     <div className="mt-1">
                       <button onClick={() => onOpenChat(r)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
@@ -3070,6 +3136,25 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     }
   };
 
+  // Reject is the only action that requires a remark — Accept and Put On
+  // Hold can go through with the field left blank.
+  const handleReject = () => {
+    if (!remarks.trim()) {
+      window.alert("Reject karne ke liye remark likhna zaroori hai.");
+      return;
+    }
+    handleStatusChange("Rejected", remarks);
+  };
+
+  // "Auto mode": once an application has been Accepted (or gone all the
+  // way to Completed), Accept/Put On Hold stop being shown — from here on
+  // the status progresses on its own as Application No. / PCC No. /
+  // Learning No. / Amount get filled in (see updateRowField,
+  // updatePccFields and updateApplicationAmount in the parent). Reject
+  // stays available throughout as a manual override.
+  const showForwardActions = app.status === "Draft Submitted" || app.status === "On Hold";
+  const showReject = app.status !== "Rejected" && app.status !== "Completed";
+
   const saveApplicant = async () => {
     const dobIso = ddmmyyyyToISO(applicant.date_of_birth);
     const err = validateAgeForService(dobIso, app.services);
@@ -3118,6 +3203,9 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         <div className="flex items-center gap-2 mb-5">
           <span className="text-sm text-slate-500 dark:text-slate-500">Current status:</span>
           <StatusBadge status={app.status} />
+          {getProcessingStage(app) && (
+            <span className="text-xs font-medium text-blue-600 dark:text-blue-400">{getProcessingStage(app)}</span>
+          )}
           {app.application_date && (
             <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">
               Approved on {isoToDDMMYYYY(app.application_date)}
@@ -3139,37 +3227,38 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
             )}
 
             <Card title="Update Status">
-              <Field label="Remarks (shown to dealer)">
-                <Input
-                  as="textarea"
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="e.g. Please re-upload a clearer Aadhaar photo"
-                />
-              </Field>
+              {showForwardActions || showReject ? (
+                <Field label="Remarks (shown to dealer)">
+                  <Input
+                    as="textarea"
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="Reject karte waqt reason yahan likhein (Accept / Hold ke liye zaroori nahi)"
+                  />
+                </Field>
+              ) : (
+                <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+                  Accepted — status ab Application No. / PCC No. / Learning No. bharte hi khud-ba-khud aage badhega.
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
-                {restricted ? (
-                  <PrimaryButton
-                    disabled={statusChanging}
-                    onClick={() => handleStatusChange("Under Review", remarks)}
-                    className="!bg-emerald-600 hover:!bg-emerald-700"
-                  >
-                    Accept
-                  </PrimaryButton>
-                ) : (
+                {showForwardActions && (
                   <>
-                    <PrimaryButton disabled={statusChanging} onClick={() => handleStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
-                    <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
                     <PrimaryButton
+                      disabled={!canApprove || statusChanging}
                       onClick={() => handleStatusChange("Accepted", remarks)}
                       className="!bg-emerald-600 hover:!bg-emerald-700"
-                      disabled={!canApprove || statusChanging}
                       title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
                     >
-                      Approve
+                      Accept
                     </PrimaryButton>
-                    <DangerButton disabled={statusChanging} onClick={() => handleStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                    {app.status !== "On Hold" && (
+                      <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                    )}
                   </>
+                )}
+                {showReject && (
+                  <DangerButton disabled={statusChanging} onClick={handleReject}>Reject</DangerButton>
                 )}
                 {isAdmin && (
                   <DangerButton
@@ -3212,6 +3301,9 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
           <span className="flex items-center gap-1.5">
             <StatusBadge status={app.status} />
+            {getProcessingStage(app) && (
+              <span className="text-xs font-medium text-blue-600 dark:text-blue-400">{getProcessingStage(app)}</span>
+            )}
             {app.application_date && <span className="text-xs text-slate-400 dark:text-slate-500">Approved on {isoToDDMMYYYY(app.application_date)}</span>}
           </span>
         </div>
@@ -3389,26 +3481,39 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
             </Card>
 
             <Card title="Update Status">
-              <Field label="Remarks (shown to dealer)">
-                <Input
-                  as="textarea"
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="e.g. Please re-upload a clearer Aadhaar photo"
-                />
-              </Field>
+              {showForwardActions || showReject ? (
+                <Field label="Remarks (shown to dealer)">
+                  <Input
+                    as="textarea"
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="Reject karte waqt reason yahan likhein (Accept / Hold ke liye zaroori nahi)"
+                  />
+                </Field>
+              ) : (
+                <p className="text-sm text-slate-500 dark:text-slate-500 mb-3">
+                  Accepted — status ab Application No. / PCC No. / Learning No. bharte hi khud-ba-khud aage badhega.
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
-                <PrimaryButton disabled={statusChanging} onClick={() => handleStatusChange("Under Review", remarks)}>Move to Review</PrimaryButton>
-                <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
-                <PrimaryButton
-                  onClick={() => handleStatusChange("Accepted", remarks)}
-                  className="!bg-emerald-600 hover:!bg-emerald-700"
-                  disabled={!canApprove || statusChanging}
-                  title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
-                >
-                  Approve
-                </PrimaryButton>
-                <DangerButton disabled={statusChanging} onClick={() => handleStatusChange("Rejected", remarks)}>Reject</DangerButton>
+                {showForwardActions && (
+                  <>
+                    <PrimaryButton
+                      disabled={!canApprove || statusChanging}
+                      onClick={() => handleStatusChange("Accepted", remarks)}
+                      className="!bg-emerald-600 hover:!bg-emerald-700"
+                      title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
+                    >
+                      Accept
+                    </PrimaryButton>
+                    {app.status !== "On Hold" && (
+                      <GhostButton disabled={statusChanging} onClick={() => handleStatusChange("On Hold", remarks)}>Put On Hold</GhostButton>
+                    )}
+                  </>
+                )}
+                {showReject && (
+                  <DangerButton disabled={statusChanging} onClick={handleReject}>Reject</DangerButton>
+                )}
                 <DangerButton
                   onClick={() => onDelete(app)}
                   className="!bg-transparent !text-rose-600 border border-rose-300 hover:!bg-rose-50 dark:hover:!bg-rose-950"
