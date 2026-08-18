@@ -239,8 +239,8 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950">
-      <div className="flex-1 min-w-0 flex flex-col">
+    <div className="dealer-portal min-h-screen w-full max-w-full min-w-0 overflow-x-hidden bg-slate-100 dark:bg-slate-950">
+      <div className="flex-1 w-full max-w-full min-w-0 flex flex-col">
       {/* Dealer Portal is mobile-only now — no desktop sidebar/breakpoint
           switch, always this compact header + DealerBottomTabBar below.
           flex-wrap + min-w-0/truncate keep this from ever forcing the page
@@ -328,9 +328,9 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
       )}
 
-      <main className="flex-1 min-w-0 max-w-5xl mx-auto p-6 pb-24">
+      <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto box-border p-6 pb-24">
         {(tab === "Applications" || tab === "Ledger") && (
-          <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
+          <div className="w-full min-w-0 grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 mb-6">
             <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
               <p className={`text-sm sm:text-2xl font-bold truncate ${runningBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
@@ -352,9 +352,9 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           </div>
         )}
 
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+        <div className="w-full min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           {tab === "Applications" && (
-            <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center whitespace-nowrap">+ New Application</PrimaryButton>
+            <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto min-w-0 justify-center whitespace-nowrap">+ New Application</PrimaryButton>
           )}
         </div>
 
@@ -822,7 +822,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   };
 
   return (
-    <Card title="My Applications">
+    <Card title="My Applications" className="w-full min-w-0">
       <div className="flex items-center justify-between -mt-1 mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           {["All", "Draft", "Process", "Approved"].map((f) => (
@@ -865,8 +865,8 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
       {loading ? (
         <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
       ) : (
-        <div className="overflow-x-auto max-w-full">
-          <table className="scroll-table min-w-full text-sm">
+        <div className="dealer-scroll-x w-full min-w-0">
+          <table className="scroll-table w-max min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <SortableTh label="Ref No." sortKeyName="ref" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -1062,7 +1062,7 @@ function DealerPccStatus({ dealerId, refreshKey = 0 }) {
       ) : visibleRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No PCC-requiring applications yet</p>
       ) : (
-        <div className="overflow-x-auto max-w-full">
+        <div className="dealer-scroll-x w-full min-w-0">
           <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
@@ -1772,7 +1772,7 @@ function DealerServiceAmounts({ dealerId }) {
       ) : filteredRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No applications yet</p>
       ) : (
-        <div className="overflow-x-auto max-w-full">
+        <div className="dealer-scroll-x w-full min-w-0">
           <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
@@ -1887,7 +1887,7 @@ function DealerPaymentHistory({ dealerId, refreshKey = 0 }) {
       ) : filteredRows.length === 0 ? (
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No payments yet</p>
       ) : (
-        <div className="overflow-x-auto max-w-full">
+        <div className="dealer-scroll-x w-full min-w-0">
           <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
@@ -2120,7 +2120,7 @@ function DealerLedger({ dealerId, refreshKey = 0 }) {
       ) : (
         <div className="space-y-6">
           {displayedGroups.map((group) => (
-            <div key={group.key} className="overflow-x-auto max-w-full">
+            <div key={group.key} className="dealer-scroll-x w-full min-w-0">
               <div className="flex items-center justify-between mb-1 px-1">
                 <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                   {group.key === "range"

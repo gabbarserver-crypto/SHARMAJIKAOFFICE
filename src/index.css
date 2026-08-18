@@ -10,23 +10,31 @@
    here stops it at the source instead of chasing down every wide element
    individually. */
 html, body, #root {
-  overflow-x: hidden;
+  width: 100%;
   max-width: 100%;
-}
-/* overflow: clip is stricter than hidden — it can't be scrolled past even
-   by a touch/swipe gesture on mobile WebViews where "hidden" is sometimes
-   only enforced for programmatic scrolling. Browsers that don't understand
-   "clip" simply ignore this line and keep the "hidden" above. */
-html, body, #root {
-  overflow-x: clip;
+  overflow-x: hidden;
 }
 
-/* Any element that intentionally scrolls sideways (wide tables wrapped in
-   overflow-x-auto, mainly on the mobile Ledger/PCC Status tabs) needs
-   momentum/touch scrolling explicitly on iOS Safari & WebViews, or a swipe
-   gesture can fail to move it at all. */
-.overflow-x-auto {
+/* Keep the page itself locked to the viewport, but NEVER disable horizontal
+   scrolling on an inner table. `overflow-x: clip` on the root used to make
+   mobile WebView touch scrolling unreliable for the table wrappers. */
+.dealer-portal {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.dealer-scroll-x {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
+  scrollbar-width: thin;
 }
 
 /* Dealer/dealer-staff portal tables (DealerPortal.jsx) used to combine
@@ -38,6 +46,11 @@ html, body, #root {
    this rule stops that content from wrapping first, which is what actually
    forces the table wider than the screen so the wrapper has something to
    scroll. */
+.scroll-table {
+  width: max-content;
+  min-width: 100%;
+}
+
 .scroll-table th,
 .scroll-table td {
   white-space: nowrap;

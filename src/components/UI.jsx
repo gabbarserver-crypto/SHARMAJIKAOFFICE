@@ -65,7 +65,7 @@ export function StatusBadge({ status }) {
 
 export function Card({ title, children, className = "" }) {
   return (
-    <div className={`max-w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 ${className}`}>
+    <div className={`w-full min-w-0 max-w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 ${className}`}>
       {title && <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100 mb-4">{title}</h3>}
       {children}
     </div>
@@ -76,7 +76,7 @@ export function PrimaryButton({ children, className = "", ...props }) {
   return (
     <button
       {...props}
-      className={`btn-accent inline-flex items-center gap-1.5 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 ${className}`}
+      className={`btn-accent inline-flex min-w-0 items-center justify-center gap-1.5 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 ${className}`}
     >
       {children}
     </button>
