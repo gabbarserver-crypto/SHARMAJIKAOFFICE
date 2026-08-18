@@ -21,10 +21,10 @@ const STATUS_TABS = ["All", "Draft Submitted", "Under Review", "On Hold", "Rejec
 
 // Columns a staff member can hide/show via the "Columns" button. Draft ID
 // and Status stay pinned (always shown) since they're the primary way to
-// identify/act on a row; everything else is optional detail. Mobile and
-// Remark are deliberately left out of this list — they're always hidden by
-// default and only revealed together via the dedicated toggle button next
-// to "+ New Application".
+// identify/act on a row; everything else is optional detail. Mobile,
+// Remark, and Profit are deliberately left out of this list — they're
+// always hidden by default and only revealed together via the dedicated
+// toggle button next to "+ New Application".
 const TOGGLEABLE_COLUMNS = [
   { key: "applicationDate", label: "Date" },
   { key: "amount", label: "Amount" },
@@ -35,7 +35,6 @@ const TOGGLEABLE_COLUMNS = [
   { key: "rtoFee", label: "Fee" },
   { key: "pccFee", label: "PCC Fee" },
   { key: "agencyFee", label: "Agency Fee" },
-  { key: "profit", label: "Profit" },
   { key: "application", label: "Application" },
   { key: "lldl", label: "LL/DL No." },
   { key: "pccno", label: "PCC No" },
@@ -415,6 +414,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // Mobile and Remark are hidden by default and only shown together, via
   // the button under "+ New Application" — kept separate from the general
   // column picker per how this table is meant to be used day-to-day.
+  // Profit rides along on the same toggle for admin (not restricted staff,
+  // who never see financial columns — see STAFF_VISIBLE_KEYS).
   const [showRemarkMobile, setShowRemarkMobile] = useState(false);
   const [filterDealer, setFilterDealer] = useState("");
   const [filterRto, setFilterRto] = useState("");
@@ -1449,7 +1450,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
             onClick={() => setShowRemarkMobile((s) => !s)}
             className="text-xs font-semibold text-slate-500 dark:text-slate-400 hover:text-blue-600"
           >
-            {showRemarkMobile ? "Hide" : "Show"} Remark &amp; Mobile
+            {showRemarkMobile ? "Hide" : "Show"} Remark &amp; Mobile{!restricted && " & Profit"}
           </button>
         </div>
       </div>
@@ -1568,7 +1569,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {visibleCols.rtoFee && <SortableTh column="rtoFee" label="Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.pccFee && <SortableTh column="pccFee" label="PCC Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.agencyFee && <SortableTh column="agencyFee" label="Agency Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.profit && <SortableTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              {showRemarkMobile && !restricted && <SortableTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.application && <SortableTh column="application" label="Application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.lldl && <SortableTh column="lldl" label="LL/DL No." sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.pccno && <SortableTh column="pccno" label="PCC No" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
@@ -1738,7 +1739,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     />
                   </td>
                 )}
-                {visibleCols.profit && (
+                {showRemarkMobile && !restricted && (
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className={`font-semibold ${profitOf(r) < 0 ? "text-rose-600" : "text-emerald-600"}`}>
                       ₹{profitOf(r).toLocaleString("en-IN")}

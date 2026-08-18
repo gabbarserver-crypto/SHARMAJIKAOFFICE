@@ -1,1 +1,11 @@
 @import "tailwindcss";
+
+/* Guards against the whole page becoming horizontally pannable on mobile —
+   without this, any descendant that's even a few px wider than the
+   viewport (a table row, a 3-column card grid at a narrow breakpoint,
+   etc.) lets the entire body get swiped sideways instead of just that
+   element's own overflow-x-auto container scrolling internally. */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
