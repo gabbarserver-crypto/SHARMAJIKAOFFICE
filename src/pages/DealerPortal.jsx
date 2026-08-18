@@ -27,7 +27,6 @@ import QrPaymentPanel from "../components/QrPaymentPanel";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
-import DealerSidebar from "../components/DealerSidebar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
 import PastelAvatar from "../components/PastelAvatar";
 import { Search, Users } from "lucide-react";
@@ -240,29 +239,15 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   return (
-    <div className="min-h-screen md:h-screen bg-slate-100 dark:bg-slate-950 md:flex md:overflow-hidden">
-      <DealerSidebar
-        dealer={dealer}
-        identity={identity}
-        tabs={visibleTabs}
-        active={tab}
-        onNavigate={(t) => { setTab(t); if (t === "Call/Chat") refreshUnreadChats(); }}
-        unreadChats={unreadChats}
-        photoUrl={photoUrl}
-        uploadingPhoto={uploadingPhoto}
-        onUploadPhoto={uploadProfilePhoto}
-        onLogout={onLogout}
-        apkPath={APK_PATH}
-        onOpenGames={openGames}
-        onSetupPasskey={setUpPasskey}
-      />
-      <div className="flex-1 min-w-0 flex flex-col md:h-screen md:overflow-y-auto">
-      {/* Mobile-only header — desktop (md+) uses DealerSidebar above instead.
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-950">
+      <div className="flex-1 min-w-0 flex flex-col">
+      {/* Dealer Portal is mobile-only now — no desktop sidebar/breakpoint
+          switch, always this compact header + DealerBottomTabBar below.
           flex-wrap + min-w-0/truncate keep this from ever forcing the page
           wider than the viewport (which was cutting off the cards/button
           below it) — the icon row simply wraps to its own line if the
           dealer name eats into the available width. */}
-      <header className="md:hidden bg-[#0f1b3d] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+      <header className="bg-[#0f1b3d] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-3 min-w-0 flex-1 basis-0">
           <input
             type="file"
@@ -343,7 +328,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
       )}
 
-      <main className="flex-1 min-w-0 max-w-5xl md:max-w-none mx-auto md:mx-0 p-6 pb-24 md:pb-6 md:p-8">
+      <main className="flex-1 min-w-0 max-w-5xl mx-auto p-6 pb-24">
         {(tab === "Applications" || tab === "Ledger") && (
           <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
             <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
@@ -368,7 +353,6 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         )}
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
-          <h2 className="hidden md:block text-lg font-semibold text-slate-800 dark:text-slate-100">{tab}</h2>
           {tab === "Applications" && (
             <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center whitespace-nowrap">+ New Application</PrimaryButton>
           )}

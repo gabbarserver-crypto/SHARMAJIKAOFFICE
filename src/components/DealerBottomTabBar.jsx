@@ -21,7 +21,7 @@ const ICONS = {
 export default function DealerBottomTabBar({ tabs, active, onNavigate, unreadChats = 0 }) {
   return (
     <nav
-      className="no-print md:hidden fixed bottom-0 inset-x-0 z-40 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex"
+      className="no-print fixed bottom-0 inset-x-0 z-40 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {tabs.map((t) => {
