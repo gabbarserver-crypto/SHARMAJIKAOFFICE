@@ -72,7 +72,11 @@ const openGames = async () => {
   window.open(url, "_blank", "noopener,noreferrer");
 };
 
-const TABS = ["Applications", "PCC Status", "Call/Chat", "Ledger", "Service", "Payments"];
+// "Service" and "Payments" used to be their own top-level tabs — they're
+// now folded into "Ledger" as an in-page sub-tab strip (My Ledger / Service
+// / Payments), so the bottom nav / sidebar only need to list "Ledger".
+const TABS = ["Applications", "PCC Status", "Call/Chat", "Ledger"];
+const LEDGER_SUBTABS = ["My Ledger", "Service", "Payments"];
 
 // Small reusable sortable <th> — click toggles asc/desc on that column,
 // clicking a different column switches to it (asc first). Shared by the
@@ -98,6 +102,9 @@ function SortableTh({ label, sortKeyName, sortKey, sortDir, onSort, align = "lef
 // straight from the "Our Team" directory on the Call/Chat tab.
 export default function DealerPortal({ dealer, identity, call, onLogout }) {
   const [tab, setTab] = useState("Applications");
+  // Which of the three Ledger sub-views ("My Ledger" / "Service" /
+  // "Payments") is showing — see LEDGER_SUBTABS above.
+  const [ledgerSubTab, setLedgerSubTab] = useState("My Ledger");
   const [showNew, setShowNew] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [toast, setToast] = useState(null);
@@ -333,7 +340,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       )}
 
       <main className="flex-1 min-w-0 max-w-5xl md:max-w-none mx-auto md:mx-0 p-6 pb-24 md:pb-6 md:p-8">
-        {(tab === "Applications" || tab === "Ledger" || tab === "Payments") && (
+        {(tab === "Applications" || tab === "Ledger") && (
           <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
             <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
@@ -358,7 +365,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           <h2 className="hidden md:block text-lg font-semibold text-slate-800 dark:text-slate-100">{tab}</h2>
-          <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center">+ New Application</PrimaryButton>
+          <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto max-w-full justify-center whitespace-nowrap overflow-visible">+ New Application</PrimaryButton>
         </div>
 
         {tab === "Applications" && (
@@ -376,9 +383,28 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
             <DealerChats dealerId={dealer.id} identity={identity} onMessage={refreshUnreadChats} />
           </div>
         )}
-        {tab === "Ledger" && <DealerLedger dealerId={dealer.id} refreshKey={refreshKey} />}
-        {tab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
-        {tab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} refreshKey={refreshKey} />}
+        {tab === "Ledger" && (
+          <>
+            <div className="flex items-center gap-1 mb-5 border-b border-slate-200 dark:border-slate-800">
+              {LEDGER_SUBTABS.map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setLedgerSubTab(st)}
+                  className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+                    ledgerSubTab === st
+                      ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                      : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                  }`}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+            {ledgerSubTab === "My Ledger" && <DealerLedger dealerId={dealer.id} refreshKey={refreshKey} />}
+            {ledgerSubTab === "Service" && <DealerServiceAmounts dealerId={dealer.id} />}
+            {ledgerSubTab === "Payments" && <DealerPaymentHistory dealerId={dealer.id} refreshKey={refreshKey} />}
+          </>
+        )}
         {tab === "Staff" && <DealerStaffTab dealerId={dealer.id} />}
       </main>
       </div>
@@ -424,7 +450,8 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           onClose={() => setShowQr(false)}
           onPaid={() => {
             setRefreshKey((k) => k + 1);
-            setTab("Payments");
+            setTab("Ledger");
+            setLedgerSubTab("Payments");
           }}
         />
       )}
@@ -714,7 +741,9 @@ const PCC_STATUS_STYLES = {
 function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState("All");
+  // Opens on "Draft" by default (dealer's most actionable bucket — apps
+  // still needing documents/submission) instead of "All".
+  const [statusFilter, setStatusFilter] = useState("Draft");
   const [search, setSearch] = useState("");
   const [serviceList, setServiceList] = useState([]);
   const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null

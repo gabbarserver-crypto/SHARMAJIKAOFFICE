@@ -340,6 +340,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [tab, setTab] = useState(onlyDraft ? "Draft Submitted" : "All");
   const [chatOnly, setChatOnly] = useState(false);
   const [compactView, setCompactView] = useState(false); // point 9
+  // Bulk-select (checkbox column) so misfiled Draft rows that are actually
+  // already done can be Accepted in one go, instead of opening each one.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkAccepting, setBulkAccepting] = useState(false);
+  // Quick filter: Accepted applications still missing PCC No. or Learning
+  // No. — the two fields that drive the auto-Completed flow.
+  const [pendingOnly, setPendingOnly] = useState(false);
   // Defaults to current-year-only once the data set gets large (13k+ historical
   // rows made "show everything" the default choke point). "Show All" lets
   // anyone drop back to the full history on demand.
@@ -1110,8 +1117,17 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // query itself (see load()) so a 15k-row table isn't fetched in full on
   // every load — this only handles chatOnly and free-text search, which
   // still run over whatever the query already narrowed down.
+  // Accepted, but still missing the data that would carry it to Completed.
+  const isPendingData = (r) => {
+    if (r.status !== "Accepted") return false;
+    if (!r.ll_dl_no) return true;
+    if (r.services?.pcc_required && !r.pcc_no) return true;
+    return false;
+  };
+
   const filteredRows = rows.filter((r) => {
     if (chatOnly && !chatStatus[r.id]) return false;
+    if (pendingOnly && !isPendingData(r)) return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       const haystack = [
@@ -1171,7 +1187,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
   useEffect(() => {
     setPage(1);
-  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly, showAllYears]);
+  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly, showAllYears, pendingOnly]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -1222,6 +1238,44 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const clearFilters = () => { setFilterDealer(""); setFilterRto(""); setFilterAgency(""); setFilterService(""); setFilterDateFrom(""); setFilterDateTo(""); };
   const activeFilterCount = [filterDealer, filterRto, filterAgency, filterService, filterDateFrom, filterDateTo].filter(Boolean).length;
+
+  const toggleSelected = (id) => {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const allPageSelected = pagedRows.length > 0 && pagedRows.every((r) => selectedIds.has(r.id));
+  const toggleSelectAllOnPage = () => {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (allPageSelected) pagedRows.forEach((r) => next.delete(r.id));
+      else pagedRows.forEach((r) => next.add(r.id));
+      return next;
+    });
+  };
+
+  // Bulk-Accept — for rows sitting in Draft/On Hold by mistake (already
+  // done, just never got clicked through). Skips anything already
+  // Accepted/Completed/Rejected rather than erroring on it.
+  const bulkAcceptSelected = async () => {
+    const targets = rows.filter((r) => selectedIds.has(r.id) && !["Accepted", "Completed", "Rejected"].includes(r.status));
+    if (!targets.length) {
+      setToast("Selected rows already Accepted/Completed/Rejected hain — kuch karne ko nahi bacha");
+      return;
+    }
+    setBulkAccepting(true);
+    let okCount = 0;
+    for (const r of targets) {
+      const result = await approveApplication(r);
+      if (result.ok) okCount++;
+    }
+    setBulkAccepting(false);
+    setSelectedIds(new Set());
+    setToast(`${okCount} of ${targets.length} application(s) Accepted`);
+    load();
+  };
 
   return (
     <CanEditContext.Provider value={canEdit}>
@@ -1282,6 +1336,31 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               }`}
             >
               ▦ Compact View
+            </button>
+          )}
+          {!restricted && (
+            <button
+              onClick={() => setPendingOnly((v) => !v)}
+              title="Accepted applications still missing PCC No. or Learning No."
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                pendingOnly ? "bg-amber-500 text-white border-amber-500" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              ⚠ PCC / Learning No. Pending
+              {!pendingOnly && rows.filter(isPendingData).length > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {rows.filter(isPendingData).length}
+                </span>
+              )}
+            </button>
+          )}
+          {!restricted && selectedIds.size > 0 && (
+            <button
+              onClick={bulkAcceptSelected}
+              disabled={bulkAccepting}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-emerald-600 text-white border-emerald-600 disabled:opacity-50"
+            >
+              {bulkAccepting ? "Accepting…" : `✓ Accept Selected (${selectedIds.size})`}
             </button>
           )}
         </div>
@@ -1409,6 +1488,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
             <tr>
+              {!restricted && (
+                <th className="px-3 py-2 w-8">
+                  <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllOnPage} title="Select all on this page" />
+                </th>
+              )}
               <SortableTh column="draftId" label="Draft ID" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               {visibleCols.applicationDate && <SortableTh column="applicationDate" label="Date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               {visibleCols.amount && <SortableTh column="amount" label="Amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
@@ -1435,6 +1519,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           <tbody>
             {pagedRows.map((r) => (
               <tr key={r.id} className={`border-t border-slate-100 dark:border-slate-800 transition-colors ${ROW_STATUS_TINT[r.status] || "hover:bg-slate-50 dark:hover:bg-slate-800/40"}`}>
+                {!restricted && (
+                  <td className="px-3 py-2">
+                    <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelected(r.id)} />
+                  </td>
+                )}
                 <td className="px-3 py-2 font-medium whitespace-nowrap">
                   {editingDraftCodeId === r.id ? (
                     <div className="flex items-center gap-1">
