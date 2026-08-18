@@ -370,7 +370,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           <h2 className="hidden md:block text-lg font-semibold text-slate-800 dark:text-slate-100">{tab}</h2>
           {tab === "Applications" && (
-            <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto max-w-full justify-center whitespace-nowrap overflow-visible">+ New Application</PrimaryButton>
+            <PrimaryButton onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center whitespace-nowrap">+ New Application</PrimaryButton>
           )}
         </div>
 
@@ -882,7 +882,7 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
         <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="scroll-table min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <SortableTh label="Ref No." sortKeyName="ref" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -1079,7 +1079,7 @@ function DealerPccStatus({ dealerId, refreshKey = 0 }) {
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No PCC-requiring applications yet</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <th className="text-left font-medium px-3 py-2">Date</th>
@@ -1789,7 +1789,7 @@ function DealerServiceAmounts({ dealerId }) {
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No applications yet</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <th className="text-left font-medium px-3 py-2">Date</th>
@@ -1904,7 +1904,7 @@ function DealerPaymentHistory({ dealerId, refreshKey = 0 }) {
         <p className="text-center text-slate-400 dark:text-slate-500 py-8">No payments yet</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <th className="text-left font-medium px-3 py-2">Date</th>
@@ -2148,7 +2148,7 @@ function DealerLedger({ dealerId, refreshKey = 0 }) {
                   <span>Closing: <span className="font-semibold text-slate-700 dark:text-slate-300">₹{group.closing.toLocaleString("en-IN")}</span></span>
                 </div>
               </div>
-              <table className="w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+              <table className="scroll-table min-w-full text-sm border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
                 <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
                   <tr>
                     <SortableTh label="Date" sortKeyName="created_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />

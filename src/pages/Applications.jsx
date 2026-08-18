@@ -1957,6 +1957,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
           restricted={restricted}
           canApprove={canApprove}
           isAdmin={isAdmin}
+          onlyDraft={onlyDraft}
           onClose={closeDetail}
           onStatusChange={updateStatus}
           onDelete={deleteApplication}
@@ -3303,7 +3304,7 @@ function RemarkPopup({ row, status, onCancel, onConfirm }) {
   );
 }
 
-function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, isAdmin = false, onClose, onStatusChange, onDelete, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
+function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, isAdmin = false, onlyDraft = false, onClose, onStatusChange, onDelete, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
   const [remarks, setRemarks] = useState(app.remarks || "");
   const [staffId, setStaffId] = useState(app.assigned_staff_id || "");
   const [staffIdentity, setStaffIdentity] = useState(null);
@@ -3363,6 +3364,46 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
   // stays available throughout as a manual override.
   const showForwardActions = app.status === "Draft Submitted" || app.status === "On Hold";
   const showReject = app.status !== "Rejected" && app.status !== "Completed";
+
+  // Draft-inbox quick actions (top of the modal, see openDetail(r, "admin"/
+  // "customer") from the row-click on the applicant name): same Accept /
+  // Put On Hold / Reject as the "Update Status" card further down, just
+  // surfaced immediately so staff/admin don't have to scroll to act. Hold
+  // and Reject both go through the RemarkPopup; Accept doesn't.
+  const [quickRemarkAction, setQuickRemarkAction] = useState(null); // "On Hold" | "Rejected" | null
+  const QuickActionBar = onlyDraft && (showForwardActions || showReject) ? (
+    <div className="flex flex-wrap gap-2 mb-4">
+      {showForwardActions && (
+        <>
+          <PrimaryButton
+            disabled={!canApprove || statusChanging}
+            onClick={() => handleStatusChange("Accepted", "")}
+            className="!bg-emerald-600 hover:!bg-emerald-700"
+            title={canApprove ? "Marks the application Accepted" : "You don't have approval rights for this role"}
+          >
+            Accept
+          </PrimaryButton>
+          {app.status !== "On Hold" && (
+            <GhostButton disabled={statusChanging} onClick={() => setQuickRemarkAction("On Hold")}>Put On Hold</GhostButton>
+          )}
+        </>
+      )}
+      {showReject && (
+        <DangerButton disabled={statusChanging} onClick={() => setQuickRemarkAction("Rejected")}>Reject</DangerButton>
+      )}
+    </div>
+  ) : null;
+  const QuickRemarkModal = quickRemarkAction ? (
+    <RemarkPopup
+      row={app}
+      status={quickRemarkAction}
+      onCancel={() => setQuickRemarkAction(null)}
+      onConfirm={async (text) => {
+        await handleStatusChange(quickRemarkAction, text);
+        setQuickRemarkAction(null);
+      }}
+    />
+  ) : null;
 
   const saveApplicant = async () => {
     const dobIso = ddmmyyyyToISO(applicant.date_of_birth);
@@ -3516,6 +3557,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
             {app.application_date && <span className="text-xs text-slate-400 dark:text-slate-500">Approved on {isoToDDMMYYYY(app.application_date)}</span>}
           </span>
         </div>
+        {QuickActionBar}
 
         <div className="grid md:grid-cols-3 gap-6">
           {/* Column 1: applicant details + staff assignment */}
@@ -3741,6 +3783,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
       {showPccLetter && (
         <PCCLetterModal app={app} onClose={() => setShowPccLetter(false)} />
       )}
+      {QuickRemarkModal}
       </>
     );
   }
@@ -3754,6 +3797,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
         </div>
+        {QuickActionBar}
         <Card title="Applicant Details" className="mb-4">
           <div className="grid grid-cols-2 gap-x-4">
             <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
@@ -3888,6 +3932,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     {showPccLetter && (
       <PCCLetterModal app={app} onClose={() => setShowPccLetter(false)} />
     )}
+    {QuickRemarkModal}
     </>
   );
 }

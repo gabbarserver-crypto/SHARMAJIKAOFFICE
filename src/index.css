@@ -29,6 +29,20 @@ html, body, #root {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Dealer/dealer-staff portal tables (DealerPortal.jsx) used to combine
+   `w-full` on the <table> with an `overflow-x-auto` wrapper — width:100%
+   caps the table AT the container's width, so instead of overflowing (and
+   letting the wrapper scroll), columns/text just squeezed and wrapped,
+   which is what looked like a "glitch" on phones. `min-w-full` (applied in
+   the component) lets the table grow past 100% when its content needs to;
+   this rule stops that content from wrapping first, which is what actually
+   forces the table wider than the screen so the wrapper has something to
+   scroll. */
+.scroll-table th,
+.scroll-table td {
+  white-space: nowrap;
+}
+
 /* Accent color — kept in sync with whichever sidebar color is picked in
    Settings (see src/lib/sidebarColor.js, which writes these three
    variables on document.documentElement any time it changes). Defaults
