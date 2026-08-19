@@ -431,7 +431,7 @@ export default function Payments({ staff } = {}) {
         <Card className="!p-4">
           <p className="text-xs text-slate-400 dark:text-slate-500">Bank Balance</p>
           <p className={`text-xl font-bold mt-1 ${bankBalance < 0 ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
-            {bankBalanceLoading ? "…" : `₹${bankBalance.toLocaleString("en-IN")}`}
+            {(bankBalanceLoading || allLoading) ? "…" : `₹${bankBalance.toLocaleString("en-IN")}`}
           </p>
           {bankBalanceError ? (
             <p className="text-[11px] text-rose-500 mt-1">
