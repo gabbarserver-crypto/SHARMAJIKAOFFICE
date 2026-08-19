@@ -54,13 +54,23 @@ export default function StaffQrSendPanel({ staff, dealers, onClose }) {
     try {
       const result = await createPaymentQr({ dealerId, applicationId: applicationId || null, amount: Number(amount), minutesValid });
 
+      // Same fallback create-qr.js documents: some Cashfree accounts don't
+      // have the embedded "Order Pay" QR image enabled, and only a
+      // paymentSessionId comes back. Previously that meant attachmentUrl
+      // ended up null/undefined here and the dealer just got plain text
+      // with nothing to tap — this now sends a "cashfree-pay:" attachment
+      // instead, which ChatPanel.jsx renders as a real "Pay Now" button
+      // that opens Cashfree's hosted checkout (same as the dealer's own
+      // "Pay by QR" screen already does in this exact fallback case).
+      const attachmentUrl = result.qrImageUrl || `cashfree-pay:${result.paymentSessionId}?mode=${result.cashfreeMode}`;
+
       const thread = await getOrCreateThread({ dealerId, applicationId: applicationId || null });
       await sendMessage({
         threadId: thread.id,
         sender: {
           ...identityFor({ staff }),
           body: `Payment QR for ₹${Number(amount).toLocaleString("en-IN")} — scan with any UPI app (PhonePe, GPay, Paytm, BHIM). Expires in ${minutesValid} minutes.`,
-          attachmentUrl: result.qrImageUrl,
+          attachmentUrl,
         },
       });
 
@@ -166,8 +176,10 @@ export default function StaffQrSendPanel({ staff, dealers, onClose }) {
           <p className="text-sm text-emerald-600 dark:text-emerald-400 font-semibold">
             Sent to {dealerName} — via chat{typeof window !== "undefined" ? " and push notification" : ""}.
           </p>
-          {qr.qrImageUrl && (
+          {qr.qrImageUrl ? (
             <img src={qr.qrImageUrl} alt="UPI payment QR" className="mx-auto w-48 h-48 rounded-lg border border-slate-200 dark:border-slate-700" />
+          ) : (
+            <p className="text-xs text-slate-400 dark:text-slate-500">No embedded QR image for this account — {dealerName} got a "Pay Now" button in chat instead, opening Cashfree's own checkout page.</p>
           )}
           <p className="text-xl font-bold text-slate-700 dark:text-slate-200">₹{Number(amount).toLocaleString("en-IN")}</p>
           <p className={`text-sm font-mono ${secondsLeft <= 30 ? "text-rose-500" : "text-slate-400"}`}>

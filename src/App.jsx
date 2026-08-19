@@ -163,12 +163,13 @@ export default function App() {
   const canEditActive = !staff || isAdmin || !!permMap[activeModule]?.can_edit;
   const canApproveActive = !staff || isAdmin || !!permMap[activeModule]?.can_approve;
 
-  // Personal "unread since I opened it" count — see
-  // api/chat/unread-summary.js. Replaces the old countOpenThreads() (an
-  // "awaiting reply" heuristic that never moved just because someone
-  // opened and read a thread) so this badge actually clears on read.
   const refreshPendingChatCount = useCallback(async () => {
     try {
+      // Real personal "unread since I opened it" count — see
+      // api/chat/unread-summary.js. countOpenThreads() (removed) was an
+      // "awaiting reply" heuristic keyed off who sent the *last* message,
+      // which never moved just because someone opened and read a thread —
+      // same bug DealerPortal.jsx already had fixed on the dealer side.
       const { totalUnreadThreads } = await chatUnreadSummary();
       setPendingChatCount(totalUnreadThreads || 0);
     } catch {
@@ -200,11 +201,19 @@ export default function App() {
   useEffect(() => {
     if (!staff) return;
     refreshPendingChatCount();
+
+    // A chat can be marked read from the popup, the full Chats page, or an
+    // application-chat modal. All of those go through ChatPanel.jsx, which
+    // calls notifyThreadRead() on threadReadBus the moment a thread is
+    // successfully marked read — listen for that so the sidebar/Call-Chat
+    // badge clears immediately instead of waiting for the 30s poll. (This
+    // replaces the old "sjo:thread-seen" window event, which nothing in
+    // the app dispatches anymore — that was the second half of why this
+    // badge never cleared on read.)
+    const unsubscribeRead = subscribeThreadRead(refreshPendingChatCount);
+
     // Recheck periodically...
     const interval = setInterval(refreshPendingChatCount, 30000);
-    // ...and the instant a chat panel anywhere marks a thread read, so the
-    // badge clears right when you open a chat instead of up to 30s later.
-    const unsubscribeRead = subscribeThreadRead(refreshPendingChatCount);
     // ...and immediately whenever any new message comes in anywhere, so the
     // badge doesn't wait up to 30s to reflect a message that just arrived —
     // and pop a toast (+ sound) for it too, as long as it isn't our own

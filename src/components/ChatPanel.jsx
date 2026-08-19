@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck, Reply, X, Volume2, Volume1 } from "lucide-react";
+import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck, Reply, X, Volume2, Volume1, CreditCard } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
 import { sendPush, chatReadReceipt } from "../lib/serverApi";
 import { notifyThreadRead } from "../lib/threadReadBus";
 import { useCall } from "../lib/call";
+import { openCashfreeHostedCheckout } from "../lib/cashfreeCheckout";
 import CallTimer from "./CallTimer";
 
 const SENDER_BUBBLE = {
@@ -14,15 +15,28 @@ const SENDER_BUBBLE = {
 
 const QUICK_EMOJI = ["👍", "❤️", "😂", "😮", "🙏", "✅"];
 
-// attachment_url doubles for three things now: an actual uploaded file
-// (image or otherwise), or a Google Maps link for a shared live location —
-// see sendLocation below. This tells the bubble renderer which of the
-// three it's looking at, so it doesn't try to <img> a Maps link or a PDF.
+// attachment_url doubles for four things now: an actual uploaded file
+// (image or otherwise), a Google Maps link for a shared live location (see
+// sendLocation below), or a Cashfree hosted-checkout hand-off (see
+// buildPaymentAttachmentUrl in StaffQrSendPanel.jsx — used whenever
+// create-qr.js couldn't get an embedded UPI QR image and only has a
+// paymentSessionId to fall back on). This tells the bubble renderer which
+// of the four it's looking at, so it doesn't try to <img> a Maps link or
+// treat a payment hand-off as a plain downloadable file.
 function attachmentKind(url) {
   if (!url) return null;
   if (/^https:\/\/www\.google\.com\/maps\?q=/.test(url)) return "location";
+  if (/^cashfree-pay:/.test(url)) return "payment";
   if (/\.(png|jpe?g|gif|webp)(\?|$)/i.test(url)) return "image";
   return "file";
+}
+
+// Pulls { paymentSessionId, mode } back out of a "cashfree-pay:<id>?mode=<m>"
+// attachment_url — see attachmentKind() above.
+function parsePaymentAttachment(url) {
+  const m = /^cashfree-pay:([^?]+)(?:\?mode=(\w+))?/.exec(url || "");
+  if (!m) return null;
+  return { paymentSessionId: m[1], mode: m[2] || "sandbox" };
 }
 
 // Uploaded paths are `chat/<threadId>/<timestamp>-<original filename>` —
@@ -46,6 +60,49 @@ function formatSeenTime(iso) {
     return "";
   }
 }
+
+// "Pay Now" bubble for a QR sent while Cashfree's embedded UPI QR image
+// wasn't available (some Cashfree accounts don't have the "Order Pay" API
+// enabled — see the comment in api/payments/create-qr.js) — the only thing
+// that endpoint could hand back that day was a paymentSessionId, good for
+// their hosted checkout page but not a static image, so this button
+// launches that checkout via the same Cashfree SDK helper the dealer's own
+// "Pay by QR" flow already uses (lib/cashfreeCheckout.js) instead of
+// silently sending a plain text message with nothing to actually tap.
+function PaymentAttachmentButton({ url, mine }) {
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState("");
+  const parsed = parsePaymentAttachment(url);
+  if (!parsed) return null;
+
+  const open = async () => {
+    setOpening(true);
+    setError("");
+    try {
+      await openCashfreeHostedCheckout(parsed);
+    } catch (e) {
+      setError(e.message || "Couldn't open the payment page");
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  return (
+    <div className="mb-1">
+      <button
+        type="button"
+        onClick={open}
+        disabled={opening}
+        className={`flex items-center gap-2 rounded-lg px-2.5 py-2 w-full disabled:opacity-60 ${mine ? "bg-white/10" : "bg-slate-100 dark:bg-slate-700"}`}
+      >
+        <CreditCard size={16} className="shrink-0" />
+        <span className="text-xs font-semibold underline">{opening ? "Opening…" : "Pay Now"}</span>
+      </button>
+      {error && <p className="text-[11px] text-rose-400 mt-1">{error}</p>}
+    </div>
+  );
+}
+
 // Renders the message list + composer for one thread (general dealer thread,
 // or one scoped to a single application). Owns thread resolution, initial
 // load, and the realtime subscription; the caller just tells it who's
@@ -210,6 +267,7 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
     const kind = attachmentKind(message.attachment_url);
     if (kind === "image") return "📷 Photo";
     if (kind === "location") return "📍 Location";
+    if (kind === "payment") return "💳 Payment QR — tap to pay";
     if (kind === "file") return `📎 ${attachmentFileName(message.attachment_url)}`;
     return "Message";
   };
@@ -448,6 +506,9 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
                       <MapPin size={16} className="shrink-0" />
                       <span className="text-xs font-semibold underline">View location on map</span>
                     </a>
+                  )}
+                  {m.attachment_url && attachmentKind(m.attachment_url) === "payment" && (
+                    <PaymentAttachmentButton url={m.attachment_url} mine={mine} />
                   )}
                   {m.attachment_url && attachmentKind(m.attachment_url) === "file" && (
                     <a
