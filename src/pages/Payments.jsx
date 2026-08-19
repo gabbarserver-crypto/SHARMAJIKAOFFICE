@@ -723,6 +723,7 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                   <AllSortTh label="Application" sortKeyName="application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Payment Mode" sortKeyName="mode" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Reference No" sortKeyName="reference" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <th className="px-3 py-2 text-left">Remarks</th>
                   <AllSortTh label="Amount" sortKeyName="amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
                   {isAdmin && <th className="px-3 py-2 text-left">Actions</th>}
                 </tr>
@@ -740,6 +741,7 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.applications?.draft_code || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.payment_mode}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.reference_no || "—"}</td>
+                    <td className="px-3 py-2 max-w-[220px] truncate text-slate-500 dark:text-slate-500" title={p.remarks || ""}>{p.remarks || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-right font-semibold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</td>
                     {isAdmin && (
                       <td className="px-3 py-2 whitespace-nowrap">
