@@ -39,6 +39,7 @@ export default function Payments({ staff } = {}) {
   const [bankQuery, setBankQuery] = useState("");
   const [bankDateFrom, setBankDateFrom] = useState("");
   const [bankDateTo, setBankDateTo] = useState("");
+  const [ledgerTab, setLedgerTab] = useState("bank"); // "bank" | "all" — which of the two tables below is showing
 
   const set = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.tagName === "SELECT" ? e.target.value : e.target.value.toUpperCase() }));
 
@@ -521,31 +522,48 @@ export default function Payments({ staff } = {}) {
         </PrimaryButton>
       </Card>
 
-      <BankTransactionsTable
-        transactions={bankTransactions}
-        loading={bankBalanceLoading || allLoading}
-        query={bankQuery}
-        setQuery={setBankQuery}
-        dateFrom={bankDateFrom}
-        setDateFrom={setBankDateFrom}
-        dateTo={bankDateTo}
-        setDateTo={setBankDateTo}
-      />
+      <div className="flex gap-2 border-b border-slate-200 dark:border-slate-800 mb-1">
+        <button
+          onClick={() => setLedgerTab("bank")}
+          className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px ${ledgerTab === "bank" ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
+        >
+          Bank Transactions
+        </button>
+        <button
+          onClick={() => setLedgerTab("all")}
+          className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px ${ledgerTab === "all" ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
+        >
+          All Receipts & Payments
+        </button>
+      </div>
 
-      <AllPaymentsTable
-        payments={allPayments}
-        loading={allLoading}
-        query={allQuery}
-        setQuery={setAllQuery}
-        dateFrom={allDateFrom}
-        setDateFrom={setAllDateFrom}
-        dateTo={allDateTo}
-        setDateTo={setAllDateTo}
-        isAdmin={isAdmin}
-        onBulkDelete={bulkDeletePayments}
-        onEdit={setEditingPayment}
-        onDelete={deletePayment}
-      />
+      {ledgerTab === "bank" ? (
+        <BankTransactionsTable
+          transactions={bankTransactions}
+          loading={bankBalanceLoading || allLoading}
+          query={bankQuery}
+          setQuery={setBankQuery}
+          dateFrom={bankDateFrom}
+          setDateFrom={setBankDateFrom}
+          dateTo={bankDateTo}
+          setDateTo={setBankDateTo}
+        />
+      ) : (
+        <AllPaymentsTable
+          payments={allPayments}
+          loading={allLoading}
+          query={allQuery}
+          setQuery={setAllQuery}
+          dateFrom={allDateFrom}
+          setDateFrom={setAllDateFrom}
+          dateTo={allDateTo}
+          setDateTo={setAllDateTo}
+          isAdmin={isAdmin}
+          onBulkDelete={bulkDeletePayments}
+          onEdit={setEditingPayment}
+          onDelete={deletePayment}
+        />
+      )}
 
       {editingPayment && (
         <EditPaymentModal
@@ -622,7 +640,7 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
       else if (sortKey === "payer") { av = payerName(a).toLowerCase(); bv = payerName(b).toLowerCase(); }
       else if (sortKey === "application") { av = (a.applications?.draft_code || "").toLowerCase(); bv = (b.applications?.draft_code || "").toLowerCase(); }
       else if (sortKey === "mode") { av = (a.payment_mode || "").toLowerCase(); bv = (b.payment_mode || "").toLowerCase(); }
-      else if (sortKey === "reference") { av = (a.reference_no || "").toLowerCase(); bv = (b.reference_no || "").toLowerCase(); }
+      else if (sortKey === "reference") { av = (a.receipt_no || a.reference_no || "").toLowerCase(); bv = (b.receipt_no || b.reference_no || "").toLowerCase(); }
       else { av = a.created_at || ""; bv = b.created_at || ""; }
       if (av < bv) return sortDir === "asc" ? -1 : 1;
       if (av > bv) return sortDir === "asc" ? 1 : -1;
@@ -651,7 +669,7 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
 
   const exportCSV = () => {
     const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const header = ["Date", "Payer", "Type", "Application", "Amount", "Mode", "Reference No", "Paid At Agency", "Remarks"];
+    const header = ["Date", "Payer", "Type", "Application", "Amount", "Mode", "Receipt No", "Reference No", "Paid At Agency", "Remarks"];
     const lines = [header.join(",")];
     filtered.forEach((p) => {
       lines.push([
@@ -661,6 +679,7 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
         escapeCsv(p.applications?.draft_code || ""),
         escapeCsv(p.amount),
         escapeCsv(p.payment_mode),
+        escapeCsv(p.receipt_no || ""),
         escapeCsv(p.reference_no || ""),
         escapeCsv(p.dealer_id ? (p.paid_at_agency?.name || "") : ""),
         escapeCsv(p.remarks || ""),
@@ -720,7 +739,6 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                   )}
                   <AllSortTh label="Date" sortKeyName="date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Payer" sortKeyName="payer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                  <AllSortTh label="Application" sortKeyName="application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Payment Mode" sortKeyName="mode" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <AllSortTh label="Reference No" sortKeyName="reference" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <th className="px-3 py-2 text-left">Remarks</th>
@@ -738,9 +756,8 @@ function AllPaymentsTable({ payments, loading, query, setQuery, dateFrom, setDat
                     )}
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{new Date(p.created_at).toLocaleDateString()}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-slate-700 dark:text-slate-300">{payerName(p)}</td>
-                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.applications?.draft_code || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.payment_mode}</td>
-                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.reference_no || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-500">{p.receipt_no || p.reference_no || "—"}</td>
                     <td className="px-3 py-2 max-w-[220px] truncate text-slate-500 dark:text-slate-500" title={p.remarks || ""}>{p.remarks || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-right font-semibold text-emerald-600">₹{Number(p.amount).toLocaleString("en-IN")}</td>
                     {isAdmin && (
