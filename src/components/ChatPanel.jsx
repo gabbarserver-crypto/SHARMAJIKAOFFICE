@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Send, Image as ImageIcon, Paperclip, MapPin, Smile, ThumbsUp, Phone, PhoneOff, Video, VideoOff, Mic, MicOff, CheckCheck, Reply, X, Volume2, Volume1 } from "lucide-react";
 import { getOrCreateThread, listMessages, sendMessage, subscribeToThread, uploadChatAttachment } from "../lib/chat";
 import { sendPush, chatReadReceipt } from "../lib/serverApi";
+import { notifyThreadRead } from "../lib/threadReadBus";
 import { useCall } from "../lib/call";
 import CallTimer from "./CallTimer";
 
@@ -148,12 +149,20 @@ export default function ChatPanel({ dealerId, applicationId = null, identity, em
   useEffect(() => {
     if (!threadId || !identity) return;
     let cancelled = false;
+    let notified = false;
     const markAndRefresh = async () => {
       try {
         const status = await chatReadReceipt({ threadId, markRead: true });
         if (!cancelled) {
           setReadStatus(status);
           setReaders(status.readers || []);
+          // Tell the sidebar badge / thread-list rows to refetch their
+          // unread counts right now, instead of sitting stale until their
+          // next poll — but only once per open, not every 4s tick.
+          if (!notified) {
+            notified = true;
+            notifyThreadRead(threadId);
+          }
         }
       } catch {
         // Non-fatal — ticks just won't update this cycle, no user-facing error needed.

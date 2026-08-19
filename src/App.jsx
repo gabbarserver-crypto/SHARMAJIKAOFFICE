@@ -24,7 +24,9 @@ import NotificationToaster from "./components/NotificationToaster";
 import { useDirectCall } from "./lib/directCall";
 import { notify, requestNotificationPermission, primeAudioOnFirstInteraction } from "./lib/notify";
 import { registerForPush, unregisterForPush } from "./lib/push";
-import { identityFor, countOpenThreads } from "./lib/chat";
+import { identityFor } from "./lib/chat";
+import { chatUnreadSummary } from "./lib/serverApi";
+import { subscribeThreadRead } from "./lib/threadReadBus";
 import PinUnlock from "./pages/PinUnlock";
 import SetupPinPrompt from "./components/SetupPinPrompt";
 import { hasPinSetUp, hasBeenPromptedForPin } from "./lib/pinLock";
@@ -161,9 +163,14 @@ export default function App() {
   const canEditActive = !staff || isAdmin || !!permMap[activeModule]?.can_edit;
   const canApproveActive = !staff || isAdmin || !!permMap[activeModule]?.can_approve;
 
+  // Personal "unread since I opened it" count — see
+  // api/chat/unread-summary.js. Replaces the old countOpenThreads() (an
+  // "awaiting reply" heuristic that never moved just because someone
+  // opened and read a thread) so this badge actually clears on read.
   const refreshPendingChatCount = useCallback(async () => {
     try {
-      setPendingChatCount(await countOpenThreads());
+      const { totalUnreadThreads } = await chatUnreadSummary();
+      setPendingChatCount(totalUnreadThreads || 0);
     } catch {
       // Best-effort — a failed badge refresh shouldn't be visible to staff,
       // it should just leave the last-known count in place.
@@ -195,6 +202,9 @@ export default function App() {
     refreshPendingChatCount();
     // Recheck periodically...
     const interval = setInterval(refreshPendingChatCount, 30000);
+    // ...and the instant a chat panel anywhere marks a thread read, so the
+    // badge clears right when you open a chat instead of up to 30s later.
+    const unsubscribeRead = subscribeThreadRead(refreshPendingChatCount);
     // ...and immediately whenever any new message comes in anywhere, so the
     // badge doesn't wait up to 30s to reflect a message that just arrived —
     // and pop a toast (+ sound) for it too, as long as it isn't our own
@@ -257,6 +267,7 @@ export default function App() {
       .subscribe();
     return () => {
       clearInterval(interval);
+      unsubscribeRead();
       supabase.removeChannel(channel);
       supabase.removeChannel(draftsChannel);
       supabase.removeChannel(paymentsChannel);

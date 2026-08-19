@@ -91,9 +91,13 @@ export function subscribeToThread(threadId, onMessage) {
 }
 
 // Counts application threads whose latest message is from a dealer/dealer_staff
-// (i.e. staff hasn't replied yet). Used for the sidebar "Chats" badge — same
-// "awaiting reply" definition used everywhere else in the app, not a literal
-// per-staff read/unseen count (there's no read-tracking table for that).
+// (i.e. staff hasn't replied yet) — an "awaiting reply" count, NOT a
+// personal read/unseen count. No longer used for the sidebar "Chats"
+// badge (that's chatUnreadSummary() in lib/serverApi.js now, which tracks
+// each individual's own last-read time via chat_thread_reads_by_identity
+// and so actually clears when they open a thread). Kept here in case it's
+// still useful for a "threads awaiting reply" report/metric — do not wire
+// this back into any badge that's supposed to mean "unread for me".
 export async function countOpenThreads() {
   const { data: threads, error: threadsError } = await supabase
     .from("chat_threads")
@@ -119,9 +123,10 @@ export async function countOpenThreads() {
 
 // Dealer-side counterpart to countOpenThreads: counts this dealer's threads
 // (general + per-application) whose latest message came from staff, i.e.
-// it's the dealer's turn to reply. Used for the dealer portal's "Chats" tab
-// badge — same "hasn't been replied to" proxy used everywhere else, not a
-// literal per-user read/unseen flag.
+// it's the dealer's turn to reply — an "awaiting reply" count, NOT a
+// personal read/unseen count. No longer used for the dealer portal's
+// "Chats" tab badge (see countOpenThreads' comment above — same story,
+// chatUnreadSummary() in lib/serverApi.js replaced it).
 export async function countDealerUnread(dealerId) {
   const { data: threads, error: threadsError } = await supabase
     .from("chat_threads")

@@ -12,7 +12,6 @@ import { MessageSquare, Phone, UserPlus, Users } from "lucide-react";
 import ChatPanel from "../components/ChatPanel";
 import CallLogPanel from "../components/CallLogPanel";
 import { identityFor } from "../lib/chat";
-import { loadSeenMap, saveSeenMap } from "../lib/threadSeen";
 import { ThreadsTab, CallsTab, NewCallTab } from "../components/CommsWindow";
 
 const TABS = [
@@ -27,20 +26,11 @@ export default function Chats({ staff, call }) {
   const [selectedThread, setSelectedThread] = useState(null); // { threadId, dealerId, applicationId, label, dealerName } | null
 
   const identity = identityFor({ staff });
-  const [seenMap, setSeenMap] = useState(() => loadSeenMap(identity));
 
-  // Same "mark as seen the moment you open it" behavior as the floating
-  // window — see lib/threadSeen.js.
-  const openThread = (thread) => {
-    setSelectedThread(thread);
-    if (thread?.threadId) {
-      setSeenMap((prev) => {
-        const next = { ...prev, [thread.threadId]: new Date().toISOString() };
-        saveSeenMap(identity, next);
-        return next;
-      });
-    }
-  };
+  // Opening a thread hands it to <ChatPanel/>, which marks it read
+  // server-side as soon as it mounts — ThreadsTab's own badge refetches on
+  // that same event (see lib/threadReadBus.js).
+  const openThread = (thread) => setSelectedThread(thread);
 
   const changeTab = (key) => {
     setTab(key);
@@ -74,9 +64,9 @@ export default function Chats({ staff, call }) {
       <div className="grid md:grid-cols-[340px_1fr] gap-4" style={{ height: "72vh" }}>
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
           {tab === "chats" ? (
-            <ThreadsTab variant="staff" scope="general" seenMap={seenMap} onOpenThread={openThread} />
+            <ThreadsTab variant="staff" scope="general" onOpenThread={openThread} />
           ) : tab === "customer" ? (
-            <ThreadsTab variant="staff" scope="application" seenMap={seenMap} onOpenThread={openThread} />
+            <ThreadsTab variant="staff" scope="application" onOpenThread={openThread} />
           ) : tab === "calls" ? (
             <CallsTab variant="staff" identity={identity} call={call} onOpenThread={openThread} />
           ) : (

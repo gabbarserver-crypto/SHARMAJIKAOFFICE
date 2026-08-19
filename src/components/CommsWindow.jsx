@@ -30,7 +30,8 @@ import ChatPanel from "./ChatPanel";
 import PastelAvatar from "./PastelAvatar";
 import { Modal } from "./UI";
 import { listRecentThreadsForStaff, listRecentThreadsForDealer } from "../lib/chat";
-import { loadSeenMap, saveSeenMap, isThreadSeen } from "../lib/threadSeen";
+import { chatUnreadSummary } from "../lib/serverApi";
+import { subscribeThreadRead } from "../lib/threadReadBus";
 import { fetchAllCallLogs, fetchCallLogs } from "../lib/callLog";
 
 function timeAgo(iso) {
@@ -105,7 +106,6 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("chats");
   const [selectedThread, setSelectedThread] = useState(null); // { dealerId, applicationId, label } | null
-  const [seenMap, setSeenMap] = useState(() => loadSeenMap(identity));
   const [showThreadDetail, setShowThreadDetail] = useState(false);
   const [threadDetail, setThreadDetail] = useState(null);
   const [threadDetailLoading, setThreadDetailLoading] = useState(false);
@@ -178,20 +178,11 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
     isOpen: () => open,
   }));
 
-  // Marks a thread as viewed right now, so its unread badge clears — this
-  // is what fixes "I opened it, but it still shows as a new message": the
-  // badge used to be driven purely by "has staff/dealer replied yet", with
-  // nothing tracking whether you'd actually looked. See lib/threadSeen.js.
-  const openThread = (thread) => {
-    setSelectedThread(thread);
-    if (thread?.threadId) {
-      setSeenMap((prev) => {
-        const next = { ...prev, [thread.threadId]: new Date().toISOString() };
-        saveSeenMap(identity, next);
-        return next;
-      });
-    }
-  };
+  // Opening a thread hands it to <ChatPanel/>, which marks it read
+  // server-side (see lib/serverApi.js's chatReadReceipt) as soon as it
+  // mounts — that's what actually clears this thread's unread badge
+  // (ThreadsTab below refetches on that same event via threadReadBus).
+  const openThread = (thread) => setSelectedThread(thread);
 
   if (variant === "staff" && !staff) return null;
   if (variant === "dealer" && !dealerId) return null;
@@ -254,11 +245,11 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
             emptyLabel="No messages here yet."
           />
         ) : tab === "chats" ? (
-          <ThreadsTab variant={variant} dealerId={dealerId} scope="general" seenMap={seenMap} onOpenThread={openThread} />
+          <ThreadsTab variant={variant} dealerId={dealerId} scope="general" onOpenThread={openThread} />
         ) : tab === "customer" ? (
-          <ThreadsTab variant={variant} dealerId={dealerId} scope="application" seenMap={seenMap} onOpenThread={openThread} />
+          <ThreadsTab variant={variant} dealerId={dealerId} scope="application" onOpenThread={openThread} />
         ) : tab === "calls" ? (
-          <CallsTab variant={variant} dealerId={dealerId} identity={identity} call={call} seenMap={seenMap} onOpenThread={openThread} />
+          <CallsTab variant={variant} dealerId={dealerId} identity={identity} call={call} onOpenThread={openThread} />
         ) : (
           <NewCallTab variant={variant} identity={identity} call={call} dealerId={dealerId} onOpenThread={openThread} />
         )}
@@ -441,11 +432,17 @@ export { ThreadsTab, CallsTab, NewCallTab, timeAgo, TABS, TAB_TITLE };
 // fits each: dealer name + last message for general, applicant name +
 // service for per-application.
 // ============================================================
-function ThreadsTab({ variant, dealerId, scope, seenMap, onOpenThread }) {
+function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
   const [threads, setThreads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  // True personal "unread since I opened it" counts, keyed by threadId —
+  // see api/chat/unread-summary.js. This is what actually clears when you
+  // open a thread (unlike each row's own t.unreadCount from
+  // listRecentThreadsForStaff/Dealer above, which is really an "awaiting
+  // reply" count that doesn't change just because someone read it).
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -460,7 +457,20 @@ function ThreadsTab({ variant, dealerId, scope, seenMap, onOpenThread }) {
     }
   }, [variant, dealerId]);
 
-  useEffect(() => { load(); }, [load]);
+  const loadUnread = useCallback(async () => {
+    try {
+      const { counts } = await chatUnreadSummary();
+      setUnreadCounts(counts || {});
+    } catch {
+      // Best-effort — a failed refresh just leaves the last-known badges in place.
+    }
+  }, []);
+
+  useEffect(() => { load(); loadUnread(); }, [load, loadUnread]);
+  // The instant any chat panel (including this thread, once opened) marks
+  // a thread read, refetch — so the badge on the row you just left clears
+  // immediately instead of waiting for a poll.
+  useEffect(() => subscribeThreadRead(loadUnread), [loadUnread]);
 
   const scoped = useMemo(
     () => threads.filter((t) => (scope === "application" ? !!t.applicationId : !t.applicationId)),
@@ -496,7 +506,13 @@ function ThreadsTab({ variant, dealerId, scope, seenMap, onOpenThread }) {
             return (
               <button
                 key={t.threadId}
-                onClick={() => onOpenThread({ threadId: t.threadId, dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: scope === "application" ? t.label : title, dealerName: t.dealerLabel })}
+                onClick={() => {
+                  // Optimistic: clear this row's badge right away rather than
+                  // waiting on the round trip to the server + the
+                  // threadReadBus refetch it triggers a moment later.
+                  setUnreadCounts((prev) => (prev[t.threadId] ? { ...prev, [t.threadId]: 0 } : prev));
+                  onOpenThread({ threadId: t.threadId, dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: scope === "application" ? t.label : title, dealerName: t.dealerLabel });
+                }}
                 className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3"
               >
                 <div className="relative shrink-0">
@@ -517,9 +533,9 @@ function ThreadsTab({ variant, dealerId, scope, seenMap, onOpenThread }) {
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">{subtitle}</p>
                 </div>
-                {t.unreadCount > 0 && !isThreadSeen(seenMap, t.threadId, t.lastAt) && (
+                {(unreadCounts[t.threadId] || 0) > 0 && (
                   <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">
-                    {t.unreadCount}
+                    {unreadCounts[t.threadId]}
                   </span>
                 )}
               </button>

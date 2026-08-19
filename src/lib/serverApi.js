@@ -96,3 +96,14 @@ export async function fetchAgoraToken({ channel }) {
 export async function chatReadReceipt({ threadId, markRead = true }) {
   return post("/api/chat/read-receipt", { accessToken: await accessToken(), threadId, markRead });
 }
+
+// True personal "unread since I opened it" counts — see
+// api/chat/unread-summary.js. Returns { counts: { [threadId]: number },
+// totalUnreadThreads }. Unlike lib/chat.js's countOpenThreads()/
+// listRecentThreadsForStaff()'s unreadCount (an "awaiting reply"
+// heuristic), this is driven by this specific caller's own
+// chat_thread_reads_by_identity row per thread, so it actually clears once
+// they've opened a thread.
+export async function chatUnreadSummary() {
+  return post("/api/chat/unread-summary", { accessToken: await accessToken() });
+}

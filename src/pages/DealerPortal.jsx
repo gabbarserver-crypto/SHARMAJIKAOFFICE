@@ -13,9 +13,10 @@ import CallLogPanel from "../components/CallLogPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
-import { getOrCreateThread, sendMessage, countDealerUnread, listRecentThreadsForDealer } from "../lib/chat";
+import { getOrCreateThread, sendMessage, listRecentThreadsForDealer } from "../lib/chat";
 import { notify } from "../lib/notify";
-import { createDealerStaffLogin, sendPush } from "../lib/serverApi";
+import { createDealerStaffLogin, sendPush, chatUnreadSummary } from "../lib/serverApi";
+import { subscribeThreadRead } from "../lib/threadReadBus";
 import { DELHI_POLICE_STATIONS } from "../lib/delhiPoliceStations";
 import { ageHighlightClass, validateAgeForService } from "../lib/age";
 import { scanAadhaarQr, isAadhaarQrScanSupported } from "../lib/aadhaarQr";
@@ -30,7 +31,6 @@ import DealerBottomTabBar from "../components/DealerBottomTabBar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
 import PastelAvatar from "../components/PastelAvatar";
 import { Search, Users } from "lucide-react";
-import { loadSeenMap, saveSeenMap, isThreadSeen } from "../lib/threadSeen";
 // (Ledger's description-parsing helpers are gone — dealer_ledger already
 // carries ledger_type / display_name as real columns, so nothing needs
 // importing from Ledger.jsx anymore.)
@@ -136,9 +136,14 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
     })();
   }, [dealer.id, refreshKey]);
 
+  // Personal "unread since I opened it" count — see
+  // api/chat/unread-summary.js. Replaces the old countDealerUnread() (an
+  // "awaiting reply" heuristic that never moved just because someone
+  // opened and read a thread) so this badge actually clears on read.
   const refreshUnreadChats = useCallback(async () => {
     try {
-      setUnreadChats(await countDealerUnread(dealer.id));
+      const { totalUnreadThreads } = await chatUnreadSummary();
+      setUnreadChats(totalUnreadThreads || 0);
     } catch {
       // Best-effort — a failed badge refresh just leaves the last-known count.
     }
@@ -147,6 +152,9 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   useEffect(() => {
     refreshUnreadChats();
     const interval = setInterval(refreshUnreadChats, 30000);
+    // ...and the instant a chat panel anywhere marks a thread read, so the
+    // badge clears right when this dealer/dealer_staff opens a chat.
+    const unsubscribeRead = subscribeThreadRead(refreshUnreadChats);
     const channel = supabase
       .channel(`chat_messages:dealer-badge:${Math.random().toString(36).slice(2)}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, async (payload) => {
@@ -169,6 +177,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       .subscribe();
     return () => {
       clearInterval(interval);
+      unsubscribeRead();
       supabase.removeChannel(channel);
     };
   }, [refreshUnreadChats]);
@@ -1545,7 +1554,9 @@ function DealerChats({ dealerId, identity, onMessage }) {
   const [error, setError] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState(null);
   const [query, setQuery] = useState("");
-  const [seenMap, setSeenMap] = useState(() => loadSeenMap(identity));
+  // True personal "unread since I opened it" counts — see
+  // api/chat/unread-summary.js.
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1560,17 +1571,25 @@ function DealerChats({ dealerId, identity, onMessage }) {
     }
   }, [dealerId]);
 
-  useEffect(() => { load(); }, [load]);
+  const loadUnread = useCallback(async () => {
+    try {
+      const { counts } = await chatUnreadSummary();
+      setUnreadCounts(counts || {});
+    } catch {
+      // Best-effort — a failed refresh just leaves the last-known badges in place.
+    }
+  }, []);
+
+  useEffect(() => { load(); loadUnread(); }, [load, loadUnread]);
+  useEffect(() => subscribeThreadRead(loadUnread), [loadUnread]);
 
   const selected = threads.find((t) => t.threadId === selectedThreadId) || null;
 
   const selectThread = (t) => {
     setSelectedThreadId(t.threadId);
-    setSeenMap((prev) => {
-      const next = { ...prev, [t.threadId]: new Date().toISOString() };
-      saveSeenMap(identity, next);
-      return next;
-    });
+    // Optimistic: clear right away, rather than waiting on the round trip
+    // to the server + the threadReadBus refetch it triggers a moment later.
+    setUnreadCounts((prev) => (prev[t.threadId] ? { ...prev, [t.threadId]: 0 } : prev));
   };
 
   const handleMessage = () => {
@@ -1611,7 +1630,7 @@ function DealerChats({ dealerId, identity, onMessage }) {
             ) : (
               filtered.map((t) => {
                 const isGeneral = !t.applicationId;
-                const unread = t.unreadCount > 0 && !isThreadSeen(seenMap, t.threadId, t.lastAt);
+                const unread = (unreadCounts[t.threadId] || 0) > 0;
                 return (
                   <button
                     key={t.threadId}
@@ -1644,7 +1663,7 @@ function DealerChats({ dealerId, identity, onMessage }) {
                     </div>
                     {unread && (
                       <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">
-                        {t.unreadCount}
+                        {unreadCounts[t.threadId]}
                       </span>
                     )}
                   </button>
