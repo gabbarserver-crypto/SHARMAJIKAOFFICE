@@ -1,8 +1,8 @@
-{
+﻿{
   "crons": [
     {
       "path": "/api/pcc-status/sync-all",
-      "schedule": "0 */2 * * *"
+      "schedule": "0 3 * * *"
     }
   ]
 }
