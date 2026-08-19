@@ -296,6 +296,7 @@ function ServiceMaster({ notify }) {
       parent_service: form.parent_service, short_name: form.short_name,
       pcc_required: form.pcc_required, slot_booking_required: form.slot_booking_required,
       rto_required: form.rto_required, agency_required: form.agency_required,
+      application_no_required: form.application_no_required, ll_dl_no_required: form.ll_dl_no_required,
       previous_ll_required: form.previous_ll_required,
       otp_required: form.otp_required, chat_in_app: form.chat_in_app,
       age_limit_required: !!form.age_limit_required,
@@ -366,6 +367,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
     parent_service: "", short_name: "", pcc_required: true, slot_booking_required: true,
     rto_required: false, agency_required: false, previous_ll_required: false, otp_required: false, chat_in_app: false,
     age_limit_required: false, min_age: "",
+    application_no_required: true, ll_dl_no_required: true,
     gov_fee: "", processing_charges: "", other_charges: "", pcc_fee: "", post_timing: "After Approval",
     next_service_id: "", next_service_wait_days: 30,
   });
@@ -435,7 +437,7 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
 
         <div>
           <Card title="Service Requirements" className="mb-4">
-            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"], ["age_limit_required", "Age Limitation"]].map(([k, label]) => (
+            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"], ["age_limit_required", "Age Limitation"], ["application_no_required", "Application No"], ["ll_dl_no_required", "LL/DL No"]].map(([k, label]) => (
               <Field key={k} label={label}>
                 <Select value={String(!!f[k])} onChange={setBool(k)}>
                   <option value="false">Not Required</option>

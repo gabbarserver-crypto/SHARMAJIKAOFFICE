@@ -442,8 +442,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // unconditionally would silently drop any application whose service_id
     // is somehow null.
     const servicesEmbed = filterService === "__PCC_REQUIRED__"
-      ? "services!inner(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age)"
-      : "services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age)";
+      ? "services!inner(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age,application_no_required,ll_dl_no_required)"
+      : "services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age,application_no_required,ll_dl_no_required)";
     let query = supabase
       .from("applications")
       .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name)`)
@@ -554,7 +554,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // assignment — and was causing "assigned staff not showing" on reopen).
     const { data: freshRow } = await supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age), staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), fee_staff:fee_entered_by(full_name), appno_staff:application_no_entered_by(full_name), lldl_staff:ll_dl_no_entered_by(full_name), amount_staff:amount_entered_by(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age,application_no_required,ll_dl_no_required), staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), fee_staff:fee_entered_by(full_name), appno_staff:application_no_entered_by(full_name), lldl_staff:ll_dl_no_entered_by(full_name), amount_staff:amount_entered_by(full_name)")
       .eq("id", row.id)
       .maybeSingle();
     let docs = (await supabase.from("application_documents").select("*").eq("application_id", row.id)).data || [];
@@ -1749,7 +1749,14 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 {visibleCols.application && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <EditableCell width="w-24" value={r.application_no} readOnly={r.status === "Completed"} readOnlyTitle="Application No. is locked after completion" onSave={(v) => updateRowField(r.id, "application_no", v || null)} />
+                      <EditableCell
+                        width="w-24"
+                        value={r.application_no}
+                        disabled={r.services?.application_no_required === false}
+                        readOnly={r.status === "Completed"}
+                        readOnlyTitle="Application No. is locked after completion"
+                        onSave={(v) => updateRowField(r.id, "application_no", v || null)}
+                      />
                       <button
                         onClick={() => openSarathi(r)}
                         title="Open on Sarathi Parivahan and copy DOB"
@@ -1762,7 +1769,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.lldl && (
                   <td className="px-3 py-2">
-                    <EditableCell width="w-24" value={r.ll_dl_no} readOnly={r.status === "Completed"} readOnlyTitle="LL/DL No. is locked after completion" onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)} placeholder="LL/DL No." />
+                    <EditableCell
+                      width="w-24"
+                      value={r.ll_dl_no}
+                      disabled={r.services?.ll_dl_no_required === false}
+                      readOnly={r.status === "Completed"}
+                      readOnlyTitle="LL/DL No. is locked after completion"
+                      onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)}
+                      placeholder="LL/DL No."
+                    />
                   </td>
                 )}
                 {visibleCols.pccno && (
@@ -3945,7 +3960,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                     ↗ Download PCC Certificate
                   </button>
                 )}
-                <DocumentRow doc={d} onChanged={onDocsChanged} />
+                <DocumentRow doc={d} applicationId={app.id} onChanged={onDocsChanged} />
               </div>
             ))}
         </Card>
@@ -4009,7 +4024,16 @@ function DocumentRow({ doc, applicationId, onChanged }) {
   // PDF just downloaded from the Sarathi popup above — instead of only
   // being able to Verify/Reject whatever the dealer already sent.
   const uploadFile = async (file) => {
-    if (!file || !applicationId) return;
+    if (!file) return;
+    if (!applicationId) {
+      // Was previously a silent no-op if this component ever got rendered
+      // without an applicationId (see the "customer" mode Documents card,
+      // which used to omit this prop and made uploads invisibly fail for
+      // everyone but Admin). Surface it loudly instead so a future regression
+      // like that is obvious immediately rather than a mystery bug report.
+      setUploadError("Upload failed: missing application reference. Please refresh and try again.");
+      return;
+    }
     setUploading(true);
     setUploadError("");
     const path = `${applicationId}/${doc.id}-${file.name}`;
