@@ -68,6 +68,16 @@ const DRAFT_VISIBLE_KEYS = ["applicationDate", "dealer", "service", "applicant",
 // roles without having to pass `disabled` at each of the ~15 call sites.
 const CanEditContext = createContext(true);
 
+// Once one of the in-row fields below has a value, it locks in the table —
+// further correction only happens through the applicant-name popup (see
+// ApplicationDetailModal's "Operational Details" card), which stays
+// editable regardless of whether the field is filled. This doesn't change
+// *who* can edit (still exactly the existing canEdit/admin permissions,
+// same as before) — it only moves *where* an already-filled field can be
+// edited from, so a filled cell can't be nudged by an accidental click/
+// scroll in the table.
+const FILLED_LOCK_TITLE = "Locked — click the applicant's name to edit this";
+
 // DOB helpers: stored in DB as ISO (YYYY-MM-DD), displayed/copied/typed as DD-MM-YYYY
 function isoToDDMMYYYY(iso) {
   if (!iso) return "";
@@ -110,15 +120,15 @@ function EditableCell({ value, onSave, type = "text", width = "w-24", placeholde
   );
 }
 
-function EditableSelect({ value, options, onSave, width = "w-32", placeholder = "Select", disabled = false }) {
+function EditableSelect({ value, options, onSave, width = "w-32", placeholder = "Select", disabled = false, readOnly = false, readOnlyTitle }) {
   const canEdit = useContext(CanEditContext);
-  const locked = disabled || !canEdit;
+  const locked = disabled || readOnly || !canEdit;
   return (
     <select
       value={locked && disabled ? "" : value || ""}
       onChange={(e) => onSave(e.target.value)}
       disabled={locked}
-      title={!canEdit && !disabled ? "You don't have edit access for this section" : undefined}
+      title={readOnly ? (readOnlyTitle || "Locked — click the applicant's name to edit") : (!canEdit && !disabled ? "You don't have edit access for this section" : undefined)}
       className={`${width} rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
         locked
           ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 cursor-not-allowed"
@@ -178,7 +188,7 @@ const PCC_STATUS_STYLES = {
   Rejected: "bg-red-50 text-red-700 border-red-300",
   "Police Case": "bg-orange-50 text-orange-700 border-orange-300",
 };
-function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
+function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, onSave, onOpenPortal, onSetNotRequired }) {
   const [open, setOpen] = useState(false);
   const [localNo, setLocalNo] = useState(pccNo || "");
   const [localStatus, setLocalStatus] = useState(pccStatus || "");
@@ -208,6 +218,32 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
   const style = pccStatus
     ? PCC_STATUS_STYLES[pccStatus] || "bg-blue-50 text-blue-600 border-blue-200"
     : null;
+
+  if (pccNotRequired) {
+    return (
+      <div className="relative inline-block" ref={wrapRef}>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="px-2.5 py-1 rounded-full text-xs font-semibold border whitespace-nowrap bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700"
+        >
+          Not Required
+        </button>
+        {open && (
+          <div className="absolute z-30 mt-1 left-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-lg w-56 overflow-hidden text-xs">
+            <p className="px-2.5 py-2 text-slate-500 dark:text-slate-500">This case was marked as not needing a PCC, even though the service normally does.</p>
+            <button
+              type="button"
+              onClick={() => { onSetNotRequired(false); setOpen(false); }}
+              className="w-full text-left px-2.5 py-1.5 text-blue-600 hover:bg-slate-50 dark:hover:bg-slate-800/60 border-t border-slate-100 dark:border-slate-800"
+            >
+              ↩ Mark PCC Required Again
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="relative inline-block" ref={wrapRef}>
@@ -267,6 +303,13 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
           >
             update
           </button>
+          <button
+            type="button"
+            onClick={() => { onSetNotRequired(true); setOpen(false); }}
+            className="w-full text-left px-2.5 py-1.5 text-[11px] text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/60 border-t border-slate-100 dark:border-slate-800"
+          >
+            🚫 Mark PCC Not Required for this case
+          </button>
         </div>
       )}
     </div>
@@ -279,7 +322,7 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
 // mention PCC here, since it's not expected to be filled for them.
 function getProcessingStage(row) {
   if (!row || row.status !== "Accepted") return null;
-  const pccRequired = !!row.services?.pcc_required;
+  const pccRequired = pccNeeded(row);
   // Defaults to true (same as the DB column default — see migration 015),
   // so every service that hasn't explicitly been set to "Not Required"
   // still gets this treatment.
@@ -319,6 +362,19 @@ function findPccRto(rtoList) {
     rtoList.find((r) => (r.name || "").toLowerCase().includes("pcc")) ||
     null
   );
+}
+
+// Effective "does this specific application need a PCC No." — the service
+// (e.g. LL RIC) sets the default via pcc_required, but that's one flag
+// shared by every application under it, and LL RIC only needs PCC in
+// ~80% of real cases. pcc_not_required (migration 016) is the
+// per-application override staff set from the PCC No. popup for the
+// ~20% that don't. Every "is PCC pending/needed" check below goes
+// through this instead of reading services.pcc_required directly, so a
+// case marked Not Required drops out of pending counts/filters and no
+// longer expects a PCC No. to ever be filled in.
+function pccNeeded(row) {
+  return !!row.services?.pcc_required && !row.pcc_not_required;
 }
 function dealerLabel(d) {
   if (!d) return "";
@@ -1156,13 +1212,25 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const isPendingData = (r) => {
     if (r.status !== "Accepted") return false;
     if (!r.ll_dl_no) return true;
-    if (r.services?.pcc_required && !r.pcc_no) return true;
+    if (pccNeeded(r) && !r.pcc_no) return true;
     return false;
   };
+
+  // The specific case you asked about: LL RIC applications where BOTH the
+  // Learning No. AND the PCC No. are still blank — i.e. staff haven't even
+  // gotten to the point of knowing whether this one needs PCC yet (the
+  // ~20%/80% split). isPendingData above is an OR (either one missing);
+  // this is the stricter AND, so it only surfaces the ones genuinely
+  // waiting on a decision either way. A case already marked "Not Required"
+  // no longer counts, since there's nothing left pending on the PCC side.
+  const isBothPending = (r) => r.status === "Accepted" && !r.ll_dl_no && pccNeeded(r) && !r.pcc_no;
+
+  const [bothPendingOnly, setBothPendingOnly] = useState(false);
 
   const filteredRows = rows.filter((r) => {
     if (chatOnly && !chatStatus[r.id]) return false;
     if (pendingOnly && !isPendingData(r)) return false;
+    if (bothPendingOnly && !isBothPending(r)) return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       const haystack = [
@@ -1193,7 +1261,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     application: (r) => r.application_no || "",
     lldl: (r) => r.ll_dl_no || "",
     pccno: (r) => r.pcc_no || "",
-    rto: (r) => (r.services?.pcc_required ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name || ""),
+    rto: (r) => (pccNeeded(r) ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name || ""),
     agency: (r) => agencyList.find((x) => x.id === r.agency_id)?.name || "",
     slot: (r) => r.slot_time || "",
     mobile: (r) => r.mobile || "",
@@ -1222,7 +1290,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
   useEffect(() => {
     setPage(1);
-  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly, showAllYears, pendingOnly]);
+  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly, showAllYears, pendingOnly, bothPendingOnly]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -1243,7 +1311,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     };
     const lines = [headers.join(",")];
     sortedRows.forEach((r) => {
-      const rtoCell = r.services?.pcc_required ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name;
+      const rtoCell = pccNeeded(r) ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name;
       const fullRow = [
         r.draft_code, r.amount, r.rto_fee, r.pcc_fee, r.agency_fee,
         dealerLabel(r.dealers), serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
@@ -1415,6 +1483,22 @@ export default function Applications({ restricted = false, canEdit = true, canAp
               {!pendingOnly && rows.filter(isPendingData).length > 0 && (
                 <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
                   {rows.filter(isPendingData).length}
+                </span>
+              )}
+            </button>
+          )}
+          {!restricted && (
+            <button
+              onClick={() => setBothPendingOnly((v) => !v)}
+              title="Accepted applications where BOTH Learning No. and PCC No. are still blank — e.g. LL RIC cases where it's not decided yet whether PCC is even needed"
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                bothPendingOnly ? "bg-rose-600 text-white border-rose-600" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              ⚠ LL + PCC Both Blank
+              {!bothPendingOnly && rows.filter(isBothPending).length > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {rows.filter(isBothPending).length}
                 </span>
               )}
             </button>
@@ -1658,13 +1742,23 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-24"
                       value={r.application_date ? isoToDDMMYYYY(r.application_date) : ""}
                       placeholder="DD-MM-YYYY"
+                      readOnly={!!r.application_date}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
                       onSave={(v) => updateRowField(r.id, "application_date", ddmmyyyyToISO(v) || null)}
                     />
                   </td>
                 )}
                 {visibleCols.amount && (
                   <td className="px-3 py-2">
-                    <EditableCell type="number" width="w-14" noSpinner value={r.amount} onSave={(v) => updateApplicationAmount(r.id, v === "" ? null : parseFloat(v))} />
+                    <EditableCell
+                      type="number"
+                      width="w-14"
+                      noSpinner
+                      value={r.amount}
+                      readOnly={!!r.amount}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
+                      onSave={(v) => updateApplicationAmount(r.id, v === "" ? null : parseFloat(v))}
+                    />
                   </td>
                 )}
                 {visibleCols.dealer && (
@@ -1723,6 +1817,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-14"
                       noSpinner
                       value={r.rto_fee}
+                      readOnly={!!r.rto_fee}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
                       onSave={(v) => updateRowField(r.id, "rto_fee", v === "" ? null : parseFloat(v))}
                     />
                   </td>
@@ -1733,7 +1829,9 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       type="number"
                       width="w-20"
                       value={r.pcc_fee}
-                      disabled={!r.services?.pcc_required}
+                      disabled={!pccNeeded(r)}
+                      readOnly={!!r.pcc_fee}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
                       onSave={(v) => updatePccFee(r, v)}
                     />
                   </td>
@@ -1745,6 +1843,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-20"
                       value={r.agency_fee}
                       disabled={!r.services?.agency_required}
+                      readOnly={!!r.agency_fee}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
                       onSave={(v) => updateAgencyFee(r, v)}
                     />
                   </td>
@@ -1763,8 +1863,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                         width="w-24"
                         value={r.application_no}
                         disabled={r.services?.application_no_required === false}
-                        readOnly={r.status === "Completed"}
-                        readOnlyTitle="Application No. is locked after completion"
+                        readOnly={r.status === "Completed" || !!r.application_no}
+                        readOnlyTitle={r.status === "Completed" ? "Application No. is locked after completion" : FILLED_LOCK_TITLE}
                         onSave={(v) => updateRowField(r.id, "application_no", v || null)}
                       />
                       <button
@@ -1783,8 +1883,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-24"
                       value={r.ll_dl_no}
                       disabled={r.services?.ll_dl_no_required === false}
-                      readOnly={r.status === "Completed"}
-                      readOnlyTitle="LL/DL No. is locked after completion"
+                      readOnly={r.status === "Completed" || !!r.ll_dl_no}
+                      readOnlyTitle={r.status === "Completed" ? "LL/DL No. is locked after completion" : FILLED_LOCK_TITLE}
                       onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)}
                       placeholder="LL/DL No."
                     />
@@ -1797,11 +1897,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                         <PCCNoPopup
                           pccNo={r.pcc_no}
                           pccStatus={r.pcc_status}
+                          pccNotRequired={r.pcc_not_required}
                           onOpenPortal={() => openPccPortal(r)}
                           onSave={(fields) => updatePccFields(r.id, fields)}
+                          onSetNotRequired={(v) => updatePccFields(r.id, { pcc_not_required: v })}
                         />
-                        <PCCStageDots pccStage={r.pcc_stage} pccCertificatePath={r.pcc_certificate_path} />
-                        {r.pcc_no && (
+                        {!r.pcc_not_required && <PCCStageDots pccStage={r.pcc_stage} pccCertificatePath={r.pcc_certificate_path} />}
+                        {r.pcc_no && !r.pcc_not_required && (
                           <button
                             type="button"
                             onClick={() => setPccCheckRow(r)}
@@ -1819,13 +1921,16 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.rto && (
                   <td className="px-3 py-2">
-                    {r.services?.pcc_required ? (
+                    {pccNeeded(r) ? (
                       // PCC (and anything bundling it, like LL RIC) never
                       // needs an actual RTO office — showing "PCC" here
                       // instead of leaving it blank makes it a quick visual
                       // marker: sort/scan the RTO column to see PCC rows
                       // grouped together, separate from blank = no RTO
                       // assigned yet on a service that actually needs one.
+                      // A case marked "PCC Not Required" (pcc_not_required)
+                      // falls through to the real RTO selector below, since
+                      // it does need an actual RTO office after all.
                       <span className="inline-block px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs font-medium">
                         PCC
                       </span>
@@ -1836,6 +1941,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                         options={rtoList}
                         placeholder="Select RTO"
                         disabled={!r.services?.rto_required}
+                        readOnly={!!r.rto_id}
+                        readOnlyTitle={FILLED_LOCK_TITLE}
                         onSave={(v) => updateRowField(r.id, "rto_id", v || null)}
                       />
                     )}
@@ -1849,6 +1956,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       options={agencyList}
                       placeholder="Select Agency"
                       disabled={!r.services?.agency_required}
+                      readOnly={!!r.agency_id}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
                       onSave={(v) => updateAgencyId(r, v)}
                     />
                   </td>
@@ -1859,6 +1968,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                       width="w-28"
                       value={r.slot_time}
                       disabled={!r.services?.slot_booking_required}
+                      readOnly={!!r.slot_time}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
                       onSave={(v) => updateRowField(r.id, "slot_time", v || null)}
                       placeholder="DD-MM-YYYY"
                     />
@@ -1867,7 +1978,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 {showRemarkMobile && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <EditableCell width="w-28" value={r.mobile} onSave={(v) => updateRowField(r.id, "mobile", v || null)} />
+                      <EditableCell
+                        width="w-28"
+                        value={r.mobile}
+                        readOnly={!!r.mobile}
+                        readOnlyTitle={FILLED_LOCK_TITLE}
+                        onSave={(v) => updateRowField(r.id, "mobile", v || null)}
+                      />
                       {r.mobile && (
                         <a
                           href={`tel:${r.mobile}`}
@@ -1882,7 +1999,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {showRemarkMobile && (
                   <td className="px-3 py-2">
-                    <EditableCell width="w-36" value={r.remarks} onSave={(v) => updateRowField(r.id, "remarks", v || null)} />
+                    <EditableCell
+                      width="w-36"
+                      value={r.remarks}
+                      readOnly={!!r.remarks}
+                      readOnlyTitle={FILLED_LOCK_TITLE}
+                      onSave={(v) => updateRowField(r.id, "remarks", v || null)}
+                    />
                   </td>
                 )}
                 {onlyDraft && (
@@ -2014,19 +2137,26 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
       {selected && (
         <ApplicationDetailModal
-          app={selected}
+          app={rows.find((r) => r.id === selected.id) || selected}
           mode={modalMode}
           staffList={staffList}
           restricted={restricted}
           canApprove={canApprove}
           isAdmin={isAdmin}
           onlyDraft={onlyDraft}
+          rtoList={rtoList}
+          agencyList={agencyList}
           onClose={closeDetail}
           onStatusChange={updateStatus}
           onDelete={deleteApplication}
           onAssign={assignStaff}
           onSaveAnswers={updateAnswers}
           onSaveApplicant={updateApplicantDetails}
+          onSaveField={updateRowField}
+          onSaveAmount={updateApplicationAmount}
+          onSavePccFee={updatePccFee}
+          onSaveAgencyFee={updateAgencyFee}
+          onSaveAgencyId={updateAgencyId}
           onDocsChanged={() => openDetail(selected, modalMode)}
         />
       )}
@@ -3367,7 +3497,7 @@ function RemarkPopup({ row, status, onCancel, onConfirm }) {
   );
 }
 
-function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, isAdmin = false, onlyDraft = false, onClose, onStatusChange, onDelete, onAssign, onSaveAnswers, onSaveApplicant, onDocsChanged }) {
+function ApplicationDetailModal({ app, mode = "customer", staffList, restricted = false, canApprove = true, isAdmin = false, onlyDraft = false, rtoList = [], agencyList = [], onClose, onStatusChange, onDelete, onAssign, onSaveAnswers, onSaveApplicant, onSaveField, onSaveAmount, onSavePccFee, onSaveAgencyFee, onSaveAgencyId, onDocsChanged }) {
   const [remarks, setRemarks] = useState(app.remarks || "");
   const [staffId, setStaffId] = useState(app.assigned_staff_id || "");
   const [staffIdentity, setStaffIdentity] = useState(null);
@@ -3510,6 +3640,117 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     setSavingAnswers(false);
   };
 
+  // Same fields that lock in the table once filled (see FILLED_LOCK_TITLE
+  // near EditableCell) — always editable here regardless of whether they
+  // already have a value, since this popup (opened by clicking the
+  // applicant's name) is exactly where that correction is meant to happen
+  // now. Uses the exact same save functions as the table row, so behavior
+  // (ledger sync on Agency Fee/Agency, auto-Accept on Amount, auto-Complete
+  // on Learning No., etc.) can't drift between the two entry points. Rights
+  // are unchanged too — EditableCell/EditableSelect still read the same
+  // CanEditContext, so this doesn't grant edit access to anyone who didn't
+  // already have it in the table.
+  const OperationalDetailsCard = onSaveField ? (
+    <Card title="Operational Details" className="mb-4">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+        <Field label="Application Date">
+          <EditableCell
+            width="w-full"
+            value={app.application_date ? isoToDDMMYYYY(app.application_date) : ""}
+            placeholder="DD-MM-YYYY"
+            onSave={(v) => onSaveField(app.id, "application_date", ddmmyyyyToISO(v) || null)}
+          />
+        </Field>
+        {!restricted && (
+          <Field label="Amount">
+            <EditableCell
+              type="number" width="w-full" noSpinner
+              value={app.amount}
+              onSave={(v) => onSaveAmount(app.id, v === "" ? null : parseFloat(v))}
+            />
+          </Field>
+        )}
+        <Field label="Application No.">
+          <EditableCell
+            width="w-full"
+            value={app.application_no}
+            disabled={app.services?.application_no_required === false}
+            readOnly={app.status === "Completed"}
+            readOnlyTitle="Application No. is locked after completion"
+            onSave={(v) => onSaveField(app.id, "application_no", v || null)}
+          />
+        </Field>
+        <Field label="LL/DL No.">
+          <EditableCell
+            width="w-full"
+            value={app.ll_dl_no}
+            disabled={app.services?.ll_dl_no_required === false}
+            readOnly={app.status === "Completed"}
+            readOnlyTitle="LL/DL No. is locked after completion"
+            onSave={(v) => onSaveField(app.id, "ll_dl_no", v || null)}
+          />
+        </Field>
+        <Field label="RTO Fee">
+          <EditableCell
+            type="number" width="w-full" noSpinner
+            value={app.rto_fee}
+            onSave={(v) => onSaveField(app.id, "rto_fee", v === "" ? null : parseFloat(v))}
+          />
+        </Field>
+        {pccNeeded(app) && (
+          <Field label="PCC Fee">
+            <EditableCell
+              type="number" width="w-full"
+              value={app.pcc_fee}
+              onSave={(v) => onSavePccFee(app, v)}
+            />
+          </Field>
+        )}
+        {!restricted && app.services?.agency_required && (
+          <>
+            <Field label="Agency">
+              <EditableSelect
+                width="w-full"
+                value={app.agency_id}
+                options={agencyList}
+                placeholder="Select Agency"
+                onSave={(v) => onSaveAgencyId(app, v)}
+              />
+            </Field>
+            <Field label="Agency Fee">
+              <EditableCell
+                type="number" width="w-full"
+                value={app.agency_fee}
+                onSave={(v) => onSaveAgencyFee(app, v)}
+              />
+            </Field>
+          </>
+        )}
+        {!pccNeeded(app) && app.services?.rto_required && (
+          <Field label="RTO">
+            <EditableSelect
+              width="w-full"
+              value={app.rto_id}
+              options={rtoList}
+              placeholder="Select RTO"
+              onSave={(v) => onSaveField(app.id, "rto_id", v || null)}
+            />
+          </Field>
+        )}
+        {app.services?.slot_booking_required && (
+          <Field label="Slot">
+            <EditableCell
+              width="w-full"
+              value={app.slot_time}
+              placeholder="DD-MM-YYYY"
+              onSave={(v) => onSaveField(app.id, "slot_time", v || null)}
+            />
+          </Field>
+        )}
+      </div>
+    </Card>
+  ) : null;
+
   if (mode === "status") {
     return (
       <Modal title={restricted ? `Accept — ${app.draft_code}` : `Status & Assignment — ${app.draft_code}`} onClose={onClose} wide>
@@ -3646,7 +3887,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                   </div>
                 </Field>
                 <div className="col-span-2"><Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field></div>
-                {app.services?.pcc_required && (
+                {pccNeeded(app) && (
                   <>
                     <Field label="Police Station">
                       <SearchableSelect
@@ -3665,6 +3906,8 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               </PrimaryButton>
               {applicantAgeError && <p className="text-rose-500 text-xs mt-2">{applicantAgeError}</p>}
             </Card>
+
+            {OperationalDetailsCard}
 
             <Card title="Assign Staff">
               <Field label="Responsible Staff">
@@ -3696,7 +3939,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
             </Card>
 
             <Card title="Documents" className="mb-4">
-              {app.services?.pcc_required && (
+              {pccNeeded(app) && (
                 <button
                   onClick={() => setShowPccLetter(true)}
                   className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 block"
@@ -3882,7 +4125,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               </div>
             </Field>
             <div className="col-span-2"><Field label="Address"><Input value={applicant.address} onChange={setApplicantField("address")} /></Field></div>
-            {app.services?.pcc_required && (
+            {pccNeeded(app) && (
               <>
                 <Field label="Police Station">
                   <SearchableSelect
@@ -3902,6 +4145,8 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           {applicantAgeError && <p className="text-rose-500 text-xs mt-2">{applicantAgeError}</p>}
         </Card>
 
+        {OperationalDetailsCard}
+
         <Card title="Service Answers" className="mb-4">
           {answers.map((row, i) => (
             <div key={i} className="flex gap-2 mb-2">
@@ -3919,7 +4164,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </Card>
 
         <Card title="Documents">
-          {app.services?.pcc_required && (
+          {pccNeeded(app) && (
             <button
               onClick={() => setShowPccLetter(true)}
               className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3 block"
