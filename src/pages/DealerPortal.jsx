@@ -193,6 +193,13 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   const visibleTabs = identity?.type === "dealer" ? ["Dashboard", ...TABS, "Staff"] : TABS;
+  // Only the dealer owner login gets a Dashboard tab (see visibleTabs
+  // above) — used below to decide where the Running Balance/Credit
+  // Limit/Pay by QR summary cards live: on Dashboard for the owner
+  // (freeing up the Applications tab for just... applications), but still
+  // on Applications for a dealer_staff sub-login, since they have no
+  // Dashboard tab to move them to.
+  const isDealerOwner = identity?.type === "dealer";
   const [dark, toggleDark] = useDarkMode();
   const [passkeyMsg, setPasskeyMsg] = useState("");
   const [photoUrl, setPhotoUrl] = useState(null);
@@ -338,7 +345,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       )}
 
       <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto box-border p-6 pb-24">
-        {(tab === "Applications" || tab === "Ledger") && (
+        {(tab === "Ledger" || (tab === "Applications" && !isDealerOwner) || (tab === "Dashboard" && isDealerOwner)) && (
           <div className="w-full min-w-0 grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 mb-6">
             <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
               <h3 className="text-[10px] sm:text-base font-semibold text-slate-800 dark:text-slate-100 mb-0.5 sm:mb-4 truncate">Running Balance</h3>
