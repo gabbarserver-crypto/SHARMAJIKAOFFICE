@@ -392,24 +392,6 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
             <Field label="Name" required><Input value={f.parent_service} onChange={set("parent_service")} /></Field>
             <Field label="Short Name" required><Input value={f.short_name} onChange={set("short_name")} /></Field>
           </Card>
-        </div>
-
-        <div>
-          <Card title="Service Requirements" className="mb-4">
-            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"], ["age_limit_required", "Age Limitation"], ["application_no_required", "Application No"], ["ll_dl_no_required", "LL/DL No"]].map(([k, label]) => (
-              <Field key={k} label={label}>
-                <Select value={String(!!f[k])} onChange={setBool(k)}>
-                  <option value="false">Not Required</option>
-                  <option value="true">Required</option>
-                </Select>
-              </Field>
-            ))}
-            {f.age_limit_required && (
-              <Field label="Minimum Age">
-                <Input type="number" min="0" value={f.min_age} onChange={set("min_age")} placeholder="e.g. 18" />
-              </Field>
-            )}
-          </Card>
 
           <Card title="Workflow Rules" className="mb-4">
             {[["previous_ll_required","Previous LL Required"],["otp_required","OTP Verification"],["chat_in_app","Chat in Application"]].map(([k,label]) => (
@@ -434,6 +416,24 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
                   creates a draft for the Next Service above instead — e.g. Learner's Licence → Driving Licence (30
                   days), or Insurance → Fitness (1 day).
                 </p>
+              </Field>
+            )}
+          </Card>
+        </div>
+
+        <div>
+          <Card title="Service Requirements" className="mb-4">
+            {[["pcc_required", "PCC No"], ["rto_required", "RTO"], ["agency_required", "Agency"], ["slot_booking_required", "Slot"], ["age_limit_required", "Age Limitation"], ["application_no_required", "Application No"], ["ll_dl_no_required", "LL/DL No"]].map(([k, label]) => (
+              <Field key={k} label={label}>
+                <Select value={String(!!f[k])} onChange={setBool(k)}>
+                  <option value="false">Not Required</option>
+                  <option value="true">Required</option>
+                </Select>
+              </Field>
+            ))}
+            {f.age_limit_required && (
+              <Field label="Minimum Age">
+                <Input type="number" min="0" value={f.min_age} onChange={set("min_age")} placeholder="e.g. 18" />
               </Field>
             )}
           </Card>
