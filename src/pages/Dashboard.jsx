@@ -155,8 +155,11 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
     })();
   }, [month, year]);
 
-  const isPending = (s) => s !== "Completed" && s !== "Rejected";
-  const isCompleted = (s) => s === "Completed";
+  // Matches the same status grouping get_dashboard_counts() uses server-side
+  // (Accepted + Completed both count as "done"; Under Review/On Hold as
+  // pending). Draft Submitted and Rejected are excluded from both buckets.
+  const isCompleted = (s) => s === "Accepted" || s === "Completed";
+  const isPending = (s) => s === "Under Review" || s === "On Hold";
   const monthTotals = monthRows.reduce(
     (acc, r) => {
       acc.total += 1;
