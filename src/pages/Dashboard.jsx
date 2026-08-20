@@ -124,7 +124,7 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
       const rangeStart = new Date(now0.getFullYear(), now0.getMonth() - 5, 1).toISOString();
       const { data } = await supabase
         .from("applications")
-        .select("id, status, submitted_at")
+        .select("id, status, submitted_at, ll_dl_no, services(ll_dl_no_required)")
         .gte("submitted_at", rangeStart);
       setTrendRows(data || []);
       setTrendLoading(false);
@@ -142,7 +142,7 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
       const rangeEnd = new Date(year, month + 1, 1).toISOString();
       const { data, error } = await supabase
         .from("applications")
-        .select("id, status, submitted_at, dealers(name)")
+        .select("id, status, submitted_at, ll_dl_no, dealers(name), services(ll_dl_no_required)")
         .gte("submitted_at", rangeStart)
         .lt("submitted_at", rangeEnd);
       if (error) {
@@ -155,16 +155,32 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
     })();
   }, [month, year]);
 
-  // Matches the same status grouping get_dashboard_counts() uses server-side
-  // (Accepted + Completed both count as "done"; Under Review/On Hold as
-  // pending). Draft Submitted and Rejected are excluded from both buckets.
-  const isCompleted = (s) => s === "Accepted" || s === "Completed";
-  const isPending = (s) => s === "Under Review" || s === "On Hold";
+  // Matches the same status grouping get_dashboard_counts() uses server-side,
+  // PLUS the same "is it actually done" nuance Applications.jsx's
+  // getProcessingStage() applies: an "Accepted" row whose LL/DL No. is
+  // still required-but-blank isn't really finished yet, so it counts as
+  // pending here rather than completed (mirrors what staff see on the
+  // Applications page — the "Application No. generated" sub-label with no
+  // LL/DL No. filled in means the case is still open).
+  const lldlStillMissing = (r) => {
+    const required = r.services?.ll_dl_no_required !== false; // default true, per migration 015
+    return required && !r.ll_dl_no;
+  };
+  const isCompleted = (r) => {
+    if (r.status === "Completed") return true;
+    if (r.status === "Accepted") return !lldlStillMissing(r);
+    return false;
+  };
+  const isPending = (r) => {
+    if (r.status === "Under Review" || r.status === "On Hold") return true;
+    if (r.status === "Accepted" && lldlStillMissing(r)) return true;
+    return false;
+  };
   const monthTotals = monthRows.reduce(
     (acc, r) => {
       acc.total += 1;
-      if (isCompleted(r.status)) acc.completed += 1;
-      else if (isPending(r.status)) acc.pending += 1;
+      if (isCompleted(r)) acc.completed += 1;
+      else if (isPending(r)) acc.pending += 1;
       return acc;
     },
     { total: 0, pending: 0, completed: 0 }
@@ -175,8 +191,8 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
     if (!dealerGroups.has(label)) dealerGroups.set(label, { label, total: 0, pending: 0, completed: 0 });
     const g = dealerGroups.get(label);
     g.total += 1;
-    if (isCompleted(r.status)) g.completed += 1;
-    else if (isPending(r.status)) g.pending += 1;
+    if (isCompleted(r)) g.completed += 1;
+    else if (isPending(r)) g.pending += 1;
   }
   const dealerGroupRows = [...dealerGroups.values()].sort((a, b) => b.total - a.total);
   const monthLabel = `${MONTH_NAMES[month]} ${year}`;
@@ -205,8 +221,8 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
     const bucket = trendBuckets.get(key);
     if (!bucket) continue; // outside the 6-month window (shouldn't happen given the query range)
     bucket.total += 1;
-    if (isCompleted(r.status)) bucket.completed += 1;
-    else if (isPending(r.status)) bucket.pending += 1;
+    if (isCompleted(r)) bucket.completed += 1;
+    else if (isPending(r)) bucket.pending += 1;
   }
   const trendData = [...trendBuckets.values()];
 
