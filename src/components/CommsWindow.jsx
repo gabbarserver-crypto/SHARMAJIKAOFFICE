@@ -24,7 +24,7 @@
 // it. Admin staff, on the other hand, can call/chat with any dealer or
 // dealer_staff — that's the whole point of the support desk.
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useState, forwardRef } from "react";
-import { MessageCircle, MessageSquare, Users, UserPlus, Phone, Video, PhoneMissed, PhoneOff, Search, X, Plus, Filter, ChevronRight } from "lucide-react";
+import { MessageCircle, MessageSquare, Users, UserPlus, Phone, Video, PhoneMissed, PhoneOff, Search, X, Plus, Filter, ChevronRight, Inbox } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import ChatPanel from "./ChatPanel";
 import PastelAvatar from "./PastelAvatar";
@@ -95,16 +95,21 @@ function SearchBar({ value, onChange, placeholder }) {
 
 const TABS = [
   { key: "chats", label: "Recent Chats", Icon: MessageSquare },
+  { key: "unread", label: "Unread", Icon: Inbox },
   { key: "calls", label: "Recent Calls", Icon: Phone },
   { key: "new", label: "New Call", Icon: UserPlus },
   { key: "customer", label: "Customer Chat", Icon: Users },
 ];
 
-const TAB_TITLE = { chats: "Recent Chats", calls: "Recent Call Logs", new: "New Call", customer: "Customer Chat" };
+const TAB_TITLE = { chats: "Recent Chats", unread: "Unread Chats", calls: "Recent Call Logs", new: "New Call", customer: "Customer Chat" };
 
 const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, dealerId, dealerName, staff, pendingCount = 0, onExpand }, ref) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState("chats");
+  // Defaults to "unread" (not "chats") — the FAB itself now only shows up
+  // once there's something unread (see the FAB block below), so the first
+  // thing anyone sees on opening it should be exactly that unread list,
+  // not a click away.
+  const [tab, setTab] = useState("unread");
   const [selectedThread, setSelectedThread] = useState(null); // { dealerId, applicationId, label } | null
   const [showThreadDetail, setShowThreadDetail] = useState(false);
   const [threadDetail, setThreadDetail] = useState(null);
@@ -169,7 +174,11 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
     setThreadDetailLoading(false);
   };
 
-  const openWindow = () => setOpen(true);
+  // Jumps back to "unread" on every fresh open, not just the first mount —
+  // so re-opening later in the session (after browsing some other tab last
+  // time) still lands on unread first, matching the FAB only ever
+  // appearing when there's unread mail to begin with.
+  const openWindow = () => { setTab("unread"); setOpen(true); };
   const closeWindow = () => { setOpen(false); setSelectedThread(null); };
 
   useImperativeHandle(ref, () => ({
@@ -246,6 +255,8 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
           />
         ) : tab === "chats" ? (
           <ThreadsTab variant={variant} dealerId={dealerId} scope="general" onOpenThread={openThread} />
+        ) : tab === "unread" ? (
+          <ThreadsTab variant={variant} dealerId={dealerId} scope="unread" onOpenThread={openThread} />
         ) : tab === "customer" ? (
           <ThreadsTab variant={variant} dealerId={dealerId} scope="application" onOpenThread={openThread} />
         ) : tab === "calls" ? (
@@ -394,9 +405,14 @@ const CommsWindow = forwardRef(function CommsWindow({ variant, identity, call, d
       {/* FAB — mobile no longer shows this at all; opening the chat window
           is now done from the app's own bottom tab bar (Call/Chat), so a
           second floating button would be redundant. Kept for desktop/
-          tablet, where there's no bottom tab bar to fold this into. */}
+          tablet, where there's no bottom tab bar to fold this into — but
+          only while there's actually something unread: with nothing
+          pending it just sits there as clutter over the page, so it now
+          stays hidden until pendingCount says otherwise. While the window
+          itself is open this stays hidden regardless (the popup/mobile
+          takeover already has its own ✕ in the header), same as before. */}
       <div
-        className={`no-print fixed z-50 flex-col items-end ${open ? "hidden" : "hidden md:flex"}`}
+        className={`no-print fixed z-50 flex-col items-end ${open || pendingCount <= 0 ? "hidden" : "hidden md:flex"}`}
         style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))", right: "calc(1.25rem + env(safe-area-inset-right))" }}
       >
         <button
@@ -472,13 +488,25 @@ function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
   // immediately instead of waiting for a poll.
   useEffect(() => subscribeThreadRead(loadUnread), [loadUnread]);
 
-  const scoped = useMemo(
-    () => threads.filter((t) => (scope === "application" ? !!t.applicationId : !t.applicationId)),
-    [threads, scope]
-  );
+  // "unread" pulls from BOTH scopes (general dealer threads and
+  // per-application ones) — it's not a third kind of thread, just a view
+  // filtered by this caller's own unreadCounts (see loadUnread above)
+  // instead of by application_id. A thread drops out of this list the
+  // instant its count clears, which happens optimistically on open (see
+  // the onClick handler below) — so opening one removes it from Unread
+  // right away instead of waiting on a refetch.
+  const scoped = useMemo(() => {
+    if (scope === "unread") return threads.filter((t) => (unreadCounts[t.threadId] || 0) > 0);
+    return threads.filter((t) => (scope === "application" ? !!t.applicationId : !t.applicationId));
+  }, [threads, scope, unreadCounts]);
 
-  const titleOf = (t) => (scope === "application" ? (t.applicantName || t.label) : (variant === "staff" ? t.dealerLabel : "Support Team"));
-  const subtitleOf = (t) => (scope === "application" ? (t.serviceLabel || "Service") : (t.lastMessage || "No messages yet"));
+  // Whether a given row should render as an "application" (customer) row
+  // vs a general dealer row — for scope="unread" this is per-row (a mix of
+  // both kinds can show up together), for the other two scopes it's fixed.
+  const isAppRow = (t) => (scope === "unread" ? !!t.applicationId : scope === "application");
+
+  const titleOf = (t) => (isAppRow(t) ? (t.applicantName || t.label) : (variant === "staff" ? t.dealerLabel : "Support Team"));
+  const subtitleOf = (t) => (isAppRow(t) ? (t.serviceLabel || "Service") : (t.lastMessage || "No messages yet"));
 
   const filtered = scoped.filter((t) => {
     if (!query.trim()) return true;
@@ -486,8 +514,8 @@ function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
     return titleOf(t).toLowerCase().includes(q) || (subtitleOf(t) || "").toLowerCase().includes(q);
   });
 
-  const placeholder = scope === "application" ? "Search customers…" : "Search chats…";
-  const emptyLabel = scope === "application" ? "No customer chats yet." : "No conversations yet.";
+  const placeholder = scope === "application" ? "Search customers…" : scope === "unread" ? "Search unread…" : "Search chats…";
+  const emptyLabel = scope === "application" ? "No customer chats yet." : scope === "unread" ? "No unread chats." : "No conversations yet.";
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -511,13 +539,13 @@ function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
                   // waiting on the round trip to the server + the
                   // threadReadBus refetch it triggers a moment later.
                   setUnreadCounts((prev) => (prev[t.threadId] ? { ...prev, [t.threadId]: 0 } : prev));
-                  onOpenThread({ threadId: t.threadId, dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: scope === "application" ? t.label : title, dealerName: t.dealerLabel });
+                  onOpenThread({ threadId: t.threadId, dealerId: variant === "staff" ? t.dealerId : dealerId, applicationId: t.applicationId, label: isAppRow(t) ? t.label : title, dealerName: t.dealerLabel });
                 }}
                 className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center gap-3"
               >
                 <div className="relative shrink-0">
                   <PastelAvatar name={title} size={40} />
-                  {scope === "general" && (
+                  {!isAppRow(t) && (
                     <span
                       title="Group chat — dealer, their staff, and our team"
                       className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center border-2 border-white dark:border-slate-900"

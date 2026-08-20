@@ -8,18 +8,10 @@
 // desktop "Chats" page and the floating chat window looking and behaving
 // identically, with one shared implementation.
 import React, { useState } from "react";
-import { MessageSquare, Phone, UserPlus, Users } from "lucide-react";
 import ChatPanel from "../components/ChatPanel";
 import CallLogPanel from "../components/CallLogPanel";
 import { identityFor } from "../lib/chat";
-import { ThreadsTab, CallsTab, NewCallTab } from "../components/CommsWindow";
-
-const TABS = [
-  { key: "chats", label: "Recent Chats", Icon: MessageSquare },
-  { key: "calls", label: "Recent Calls", Icon: Phone },
-  { key: "new", label: "New Call", Icon: UserPlus },
-  { key: "customer", label: "Customer Chat", Icon: Users },
-];
+import { ThreadsTab, CallsTab, NewCallTab, TABS } from "../components/CommsWindow";
 
 export default function Chats({ staff, call }) {
   const [tab, setTab] = useState("chats");
@@ -65,6 +57,8 @@ export default function Chats({ staff, call }) {
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
           {tab === "chats" ? (
             <ThreadsTab variant="staff" scope="general" onOpenThread={openThread} />
+          ) : tab === "unread" ? (
+            <ThreadsTab variant="staff" scope="unread" onOpenThread={openThread} />
           ) : tab === "customer" ? (
             <ThreadsTab variant="staff" scope="application" onOpenThread={openThread} />
           ) : tab === "calls" ? (
