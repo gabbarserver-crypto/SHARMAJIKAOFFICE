@@ -280,9 +280,19 @@ function PCCNoPopup({ pccNo, pccStatus, onSave, onOpenPortal }) {
 function getProcessingStage(row) {
   if (!row || row.status !== "Accepted") return null;
   const pccRequired = !!row.services?.pcc_required;
+  // Defaults to true (same as the DB column default — see migration 015),
+  // so every service that hasn't explicitly been set to "Not Required"
+  // still gets this treatment.
+  const lldlRequired = row.services?.ll_dl_no_required !== false;
   const hasAppNo = !!row.application_no;
   const hasPccNo = !!row.pcc_no;
+  const hasLldlNo = !!row.ll_dl_no;
   if (!pccRequired) {
+    // LL/DL-type services (Learning Licence, Driving Licence, CART, etc.)
+    // — once the LL/DL No. itself has come back, the application has moved
+    // past "application submitted" to actually being issued, so say that
+    // instead of the generic "Application No. generated".
+    if (lldlRequired && hasLldlNo) return `${serviceLabel(row.services)} Issued`;
     return hasAppNo ? "Application No. generated" : "Awaiting Application No.";
   }
   if (hasAppNo && hasPccNo) return "Application No. generated & PCC Under Process";
