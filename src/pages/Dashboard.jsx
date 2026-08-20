@@ -4,6 +4,21 @@ import { supabase } from "../lib/supabase";
 import { Capacitor } from "@capacitor/core";
 import { Browser } from "@capacitor/browser";
 import { FileText, CalendarCheck, CalendarClock, FileEdit, Clock, CheckCircle2, Users, UserCheck, Download, Smartphone, CreditCard, BarChart2, Settings as SettingsIcon, LayoutGrid, Wallet, Landmark, Gamepad2 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from "recharts";
 import { BOTTOM_TAB_KEYS } from "../components/BottomTabBar";
 
 // Icons for whichever nav items land in the mobile-only overflow row below
@@ -23,6 +38,13 @@ const OVERFLOW_ICONS = { payments: CreditCard, reports: BarChart2, settings: Set
 const APP_VERSION = "1.0.0";
 const APK_PATH = "https://github.com/gabbarserver-crypto/one-infinity/releases/latest/download/app-1infinity.apk";
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Colors kept in sync with the tile palette above (amber/orange = pending,
+// emerald/green = completed) so the donut reads consistently with the
+// rest of the dashboard.
+const STATUS_COLORS = { pending: "#d97706", completed: "#059669" };
+const DEALER_BAR_COLORS = { pending: "#d97706", completed: "#059669" };
 
 // 1 Infinity Games — opens the standalone games site, handing off the current
 // Supabase session so a staff member who's already logged in here doesn't
@@ -75,6 +97,12 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
   const [monthError, setMonthError] = useState("");
   const yearOptions = Array.from({ length: 5 }, (_, i) => now0.getFullYear() - i);
 
+  // 6-month trend — separate query covering a fixed rolling window (not
+  // tied to the month/year picker above), so the trend line stays put
+  // while someone browses different months in the breakdown below.
+  const [trendRows, setTrendRows] = useState([]);
+  const [trendLoading, setTrendLoading] = useState(true);
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.rpc("get_dashboard_counts").maybeSingle();
@@ -89,6 +117,17 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
         dealer_total: (dealerSummaries || []).reduce((acc, s) => acc + Number(s.running_balance || 0), 0),
         agency_total: (agencySummaries || []).reduce((acc, s) => acc + Number(s.running_balance || 0), 0),
       });
+    })();
+    (async () => {
+      setTrendLoading(true);
+      // Rolling 6-month window ending this month (oldest -> newest).
+      const rangeStart = new Date(now0.getFullYear(), now0.getMonth() - 5, 1).toISOString();
+      const { data } = await supabase
+        .from("applications")
+        .select("id, status, submitted_at")
+        .gte("submitted_at", rangeStart);
+      setTrendRows(data || []);
+      setTrendLoading(false);
     })();
   }, []);
 
@@ -138,6 +177,35 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
   }
   const dealerGroupRows = [...dealerGroups.values()].sort((a, b) => b.total - a.total);
   const monthLabel = `${MONTH_NAMES[month]} ${year}`;
+
+  // Status donut — reuses monthTotals so it always matches the 3 stat
+  // cards above the table (no separate source of truth).
+  const statusDonutData = [
+    { name: "Pending", key: "pending", value: monthTotals.pending },
+    { name: "Completed", key: "completed", value: monthTotals.completed },
+  ].filter((d) => d.value > 0);
+
+  // Dealer bar chart — top 8 dealers this month, pending/completed
+  // stacked, from the same dealerGroupRows the table below uses.
+  const dealerBarData = dealerGroupRows.slice(0, 8);
+
+  // 6-month trend — bucket trendRows by submitted_at's month.
+  const trendBuckets = new Map();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now0.getFullYear(), now0.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    trendBuckets.set(key, { key, label: `${MONTH_SHORT[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`, total: 0, pending: 0, completed: 0 });
+  }
+  for (const r of trendRows) {
+    const d = new Date(r.submitted_at);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    const bucket = trendBuckets.get(key);
+    if (!bucket) continue; // outside the 6-month window (shouldn't happen given the query range)
+    bucket.total += 1;
+    if (isCompleted(r.status)) bucket.completed += 1;
+    else if (isPending(r.status)) bucket.pending += 1;
+  }
+  const trendData = [...trendBuckets.values()];
 
   const tiles = counts
     ? [
@@ -318,6 +386,43 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
               </div>
             </div>
 
+            {(statusDonutData.length > 0 || dealerBarData.length > 0) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                {statusDonutData.length > 0 && (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3">
+                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 px-1">Pending vs Completed</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <PieChart>
+                        <Pie data={statusDonutData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                          {statusDonutData.map((d) => (
+                            <Cell key={d.key} fill={STATUS_COLORS[d.key]} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                        <Legend verticalAlign="bottom" height={24} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {dealerBarData.length > 0 && (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3">
+                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 px-1">Top Dealers ({monthLabel})</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={dealerBarData} layout="vertical" margin={{ left: 8, right: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                        <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                        <YAxis type="category" dataKey="label" width={90} tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Legend verticalAlign="bottom" height={24} />
+                        <Bar dataKey="pending" name="Pending" stackId="s" fill={DEALER_BAR_COLORS.pending} radius={[0, 0, 0, 0]} />
+                        <Bar dataKey="completed" name="Completed" stackId="s" fill={DEALER_BAR_COLORS.completed} radius={[0, 4, 4, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 sticky top-0">
@@ -344,6 +449,29 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
               </table>
             </div>
           </>
+        )}
+      </div>
+
+      <div className="mt-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
+        <div className="mb-4">
+          <h3 className="font-semibold text-slate-800 dark:text-slate-100">Applications — Last 6 Months</h3>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Submitted, pending and completed, by month</p>
+        </div>
+        {trendLoading ? (
+          <div className="text-center py-8 text-slate-400 text-sm">Loading…</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={trendData} margin={{ left: -10, right: 12 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey="total" name="Total" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="pending" name="Pending" stroke={STATUS_COLORS.pending} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="completed" name="Completed" stroke={STATUS_COLORS.completed} strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
         )}
       </div>
 
