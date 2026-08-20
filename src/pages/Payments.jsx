@@ -320,6 +320,19 @@ export default function Payments({ staff } = {}) {
     if (ledgerErr) {
       return { ok: false, message: "Failed to remove ledger entry: " + ledgerErr.message + " — payment was NOT deleted." };
     }
+    // A payment created via "Pay by QR" has a payment_qr_requests row
+    // pointing back at it (payment_qr_requests.payment_id -> payments.id)
+    // — that FK blocks the delete below with a 23503 violation unless this
+    // link is cleared first. Detaching (not deleting) the QR request row
+    // keeps its own history/audit trail intact, just no longer tied to a
+    // payment that's about to stop existing.
+    const { error: qrUnlinkErr } = await supabase
+      .from("payment_qr_requests")
+      .update({ payment_id: null })
+      .eq("payment_id", p.id);
+    if (qrUnlinkErr) {
+      return { ok: false, message: "Failed to unlink QR request: " + qrUnlinkErr.message + " — payment was NOT deleted." };
+    }
     const { error } = await supabase.from("payments").delete().eq("id", p.id);
     if (error) return { ok: false, message: "Failed to delete: " + error.message };
     return { ok: true, message: "" };

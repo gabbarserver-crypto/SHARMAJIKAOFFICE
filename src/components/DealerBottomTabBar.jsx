@@ -6,9 +6,10 @@
 // phone gets one-tap icon buttons instead of the horizontal pill row
 // (which still shows as-is on tablet/desktop, where there's room for it).
 import React from "react";
-import { FileOutput, MessageSquare, BookOpen, Receipt, Users, ClipboardList, ShieldCheck } from "lucide-react";
+import { FileOutput, MessageSquare, BookOpen, Receipt, Users, ClipboardList, ShieldCheck, LayoutDashboard } from "lucide-react";
 
 const ICONS = {
+  Dashboard: LayoutDashboard,
   Applications: FileOutput,
   "PCC Status": ShieldCheck,
   "Call/Chat": MessageSquare,

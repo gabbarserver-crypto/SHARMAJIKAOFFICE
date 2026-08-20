@@ -22,6 +22,7 @@ const OVERFLOW_ICONS = { payments: CreditCard, reports: BarChart2, settings: Set
 // (this is what caused the app to balloon to ~100MB+ before).
 const APP_VERSION = "1.0.0";
 const APK_PATH = "https://github.com/gabbarserver-crypto/one-infinity/releases/latest/download/app-1infinity.apk";
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 // 1 Infinity Games — opens the standalone games site, handing off the current
 // Supabase session so a staff member who's already logged in here doesn't
@@ -66,6 +67,14 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
   const [counts, setCounts] = useState(null);
   const [balances, setBalances] = useState({ dealer_total: null, agency_total: null });
 
+  const now0 = new Date();
+  const [month, setMonth] = useState(now0.getMonth()); // 0-11
+  const [year, setYear] = useState(now0.getFullYear());
+  const [monthRows, setMonthRows] = useState([]);
+  const [monthLoading, setMonthLoading] = useState(true);
+  const [monthError, setMonthError] = useState("");
+  const yearOptions = Array.from({ length: 5 }, (_, i) => now0.getFullYear() - i);
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.rpc("get_dashboard_counts").maybeSingle();
@@ -82,6 +91,53 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
       });
     })();
   }, []);
+
+  // "This Month" breakdown — separate from the lifetime-total tiles above
+  // (get_dashboard_counts() isn't month-scoped), so it's its own query
+  // against applications.submitted_at for whichever month/year is picked.
+  useEffect(() => {
+    (async () => {
+      setMonthLoading(true);
+      setMonthError("");
+      const rangeStart = new Date(year, month, 1).toISOString();
+      const rangeEnd = new Date(year, month + 1, 1).toISOString();
+      const { data, error } = await supabase
+        .from("applications")
+        .select("id, status, submitted_at, dealers(name)")
+        .gte("submitted_at", rangeStart)
+        .lt("submitted_at", rangeEnd);
+      if (error) {
+        setMonthError(error.message);
+        setMonthLoading(false);
+        return;
+      }
+      setMonthRows(data || []);
+      setMonthLoading(false);
+    })();
+  }, [month, year]);
+
+  const isPending = (s) => s !== "Completed" && s !== "Rejected";
+  const isCompleted = (s) => s === "Completed";
+  const monthTotals = monthRows.reduce(
+    (acc, r) => {
+      acc.total += 1;
+      if (isCompleted(r.status)) acc.completed += 1;
+      else if (isPending(r.status)) acc.pending += 1;
+      return acc;
+    },
+    { total: 0, pending: 0, completed: 0 }
+  );
+  const dealerGroups = new Map();
+  for (const r of monthRows) {
+    const label = r.dealers?.name || "Unknown dealer";
+    if (!dealerGroups.has(label)) dealerGroups.set(label, { label, total: 0, pending: 0, completed: 0 });
+    const g = dealerGroups.get(label);
+    g.total += 1;
+    if (isCompleted(r.status)) g.completed += 1;
+    else if (isPending(r.status)) g.pending += 1;
+  }
+  const dealerGroupRows = [...dealerGroups.values()].sort((a, b) => b.total - a.total);
+  const monthLabel = `${MONTH_NAMES[month]} ${year}`;
 
   const tiles = counts
     ? [
@@ -104,6 +160,28 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
   const overflowNav = visibleNav.filter(
     (n) => !BOTTOM_TAB_KEYS.includes(n.key) && n.key !== "dealerLedger" && n.key !== "agencyLedger"
   );
+
+  // Tiles are clickable shortcuts into the page that actually shows that
+  // data — e.g. tapping "Draft Applications" jumps to the Draft page. Each
+  // tile key maps to a couple of possible nav keys because which one
+  // exists depends on role (staff vs non-staff variants of the same
+  // page — see the NAV_ITEMS list in App.jsx); we just use whichever one
+  // this user's visibleNav actually has. If neither is visible to this
+  // role, the tile silently stays non-clickable rather than erroring.
+  const visibleKeys = new Set(visibleNav.map((n) => n.key));
+  const firstVisible = (...keys) => keys.find((k) => visibleKeys.has(k));
+  const TILE_NAV = {
+    total_applications: firstVisible("applications", "staffApplications"),
+    today_applications: firstVisible("applications", "staffApplications"),
+    yesterday_applications: firstVisible("applications", "staffApplications"),
+    draft_applications: firstVisible("draftApplications", "staffDraftApplications"),
+    pending_applications: firstVisible("applications", "staffApplications"),
+    completed_applications: firstVisible("applications", "staffApplications"),
+    total_dealers: firstVisible("dealerLedger", "ledger"),
+    active_dealers: firstVisible("dealerLedger", "ledger"),
+  };
+  const dealerBalanceNav = firstVisible("dealerLedger", "ledger");
+  const agencyBalanceNav = firstVisible("agencyLedger", "ledger");
 
   return (
     <div>
@@ -137,34 +215,136 @@ export default function Dashboard({ visibleNav = [], onNavigate, active }) {
         {tiles.map((t) => {
           const style = TILE_STYLES[t.key] || { icon: FileText, classes: "bg-slate-600" };
           const Icon = style.icon;
+          const navKey = TILE_NAV[t.key];
+          const clickable = Boolean(navKey && onNavigate);
+          const Tag = clickable ? "button" : "div";
           return (
-            <div key={t.key} className={`${style.classes} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden`}>
+            <Tag
+              key={t.key}
+              type={clickable ? "button" : undefined}
+              onClick={clickable ? () => onNavigate(navKey) : undefined}
+              className={`${style.classes} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden text-left w-full ${clickable ? "cursor-pointer hover:brightness-110 active:brightness-95 transition-[filter]" : ""}`}
+            >
               <Icon size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
               <p className="text-xl sm:text-3xl font-bold leading-none">{t.value ?? "—"}</p>
               <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">{t.label}</p>
               <Icon size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
-            </div>
+            </Tag>
           );
         })}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 mt-4">
-        <div className={`${Number(balances.dealer_total) < 0 ? "bg-rose-600" : "bg-violet-600"} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden`}>
-          <Wallet size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
-          <p className="text-lg sm:text-2xl font-bold leading-none">
-            {balances.dealer_total === null ? "—" : `₹${balances.dealer_total.toLocaleString("en-IN")}`}
-          </p>
-          <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">Total Dealer Balance</p>
-          <Wallet size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
+        {(() => {
+          const clickable = Boolean(dealerBalanceNav && onNavigate);
+          const Tag = clickable ? "button" : "div";
+          return (
+            <Tag
+              type={clickable ? "button" : undefined}
+              onClick={clickable ? () => onNavigate(dealerBalanceNav) : undefined}
+              className={`${Number(balances.dealer_total) < 0 ? "bg-rose-600" : "bg-violet-600"} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden text-left w-full ${clickable ? "cursor-pointer hover:brightness-110 active:brightness-95 transition-[filter]" : ""}`}
+            >
+              <Wallet size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
+              <p className="text-lg sm:text-2xl font-bold leading-none">
+                {balances.dealer_total === null ? "—" : `₹${balances.dealer_total.toLocaleString("en-IN")}`}
+              </p>
+              <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">Total Dealer Balance</p>
+              <Wallet size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
+            </Tag>
+          );
+        })()}
+        {(() => {
+          const clickable = Boolean(agencyBalanceNav && onNavigate);
+          const Tag = clickable ? "button" : "div";
+          return (
+            <Tag
+              type={clickable ? "button" : undefined}
+              onClick={clickable ? () => onNavigate(agencyBalanceNav) : undefined}
+              className={`${Number(balances.agency_total) < 0 ? "bg-rose-600" : "bg-cyan-700"} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden text-left w-full ${clickable ? "cursor-pointer hover:brightness-110 active:brightness-95 transition-[filter]" : ""}`}
+            >
+              <Landmark size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
+              <p className="text-lg sm:text-2xl font-bold leading-none">
+                {balances.agency_total === null ? "—" : `₹${balances.agency_total.toLocaleString("en-IN")}`}
+              </p>
+              <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">Total Agency Balance</p>
+              <Landmark size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
+            </Tag>
+          );
+        })()}
+      </div>
+
+      <div className="mt-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-semibold text-slate-800 dark:text-slate-100">{monthLabel}</h3>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Applications submitted this period, by dealer</p>
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={month}
+              onChange={(e) => setMonth(Number(e.target.value))}
+              className="text-sm border border-slate-300 dark:border-slate-700 dark:bg-slate-900 rounded-lg px-2.5 py-1.5"
+            >
+              {MONTH_NAMES.map((m, i) => <option key={m} value={i}>{m}</option>)}
+            </select>
+            <select
+              value={year}
+              onChange={(e) => setYear(Number(e.target.value))}
+              className="text-sm border border-slate-300 dark:border-slate-700 dark:bg-slate-900 rounded-lg px-2.5 py-1.5"
+            >
+              {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
         </div>
-        <div className={`${Number(balances.agency_total) < 0 ? "bg-rose-600" : "bg-cyan-700"} rounded-2xl p-3 sm:p-5 text-white shadow-sm relative overflow-hidden`}>
-          <Landmark size={18} className="opacity-80 mb-2 sm:mb-3 sm:w-[22px] sm:h-[22px]" />
-          <p className="text-lg sm:text-2xl font-bold leading-none">
-            {balances.agency_total === null ? "—" : `₹${balances.agency_total.toLocaleString("en-IN")}`}
-          </p>
-          <p className="text-xs sm:text-sm opacity-90 mt-1.5 sm:mt-2">Total Agency Balance</p>
-          <Landmark size={60} className="absolute -right-3 -bottom-3 opacity-10 sm:w-[90px] sm:h-[90px] hidden sm:block" />
-        </div>
+
+        {monthLoading ? (
+          <div className="text-center py-8 text-slate-400 text-sm">Loading…</div>
+        ) : monthError ? (
+          <div className="text-center py-8 text-red-500 text-sm">{monthError}</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4">
+                <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">{monthTotals.total}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Total Submitted</p>
+              </div>
+              <div className="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4">
+                <p className="text-2xl font-bold text-amber-700 dark:text-amber-400">{monthTotals.pending}</p>
+                <p className="text-xs text-amber-700/80 dark:text-amber-400/80 mt-1">Pending</p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 p-4">
+                <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">{monthTotals.completed}</p>
+                <p className="text-xs text-emerald-700/80 dark:text-emerald-400/80 mt-1">Completed</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Dealer</th>
+                    <th className="px-3 py-2 text-right">Total</th>
+                    <th className="px-3 py-2 text-right">Pending</th>
+                    <th className="px-3 py-2 text-right">Completed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dealerGroupRows.map((g) => (
+                    <tr key={g.label} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{g.label}</td>
+                      <td className="px-3 py-2 text-right font-semibold">{g.total}</td>
+                      <td className="px-3 py-2 text-right text-amber-700 dark:text-amber-400">{g.pending}</td>
+                      <td className="px-3 py-2 text-right text-emerald-700 dark:text-emerald-400">{g.completed}</td>
+                    </tr>
+                  ))}
+                  {dealerGroupRows.length === 0 && (
+                    <tr><td colSpan={4} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications submitted in {monthLabel}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="mt-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4">

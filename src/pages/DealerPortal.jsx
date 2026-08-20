@@ -192,7 +192,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
     }
   };
 
-  const visibleTabs = identity?.type === "dealer" ? [...TABS, "Staff"] : TABS;
+  const visibleTabs = identity?.type === "dealer" ? ["Dashboard", ...TABS, "Staff"] : TABS;
   const [dark, toggleDark] = useDarkMode();
   const [passkeyMsg, setPasskeyMsg] = useState("");
   const [photoUrl, setPhotoUrl] = useState(null);
@@ -367,9 +367,11 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
           )}
         </div>
 
+        {tab === "Dashboard" && <DealerTeamDashboard dealerId={dealer.id} refreshKey={refreshKey} />}
         {tab === "Applications" && (
           <DealerApplications
             dealerId={dealer.id}
+            identity={identity}
             refreshKey={refreshKey}
             onSelect={(app) => setDocsForApp(app)}
             onChat={(app) => setChatApp({ id: app.id, label: `${app.draft_code} — ${app.applicant_name}` })}
@@ -411,6 +413,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
       {showNew && (
         <NewApplicationModal
           dealer={dealer}
+          identity={identity}
           onClose={() => setShowNew(false)}
           onCreated={(draftCode, applicantName, applicationId, serviceId) => {
             setShowNew(false);
@@ -478,7 +481,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   );
 }
 
-function NewApplicationModal({ dealer, onClose, onCreated }) {
+function NewApplicationModal({ dealer, identity, onClose, onCreated }) {
   const [services, setServices] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -599,6 +602,10 @@ function NewApplicationModal({ dealer, onClose, onCreated }) {
         police_station: f.police_station || null,
         stay_since: f.stay_since || null,
         status: "Draft Submitted",
+        // null = the dealer owner login itself submitted it; a dealer_staff
+        // login records which specific staff member did. See
+        // server/migrations/006_track_application_creator.sql.
+        created_by_dealer_staff_id: identity?.type === "dealer_staff" ? identity.id : null,
         ...(isLearnerService && f.already_has_dl_ll ? { service_answers: { "Already has DL/LL": f.already_has_dl_ll } } : {}),
       })
       .select()
@@ -727,6 +734,173 @@ const DEALER_STATUS_GROUPS = {
   Approved: (s) => s === "Accepted",
 };
 
+// This month (or any selected month/year), per-person (dealer owner vs
+// each dealer_staff login) — how many applications they submitted, how
+// many are still pending vs completed. Dealer-owner-only tab (see
+// visibleTabs above); a dealer_staff login isn't shown this, only the
+// owner.
+//
+// created_by_dealer_staff_id is only populated for applications created
+// AFTER server/migrations/006_track_application_creator.sql landed —
+// older rows have it as null indistinguishable from "the owner
+// submitted this", so we label those explicitly as "Before tracking
+// started" rather than silently folding them into the owner's count.
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function DealerTeamDashboard({ dealerId, refreshKey }) {
+  const now = new Date();
+  const [month, setMonth] = useState(now.getMonth()); // 0-11
+  const [year, setYear] = useState(now.getFullYear());
+  const [rows, setRows] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // A handful of years back is enough for a dropdown — earliest applications
+  // in this system are recent, and there's no reason to offer decades of
+  // empty options.
+  const yearOptions = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setError("");
+      const rangeStart = new Date(year, month, 1).toISOString();
+      const rangeEnd = new Date(year, month + 1, 1).toISOString();
+      const [appsRes, staffRes] = await Promise.all([
+        supabase
+          .from("applications")
+          .select("id, status, submitted_at, created_by_dealer_staff_id")
+          .eq("dealer_id", dealerId)
+          .gte("submitted_at", rangeStart)
+          .lt("submitted_at", rangeEnd),
+        supabase.from("dealer_staff").select("id, full_name").eq("dealer_id", dealerId),
+      ]);
+      if (appsRes.error) {
+        setError(appsRes.error.message);
+        setLoading(false);
+        return;
+      }
+      setRows(appsRes.data || []);
+      setStaff(staffRes.data || []);
+      setLoading(false);
+    })();
+  }, [dealerId, month, year, refreshKey]);
+
+  const isPending = (s) => s !== "Completed" && s !== "Rejected";
+  const isCompleted = (s) => s === "Completed";
+
+  // Split into "before tracking started" (created_by_dealer_staff_id is
+  // null AND older than this migration) vs the owner's own submissions
+  // (also null, but recent) isn't reliably distinguishable — both look
+  // identical (null). So all null rows are grouped together and labeled
+  // generically; going forward, as staff logins submit more, their named
+  // rows will separate out cleanly.
+  const staffNameById = new Map(staff.map((s) => [s.id, s.full_name]));
+  const groups = new Map(); // key: dealer_staff id or "owner" -> { label, total, pending, completed }
+  for (const r of rows) {
+    const key = r.created_by_dealer_staff_id || "owner";
+    const label = r.created_by_dealer_staff_id ? (staffNameById.get(r.created_by_dealer_staff_id) || "Removed staff member") : "Dealer account / before tracking started";
+    if (!groups.has(key)) groups.set(key, { label, total: 0, pending: 0, completed: 0 });
+    const g = groups.get(key);
+    g.total += 1;
+    if (isCompleted(r.status)) g.completed += 1;
+    else if (isPending(r.status)) g.pending += 1;
+  }
+  const groupRows = [...groups.values()].sort((a, b) => b.total - a.total);
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.total += 1;
+      if (isCompleted(r.status)) acc.completed += 1;
+      else if (isPending(r.status)) acc.pending += 1;
+      return acc;
+    },
+    { total: 0, pending: 0, completed: 0 }
+  );
+  const monthLabel = `${MONTH_NAMES[month]} ${year}`;
+
+  if (error) return <div className="text-center py-10 text-red-500 text-sm">{error}</div>;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold text-slate-800 dark:text-slate-100">{monthLabel}</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Applications submitted, and where they stand right now.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <select
+            value={month}
+            onChange={(e) => setMonth(Number(e.target.value))}
+            className="text-sm border border-slate-300 dark:border-slate-700 dark:bg-slate-800 rounded-lg px-2.5 py-1.5"
+          >
+            {MONTH_NAMES.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+          <select
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+            className="text-sm border border-slate-300 dark:border-slate-700 dark:bg-slate-800 rounded-lg px-2.5 py-1.5"
+          >
+            {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-10 text-slate-400 text-sm">Loading…</div>
+      ) : (
+        <>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4">
+          <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">{totals.total}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Total Submitted</p>
+        </div>
+        <div className="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4">
+          <p className="text-2xl font-bold text-amber-700 dark:text-amber-400">{totals.pending}</p>
+          <p className="text-xs text-amber-700/80 dark:text-amber-400/80 mt-1">Pending</p>
+        </div>
+        <div className="rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 p-4">
+          <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">{totals.completed}</p>
+          <p className="text-xs text-emerald-700/80 dark:text-emerald-400/80 mt-1">Completed</p>
+        </div>
+      </div>
+
+      <div>
+        <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">By Staff Member</h4>
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400">
+              <tr>
+                <th className="px-3 py-2 text-left">Submitted By</th>
+                <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2 text-right">Pending</th>
+                <th className="px-3 py-2 text-right">Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groupRows.map((g) => (
+                <tr key={g.label} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{g.label}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{g.total}</td>
+                  <td className="px-3 py-2 text-right text-amber-700 dark:text-amber-400">{g.pending}</td>
+                  <td className="px-3 py-2 text-right text-emerald-700 dark:text-emerald-400">{g.completed}</td>
+                </tr>
+              ))}
+              {groupRows.length === 0 && (
+                <tr><td colSpan={4} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications submitted in {monthLabel}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Same categories/colors as PCC_STATUS_STYLES in Applications.jsx (admin
 // side) — kept as a separate copy here since dealer's table is read-only
 // and doesn't need the rest of that file's editing machinery.
@@ -737,7 +911,7 @@ const PCC_STATUS_STYLES = {
   "Police Case": "bg-orange-50 text-orange-700 border-orange-300",
 };
 
-function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
+function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   // Opens on "Draft" by default (dealer's most actionable bucket — apps
@@ -814,7 +988,16 @@ function DealerApplications({ dealerId, refreshKey, onSelect, onChat }) {
   const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
 
   const bookAppointment = async (payload) => {
-    const { data: newApp, error } = await supabase.from("applications").insert(payload).select().single();
+    const { data: newApp, error } = await supabase
+      .from("applications")
+      .insert({
+        ...payload,
+        // Same attribution as new applications — see
+        // server/migrations/006_track_application_creator.sql.
+        created_by_dealer_staff_id: identity?.type === "dealer_staff" ? identity.id : null,
+      })
+      .select()
+      .single();
     if (error) throw new Error(error.message);
     if (payload.service_id) {
       const { data: reqDocs } = await supabase.from("service_documents").select("name, mandatory, post_approval").eq("service_id", payload.service_id);
