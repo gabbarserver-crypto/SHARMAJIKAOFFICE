@@ -487,6 +487,19 @@ function ThreadsTab({ variant, dealerId, scope, onOpenThread }) {
   // a thread read, refetch — so the badge on the row you just left clears
   // immediately instead of waiting for a poll.
   useEffect(() => subscribeThreadRead(loadUnread), [loadUnread]);
+  // Tab switches inside the popup (chats <-> unread <-> customer) re-render
+  // this same ThreadsTab instance with a new `scope`, they don't remount
+  // it — so without this, unreadCounts would only ever reflect whatever it
+  // was at the very first mount, and a new message arriving while parked
+  // on another tab would never surface in "Unread" until *something* got
+  // marked read elsewhere. Refetch on every switch into "unread" so it's
+  // never more than one tab-away from being current, and also poll every
+  // 20s in the background so it stays right even while just sitting open.
+  useEffect(() => { if (scope === "unread") loadUnread(); }, [scope, loadUnread]);
+  useEffect(() => {
+    const id = setInterval(loadUnread, 20000);
+    return () => clearInterval(id);
+  }, [loadUnread]);
 
   // "unread" pulls from BOTH scopes (general dealer threads and
   // per-application ones) — it's not a third kind of thread, just a view
