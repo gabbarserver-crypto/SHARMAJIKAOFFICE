@@ -291,9 +291,11 @@ function ServiceMaster({ notify }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const save = async (form, documents, steps) => {
+  const save = async (form, documents) => {
+    if (!form.parent_service?.trim()) { notify("Name is required"); return; }
+    if (!form.short_name?.trim()) { notify("Short Name is required"); return; }
     const payload = {
-      parent_service: form.parent_service, short_name: form.short_name,
+      parent_service: form.parent_service.trim(), short_name: form.short_name.trim(),
       pcc_required: form.pcc_required, slot_booking_required: form.slot_booking_required,
       rto_required: form.rto_required, agency_required: form.agency_required,
       application_no_required: form.application_no_required, ll_dl_no_required: form.ll_dl_no_required,
@@ -301,9 +303,6 @@ function ServiceMaster({ notify }) {
       otp_required: form.otp_required, chat_in_app: form.chat_in_app,
       age_limit_required: !!form.age_limit_required,
       min_age: form.age_limit_required ? (parseInt(form.min_age, 10) || null) : null,
-      gov_fee: parseFloat(form.gov_fee) || 0, processing_charges: parseFloat(form.processing_charges) || 0,
-      other_charges: parseFloat(form.other_charges) || 0, pcc_fee: parseFloat(form.pcc_fee) || 0,
-      post_timing: form.post_timing,
       next_service_id: form.next_service_id || null,
       next_service_wait_days: parseInt(form.next_service_wait_days, 10) || 30,
     };
@@ -324,15 +323,6 @@ function ServiceMaster({ notify }) {
       if (docsInsertError) { notify("Service saved, but Required Documents failed to save: " + docsInsertError.message); return; }
     }
 
-    const { error: stepsDeleteError } = await supabase.from("service_workflow_steps").delete().eq("service_id", serviceId);
-    if (stepsDeleteError) { notify("Service saved, but couldn't clear old workflow steps: " + stepsDeleteError.message); }
-    if (steps.length) {
-      const { error: stepsInsertError } = await supabase.from("service_workflow_steps").insert(
-        steps.map((s, i) => ({ service_id: serviceId, step_order: i + 1, step_name: s, is_terminal: i === steps.length - 1 }))
-      );
-      if (stepsInsertError) { notify("Service saved, but workflow steps failed to save: " + stepsInsertError.message); return; }
-    }
-
     notify("Service saved");
     setOpen(false); setEditing(null); load();
   };
@@ -350,7 +340,6 @@ function ServiceMaster({ notify }) {
         columns={[
           { key: "parent_service", label: "Name" },
           { key: "short_name", label: "Short Name" },
-          { key: "total", label: "Total Fee", render: (r) => `₹${(Number(r.gov_fee||0)+Number(r.processing_charges||0)+Number(r.other_charges||0)).toLocaleString("en-IN")}` },
         ]}
         onAdd={() => { setEditing(null); setOpen(true); }}
         onEdit={(r) => { setEditing(r); setOpen(true); }}
@@ -368,15 +357,12 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
     rto_required: false, agency_required: false, previous_ll_required: false, otp_required: false, chat_in_app: false,
     age_limit_required: false, min_age: "",
     application_no_required: true, ll_dl_no_required: true,
-    gov_fee: "", processing_charges: "", other_charges: "", pcc_fee: "", post_timing: "After Approval",
     next_service_id: "", next_service_wait_days: 30,
   });
   const [documents, setDocuments] = useState(
     initial ? [] : [{ name: "Aadhaar Card", mandatory: true }, { name: "Photo", mandatory: true }, { name: "Signature", mandatory: true }]
   );
-  const [steps, setSteps] = useState(["Submitted", "Documents Check", "Fee Paid", "Approved", "Completed"]);
   const [newDoc, setNewDoc] = useState("");
-  const [newStep, setNewStep] = useState("");
   const [loadError, setLoadError] = useState("");
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const toggle = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.checked }));
@@ -394,15 +380,6 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
         } else {
           setDocuments((docs || []).map((d) => ({ name: d.name, mandatory: d.mandatory, post_approval: d.post_approval })));
         }
-        const { data: st, error: stepsError } = await supabase.from("service_workflow_steps").select("*").eq("service_id", initial.id).order("step_order");
-        if (stepsError) {
-          setLoadError((prev) => (prev ? prev + " Also couldn't load workflow steps: " : "Couldn't load this service's workflow steps: ") + stepsError.message);
-        } else {
-          // Same principle as documents above: reflect what's actually saved,
-          // even if that's zero steps, instead of quietly falling back to the
-          // hardcoded new-service default.
-          setSteps((st || []).map((s) => s.step_name));
-        }
       })();
     }
   }, [initial]);
@@ -414,24 +391,6 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
           <Card title="Basic Information" className="mb-4">
             <Field label="Name" required><Input value={f.parent_service} onChange={set("parent_service")} /></Field>
             <Field label="Short Name" required><Input value={f.short_name} onChange={set("short_name")} /></Field>
-          </Card>
-          <Card title="Fees">
-            <div className="grid grid-cols-3 gap-3">
-              <Field label="Govt Fee (₹)"><Input type="number" value={f.gov_fee} onChange={set("gov_fee")} /></Field>
-              <Field label="Processing (₹)"><Input type="number" value={f.processing_charges} onChange={set("processing_charges")} /></Field>
-              <Field label="Other (₹)"><Input type="number" value={f.other_charges} onChange={set("other_charges")} /></Field>
-            </div>
-            {f.pcc_required && (
-              <Field label="PCC Fee (₹)">
-                <Input type="number" value={f.pcc_fee} onChange={set("pcc_fee")} placeholder="Fee charged for Police Clearance Certificate" />
-              </Field>
-            )}
-            <Field label="Posting Timing">
-              <Select value={f.post_timing} onChange={set("post_timing")}>
-                <option value="Before Approval">Before Approval</option>
-                <option value="After Approval">After Approval</option>
-              </Select>
-            </Field>
           </Card>
         </div>
 
@@ -520,23 +479,10 @@ function ServiceForm({ initial, allServices = [], onSave, onClose }) {
               <GhostButton onClick={() => { if (newDoc.trim()) { setDocuments([...documents, { name: newDoc.trim(), mandatory: true, post_approval: false }]); setNewDoc(""); } }}>Add</GhostButton>
             </div>
           </Card>
-
-          <Card title="Workflow Steps (in order)">
-            {steps.map((s, i) => (
-              <div key={i} className="flex justify-between text-sm py-1">
-                <span>{i + 1}. {s}</span>
-                <button onClick={() => setSteps(steps.filter((_, idx) => idx !== i))} className="text-rose-500 text-xs">Remove</button>
-              </div>
-            ))}
-            <div className="flex gap-2 mt-2">
-              <Input value={newStep} onChange={(e) => setNewStep(e.target.value)} placeholder="Step name" />
-              <GhostButton onClick={() => { if (newStep.trim()) { setSteps([...steps, newStep.trim()]); setNewStep(""); } }}>Add Step</GhostButton>
-            </div>
-          </Card>
         </div>
       </div>
       <div className="mt-5">
-        <PrimaryButton onClick={() => onSave(f, documents, steps)}>Save Service</PrimaryButton>
+        <PrimaryButton onClick={() => onSave(f, documents)}>Save Service</PrimaryButton>
       </div>
     </Modal>
   );
