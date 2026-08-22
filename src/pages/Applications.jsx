@@ -142,46 +142,6 @@ function EditableSelect({ value, options, onSave, width = "w-32", placeholder = 
   );
 }
 
-// Mirrors PCC_STAGE_ORDER/LABELS in PCCStatusCheckModal.jsx and
-// api/_lib/pccClient.js — the 6 granular stages the auto-sync cron writes
-// into pcc_stage every ~2 hours, shown here as a compact dot row so staff
-// can see progress at a glance without opening the modal.
-const PCC_STAGE_ORDER = ["Pending", "Assigned", "Field Verified", "Approved", "Verified", "Certificate Issued"];
-const PCC_STAGE_SHORT_LABELS = {
-  Pending: "Submitted",
-  Assigned: "Assigned",
-  "Field Verified": "Field Verified",
-  Approved: "Approved",
-  Verified: "Verified",
-  "Certificate Issued": "Cert. Issued",
-};
-
-function PCCStageDots({ pccStage, pccCertificatePath }) {
-  if (!pccStage) return null;
-  const currentIdx = PCC_STAGE_ORDER.indexOf(pccStage);
-  return (
-    <div className="flex items-center gap-1" title={`Auto-synced stage: ${PCC_STAGE_SHORT_LABELS[pccStage] || pccStage}`}>
-      {PCC_STAGE_ORDER.map((stage, i) => (
-        <span
-          key={stage}
-          className={`w-1.5 h-1.5 rounded-full ${i <= currentIdx ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"}`}
-        />
-      ))}
-      {pccCertificatePath && (
-        <a
-          href={supabase.storage.from("application-documents").getPublicUrl(pccCertificatePath).data.publicUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Download the saved certificate"
-          className="ml-1 text-emerald-600 hover:text-emerald-700"
-        >
-          📄
-        </a>
-      )}
-    </div>
-  );
-}
-
 const PCC_STATUS_OPTIONS = ["Under Verification", "Certificate Issued", "Rejected", "Police Case"];
 const PCC_STATUS_STYLES = {
   "Under Verification": "bg-yellow-50 text-yellow-800 border-yellow-300",
@@ -193,6 +153,15 @@ function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, pccCertificatePath, onSa
   const [open, setOpen] = useState(false);
   const [localNo, setLocalNo] = useState(pccNo || "");
   const [localStatus, setLocalStatus] = useState(pccStatus || "");
+  const [uploading, setUploading] = useState(false);
+
+  const handleUploadFile = async (file) => {
+    if (!file || !onUploadCertificate) return;
+    setUploading(true);
+    await onUploadCertificate(file);
+    setUploading(false);
+    setOpen(false);
+  };
 
   useEffect(() => {
     if (open) {
@@ -260,17 +229,42 @@ function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, pccCertificatePath, onSa
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className={
-          pccNo
-            ? `px-2.5 py-1 rounded-full text-xs font-semibold border whitespace-nowrap ${style}`
-            : "text-blue-600 text-xs font-semibold hover:underline whitespace-nowrap"
-        }
-      >
-        {pccNo || "+ Add PCC No"}
-      </button>
+      <div className="flex items-center gap-1">
+        {certificateUrl ? (
+          <a
+            href={certificateUrl}
+            download
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Download saved PCC certificate"
+            className={`px-2.5 py-1 rounded-full text-xs font-semibold border whitespace-nowrap hover:underline ${style}`}
+          >
+            {pccNo}
+          </a>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className={
+              pccNo
+                ? `px-2.5 py-1 rounded-full text-xs font-semibold border whitespace-nowrap ${style}`
+                : "text-blue-600 text-xs font-semibold hover:underline whitespace-nowrap"
+            }
+          >
+            {pccNo || "+ Add PCC No"}
+          </button>
+        )}
+        {certificateUrl && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            title="Manage PCC details"
+            className="text-slate-400 dark:text-slate-500 hover:text-blue-600 text-xs shrink-0"
+          >
+            ⚙
+          </button>
+        )}
+      </div>
       {open && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-xs rounded-xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700 p-4">
@@ -291,42 +285,8 @@ function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, pccCertificatePath, onSa
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              {certificateUrl ? (
-                <a
-                  href={certificateUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 text-center"
-                >
-                  Download
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  title="No certificate uploaded yet"
-                  className="rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-400 dark:text-slate-500 cursor-not-allowed"
-                >
-                  Download
-                </button>
-              )}
-              <label className="rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 text-center cursor-pointer">
-                Upload
-                <input
-                  type="file"
-                  accept=".pdf,image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = "";
-                    if (file && onUploadCertificate) {
-                      onUploadCertificate(file);
-                      setOpen(false);
-                    }
-                  }}
-                />
-              </label>
+            <div className="mb-3">
+              <DocUploadDropzone busy={uploading} onFile={handleUploadFile} />
             </div>
 
             <table className="w-full text-xs mb-3 rounded-lg overflow-hidden border border-slate-100 dark:border-slate-800">
@@ -2387,17 +2347,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                           onSetNotRequired={(v) => updatePccFields(r.id, { pcc_not_required: v })}
                           onUploadCertificate={(file) => uploadPccCertificate(r, file)}
                         />
-                        {!r.pcc_not_required && <PCCStageDots pccStage={r.pcc_stage} pccCertificatePath={r.pcc_certificate_path} />}
-                        {r.pcc_no && !r.pcc_not_required && (
-                          <button
-                            type="button"
-                            onClick={() => setPccCheckRow(r)}
-                            title="Check live status on the Delhi Police PCC portal"
-                            className="text-slate-400 dark:text-slate-500 hover:text-blue-600 text-xs shrink-0"
-                          >
-                            ⟳
-                          </button>
-                        )}
                       </div>
                     ) : (
                       <span className="text-slate-300 text-xs">—</span>
@@ -4854,6 +4803,15 @@ function DocumentRow({ doc, applicationId, onChanged }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
 
+  // Storage path is `${applicationId}/${doc.id}-${file.name}` (see
+  // uploadFile below), so the original filename the user uploaded is
+  // recoverable by stripping the applicationId/doc.id prefix back off the
+  // stored URL — lets staff see e.g. "aadhar_front_scan.jpg" instead of just
+  // the generic doc type name once something's actually been uploaded.
+  const uploadedFileName = doc.file_url
+    ? decodeURIComponent(doc.file_url.split("/").pop() || "").replace(new RegExp(`^${doc.id}-`), "")
+    : null;
+
   const setStatus = async (status) => {
     let reject_reason = doc.reject_reason;
     if (status === "Rejected") {
@@ -4930,6 +4888,11 @@ function DocumentRow({ doc, applicationId, onChanged }) {
             )
           ) : null}
           <span className="text-slate-700 dark:text-slate-300">{doc.name}</span>
+          {uploadedFileName && (
+            <span className="text-slate-400 dark:text-slate-500 text-xs truncate max-w-[140px]" title={uploadedFileName}>
+              {uploadedFileName}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {doc.file_url ? (
