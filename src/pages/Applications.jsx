@@ -1376,6 +1376,33 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setToast("Learning file uploaded successfully");
   };
 
+  // The Documents section's "CERTIFICATE" row (application_documents table)
+  // is a separate thing from applications.pcc_certificate_path — uploading
+  // via the PCC No popup or the Track Application modal only wrote the
+  // latter, so CERTIFICATE kept showing "Missing" there even after a
+  // certificate was actually saved. Mirror the file onto that row too
+  // whenever we save one, so both places agree.
+  const syncCertificateDocRow = async (applicationId, publicUrl) => {
+    const { data: docRow } = await supabase
+      .from("application_documents")
+      .select("id")
+      .eq("application_id", applicationId)
+      .ilike("name", "certificate")
+      .maybeSingle();
+    if (docRow) {
+      await supabase
+        .from("application_documents")
+        .update({ file_url: publicUrl, status: "Pending", reject_reason: null })
+        .eq("id", docRow.id);
+    }
+    // If the detail modal is currently open on this same application,
+    // refetch so the Documents list reflects it immediately.
+    setSelected((s) => {
+      if (s && s.id === applicationId) openDetail(s, modalMode);
+      return s;
+    });
+  };
+
   // Manual counterpart to the auto-sync cron's certificate save (see
   // PCCStatusCheckModal's onCertificateSaved above) — lets staff attach a
   // certificate they already have (e.g. downloaded from the portal
@@ -1403,6 +1430,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setToast("Certificate uploaded but failed to update record: " + updateErr.message);
       return;
     }
+    const { data: urlData } = supabase.storage.from("application-documents").getPublicUrl(path);
+    await syncCertificateDocRow(row.id, urlData.publicUrl);
     setRows((rs) =>
       rs.map((r) =>
         r.id === row.id
@@ -1623,7 +1652,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       const haystack = [
-        r.draft_code, r.applicant_name, r.mobile, r.application_no, r.ll_dl_no,
+        r.draft_code, r.applicant_name, r.mobile, r.application_no, r.ll_dl_no, r.pcc_no,
         r.dealers?.name, r.dealers?.short_name, r.services?.parent_service, r.services?.short_name,
       ].filter(Boolean).join(" ").toLowerCase();
       if (!haystack.includes(q)) return false;
@@ -2661,15 +2690,19 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         <PCCStatusCheckModal
           row={pccCheckRow}
           onClose={() => setPccCheckRow(null)}
-          onCertificateSaved={(id) =>
+          onCertificateSaved={(id) => {
             setRows((rs) =>
               rs.map((r) =>
                 r.id === id
                   ? { ...r, pcc_certificate_path: `pcc-certificates/${id}.pdf`, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" }
                   : r
               )
-            )
-          }
+            );
+            const { data: urlData } = supabase.storage
+              .from("application-documents")
+              .getPublicUrl(`pcc-certificates/${id}.pdf`);
+            syncCertificateDocRow(id, urlData.publicUrl);
+          }}
         />
       )}
 
