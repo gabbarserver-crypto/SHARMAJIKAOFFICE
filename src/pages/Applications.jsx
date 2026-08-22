@@ -189,7 +189,7 @@ const PCC_STATUS_STYLES = {
   Rejected: "bg-red-50 text-red-700 border-red-300",
   "Police Case": "bg-orange-50 text-orange-700 border-orange-300",
 };
-function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, pccCertificatePath, onSave, onOpenPortal, onSetNotRequired, onUploadCertificate }) {
+function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, pccCertificatePath, onSave, onOpenPortal, onCheckStatus, onSetNotRequired, onUploadCertificate }) {
   const [open, setOpen] = useState(false);
   const [localNo, setLocalNo] = useState(pccNo || "");
   const [localStatus, setLocalStatus] = useState(pccStatus || "");
@@ -362,10 +362,20 @@ function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, pccCertificatePath, onSa
             <button
               type="button"
               onClick={onOpenPortal}
-              className="w-full text-left text-[11px] text-blue-600 hover:underline mb-3"
+              className="w-full text-left text-[11px] text-blue-600 hover:underline mb-1"
             >
               Open Delhi Police PCC portal ↗
             </button>
+
+            {pccNo && onCheckStatus && (
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onCheckStatus(); }}
+                className="w-full text-left text-[11px] text-blue-600 hover:underline mb-3"
+              >
+                ⟳ Check Status (Track Application)
+              </button>
+            )}
 
             <PrimaryButton onClick={handleUpdate} className="w-full mb-2">
               update
@@ -2372,6 +2382,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                           pccNotRequired={r.pcc_not_required}
                           pccCertificatePath={r.pcc_certificate_path}
                           onOpenPortal={() => openPccPortal(r)}
+                          onCheckStatus={() => setPccCheckRow(r)}
                           onSave={(fields) => updatePccFields(r.id, fields)}
                           onSetNotRequired={(v) => updatePccFields(r.id, { pcc_not_required: v })}
                           onUploadCertificate={(file) => uploadPccCertificate(r, file)}
