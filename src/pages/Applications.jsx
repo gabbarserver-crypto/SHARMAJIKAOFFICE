@@ -420,6 +420,16 @@ function dealerLabel(d) {
   return d.short_name || d.name;
 }
 
+// The two computed processing stages (see getProcessingStage above) that
+// the "Under Review" tab groups together — an Accepted application still
+// waiting on its PCC No. (with or without an Application No. yet), as
+// opposed to one where the PCC No. has already come back and it's moved
+// on to actually being processed.
+const UNDER_REVIEW_STAGES = new Set([
+  "Awaiting Application No. & PCC",
+  "Application No. generated & PCC Pending",
+]);
+
 function SortableTh({ column, label, sortKey, sortDir, onSort }) {
   const active = sortKey === column;
   const Icon = active ? (sortDir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
@@ -712,7 +722,14 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       .from("applications")
       .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), created_by_staff:created_by_dealer_staff_id(full_name)`)
       .order("submitted_at", { ascending: false });
-    if (tab !== "All") query = query.eq("status", tab);
+    // "Under Review" isn't a status value that ever actually gets stored —
+    // it's the two earliest computed processing stages (see
+    // getProcessingStage below) of an "Accepted" application: staff have
+    // accepted it but neither the Application No. nor the PCC No. (or just
+    // the PCC No.) have come back yet. So this tab fetches every Accepted
+    // row and UNDER_REVIEW_STAGES below narrows it down client-side to just
+    // those two stages, same source of truth the Status column itself uses.
+    if (tab !== "All") query = query.eq("status", tab === "Under Review" ? "Accepted" : tab);
     // Dealer / RTO / Agency / Service filters used to run client-side after
     // fetching the entire table (all ~15k rows every time, joins and all) —
     // pushed into the query itself so only the rows that actually match
@@ -1646,6 +1663,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   };
 
   const baseRows = useMemo(() => rows.filter((r) => {
+    if (tab === "Under Review" && !UNDER_REVIEW_STAGES.has(getProcessingStage(r))) return false;
     if (chatOnly && !chatStatus[r.id]) return false;
     if (pendingOnly && !isPendingData(r)) return false;
     if (bothPendingOnly && !isBothPending(r)) return false;
@@ -1658,7 +1676,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       if (!haystack.includes(q)) return false;
     }
     return true;
-  }), [rows, chatOnly, chatStatus, pendingOnly, bothPendingOnly, search]);
+  }), [rows, tab, chatOnly, chatStatus, pendingOnly, bothPendingOnly, search]);
 
   const filteredRows = useMemo(() => baseRows.filter((r) => {
     return Object.entries(columnFilters).every(([column, filter]) => {
