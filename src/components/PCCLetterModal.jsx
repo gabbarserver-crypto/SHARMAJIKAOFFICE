@@ -147,7 +147,19 @@ export default function PCCLetterModal({ app, onClose }) {
           <p className="mb-1">Thanking You,</p>
           <p className="mb-1">Yours Sincerely,</p>
           {signatureDoc && (
-            <img src={signatureDoc.file_url} alt="Signature" className="h-14 my-1 object-contain" />
+            // mix-blend-mode: multiply drops out the signature photo's
+            // white/light background against this letter's white page —
+            // dark ink stays dark, white (or near-white) turns invisible.
+            // No image processing needed; works for the vast majority of
+            // signature photos which are shot on a plain light background.
+            // If a signature was scanned on a colored/dark background this
+            // won't help — re-upload it on a plain white sheet instead.
+            <img
+              src={signatureDoc.file_url}
+              alt="Signature"
+              className="h-14 my-1 object-contain"
+              style={{ mixBlendMode: "multiply" }}
+            />
           )}
           <p className="mb-1 font-semibold">{app.applicant_name}</p>
           <p>Phone : {app.mobile || ""}</p>

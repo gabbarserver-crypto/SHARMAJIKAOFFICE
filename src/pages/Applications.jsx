@@ -189,11 +189,10 @@ const PCC_STATUS_STYLES = {
   Rejected: "bg-red-50 text-red-700 border-red-300",
   "Police Case": "bg-orange-50 text-orange-700 border-orange-300",
 };
-function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, onSave, onOpenPortal, onSetNotRequired }) {
+function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, pccCertificatePath, onSave, onOpenPortal, onSetNotRequired, onUploadCertificate }) {
   const [open, setOpen] = useState(false);
   const [localNo, setLocalNo] = useState(pccNo || "");
   const [localStatus, setLocalStatus] = useState(pccStatus || "");
-  const wrapRef = React.useRef(null);
 
   useEffect(() => {
     if (open) {
@@ -201,15 +200,6 @@ function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, onSave, onOpenPortal, on
       setLocalStatus(pccStatus || "");
     }
   }, [open, pccNo, pccStatus]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
 
   const handleUpdate = () => {
     onSave({ pcc_no: localNo.trim() || null, pcc_status: localStatus || null });
@@ -220,37 +210,59 @@ function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, onSave, onOpenPortal, on
     ? PCC_STATUS_STYLES[pccStatus] || "bg-blue-50 text-blue-600 border-blue-200"
     : null;
 
+  // Same storage bucket/path convention as PCCStageDots's download link and
+  // uploadPccCertificate — only turns the Download button blue/enabled once
+  // a certificate actually exists to fetch, unlike the Learning popup's
+  // Download (which always opens an external portal rather than a stored
+  // file, so it's always "available").
+  const certificateUrl = pccCertificatePath
+    ? supabase.storage.from("application-documents").getPublicUrl(pccCertificatePath).data.publicUrl
+    : null;
+
   if (pccNotRequired) {
     return (
-      <div className="relative inline-block" ref={wrapRef}>
+      <>
         <button
           type="button"
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => setOpen(true)}
           className="px-2.5 py-1 rounded-full text-xs font-semibold border whitespace-nowrap bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700"
         >
           Not Required
         </button>
         {open && (
-          <div className="absolute z-30 mt-1 left-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-lg w-56 overflow-hidden text-xs">
-            <p className="px-2.5 py-2 text-slate-500 dark:text-slate-500">This case was marked as not needing a PCC, even though the service normally does.</p>
-            <button
-              type="button"
-              onClick={() => { onSetNotRequired(false); setOpen(false); }}
-              className="w-full text-left px-2.5 py-1.5 text-blue-600 hover:bg-slate-50 dark:hover:bg-slate-800/60 border-t border-slate-100 dark:border-slate-800"
-            >
-              ↩ Mark PCC Required Again
-            </button>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-xs rounded-xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700 p-4">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">PCC</div>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 text-lg leading-none"
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-500 mb-3">This case was marked as not needing a PCC, even though the service normally does.</p>
+              <button
+                type="button"
+                onClick={() => { onSetNotRequired(false); setOpen(false); }}
+                className="w-full rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+              >
+                ↩ Mark PCC Required Again
+              </button>
+            </div>
           </div>
         )}
-      </div>
+      </>
     );
   }
 
   return (
-    <div className="relative inline-block" ref={wrapRef}>
+    <>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(true)}
         className={
           pccNo
             ? `px-2.5 py-1 rounded-full text-xs font-semibold border whitespace-nowrap ${style}`
@@ -260,60 +272,116 @@ function PCCNoPopup({ pccNo, pccStatus, pccNotRequired, onSave, onOpenPortal, on
         {pccNo || "+ Add PCC No"}
       </button>
       {open && (
-        <div className="absolute z-30 mt-1 left-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-lg w-60 overflow-hidden text-xs">
-          <table className="w-full">
-            <tbody>
-              <tr className="border-b border-slate-100 dark:border-slate-800">
-                <td className="bg-slate-50 dark:bg-slate-800/60 px-2.5 py-2 font-semibold text-slate-500 dark:text-slate-500 w-16 align-middle">pcc no</td>
-                <td className="px-2 py-1.5">
-                  <input
-                    type="text"
-                    value={localNo}
-                    onChange={(e) => setLocalNo(e.target.value)}
-                    placeholder="DLSB-PCC/…"
-                    className="w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                  />
-                </td>
-              </tr>
-              <tr>
-                <td className="bg-slate-50 dark:bg-slate-800/60 px-2.5 py-2 font-semibold text-slate-500 dark:text-slate-500 align-middle">status</td>
-                <td className="px-2 py-1.5">
-                  <select
-                    value={localStatus}
-                    onChange={(e) => setLocalStatus(e.target.value)}
-                    className="w-full rounded border border-slate-300 dark:border-slate-700 px-1.5 py-1 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                  >
-                    <option value="">Not Started</option>
-                    {PCC_STATUS_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                  </select>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <button
-            type="button"
-            onClick={onOpenPortal}
-            className="w-full text-left px-2.5 py-1.5 text-[11px] text-blue-600 hover:bg-slate-50 dark:bg-slate-800/60 border-b border-slate-100 dark:border-slate-800"
-          >
-            Open Delhi Police PCC portal ↗
-          </button>
-          <button
-            type="button"
-            onClick={handleUpdate}
-            className="w-full bg-orange-200 hover:bg-orange-300 text-orange-900 font-bold py-2 transition-colors"
-          >
-            update
-          </button>
-          <button
-            type="button"
-            onClick={() => { onSetNotRequired(true); setOpen(false); }}
-            className="w-full text-left px-2.5 py-1.5 text-[11px] text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/60 border-t border-slate-100 dark:border-slate-800"
-          >
-            🚫 Mark PCC Not Required for this case
-          </button>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-xs rounded-xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700 p-4">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">PCC</div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {pccNo || "No PCC No yet"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 text-lg leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              {certificateUrl ? (
+                <a
+                  href={certificateUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 text-center"
+                >
+                  Download
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  title="No certificate uploaded yet"
+                  className="rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-400 dark:text-slate-500 cursor-not-allowed"
+                >
+                  Download
+                </button>
+              )}
+              <label className="rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 text-center cursor-pointer">
+                Upload
+                <input
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file && onUploadCertificate) {
+                      onUploadCertificate(file);
+                      setOpen(false);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            <table className="w-full text-xs mb-3 rounded-lg overflow-hidden border border-slate-100 dark:border-slate-800">
+              <tbody>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="bg-slate-50 dark:bg-slate-800/60 px-2.5 py-2 font-semibold text-slate-500 dark:text-slate-500 w-16 align-middle">pcc no</td>
+                  <td className="px-2 py-1.5">
+                    <input
+                      type="text"
+                      value={localNo}
+                      onChange={(e) => setLocalNo(e.target.value)}
+                      placeholder="DLSB-PCC/…"
+                      className="w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    />
+                  </td>
+                </tr>
+                <tr>
+                  <td className="bg-slate-50 dark:bg-slate-800/60 px-2.5 py-2 font-semibold text-slate-500 dark:text-slate-500 align-middle">status</td>
+                  <td className="px-2 py-1.5">
+                    <select
+                      value={localStatus}
+                      onChange={(e) => setLocalStatus(e.target.value)}
+                      className="w-full rounded border border-slate-300 dark:border-slate-700 px-1.5 py-1 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    >
+                      <option value="">Not Started</option>
+                      {PCC_STATUS_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <button
+              type="button"
+              onClick={onOpenPortal}
+              className="w-full text-left text-[11px] text-blue-600 hover:underline mb-3"
+            >
+              Open Delhi Police PCC portal ↗
+            </button>
+
+            <PrimaryButton onClick={handleUpdate} className="w-full mb-2">
+              update
+            </PrimaryButton>
+
+            <button
+              type="button"
+              onClick={() => { onSetNotRequired(true); setOpen(false); }}
+              className="w-full text-left text-[11px] text-slate-500 hover:underline"
+            >
+              🚫 Mark PCC Not Required for this case
+            </button>
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 // Once an application is Accepted, status alone doesn't say how far along
@@ -672,7 +740,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       : "services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age,application_no_required,ll_dl_no_required)";
     let query = supabase
       .from("applications")
-      .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name)`)
+      .select(`*, dealers(name,code,short_name), ${servicesEmbed}, staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), created_by_staff:created_by_dealer_staff_id(full_name)`)
       .order("submitted_at", { ascending: false });
     if (tab !== "All") query = query.eq("status", tab);
     // Dealer / RTO / Agency / Service filters used to run client-side after
@@ -811,7 +879,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // assignment — and was causing "assigned staff not showing" on reopen).
     const { data: freshRow } = await supabase
       .from("applications")
-      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age,application_no_required,ll_dl_no_required), staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), fee_staff:fee_entered_by(full_name), appno_staff:application_no_entered_by(full_name), lldl_staff:ll_dl_no_entered_by(full_name), amount_staff:amount_entered_by(full_name)")
+      .select("*, dealers(name,code,short_name), services(parent_service,short_name,pcc_required,rto_required,agency_required,slot_booking_required,chat_in_app,next_service_id,next_service_wait_days,age_limit_required,min_age,application_no_required,ll_dl_no_required), staff:assigned_staff_id(full_name), accepted_staff:accepted_by(full_name), fee_staff:fee_entered_by(full_name), appno_staff:application_no_entered_by(full_name), lldl_staff:ll_dl_no_entered_by(full_name), amount_staff:amount_entered_by(full_name), created_by_staff:created_by_dealer_staff_id(full_name)")
       .eq("id", row.id)
       .maybeSingle();
     let docs = (await supabase.from("application_documents").select("*").eq("application_id", row.id)).data || [];
@@ -1265,6 +1333,10 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       setToast("Enter Learning No. first");
       return;
     }
+    if (!row.application_no) {
+      setToast("Enter Application No first");
+      return;
+    }
 
     try {
       await navigator.clipboard.writeText(row.ll_dl_no);
@@ -1273,7 +1345,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       // Clipboard may be blocked; the Sarathi page still opens.
     }
 
-    const url = `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(row.application_no || row.ll_dl_no)}`;
+    // Same URL as the "↗ Download Learning (opens Sarathi)" link inside the
+    // Name popup's Documents card (ApplicationDetailModal) — keyed off
+    // Application No, not the Learning No, since that's the link that
+    // actually resolves on Sarathi.
+    const url = `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(row.application_no)}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -1328,6 +1404,43 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     }));
     setLearningPopupRow(null);
     setToast("Learning file uploaded successfully");
+  };
+
+  // Manual counterpart to the auto-sync cron's certificate save (see
+  // PCCStatusCheckModal's onCertificateSaved above) — lets staff attach a
+  // certificate they already have (e.g. downloaded from the portal
+  // themselves) straight from the PCC No popup, instead of only ever
+  // getting one from the ~2-hourly auto-sync. Same storage path
+  // convention (`pcc-certificates/<applicationId>.pdf`) so the existing
+  // download link in PCCStageDots picks it up either way.
+  const uploadPccCertificate = async (row, file) => {
+    if (!file) return;
+    setToast("Uploading PCC certificate…");
+    const path = `pcc-certificates/${row.id}.pdf`;
+    const { error: uploadErr } = await supabase
+      .storage
+      .from("application-documents")
+      .upload(path, file, { upsert: true });
+    if (uploadErr) {
+      setToast("Certificate upload failed: " + uploadErr.message);
+      return;
+    }
+    const { error: updateErr } = await supabase
+      .from("applications")
+      .update({ pcc_certificate_path: path, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" })
+      .eq("id", row.id);
+    if (updateErr) {
+      setToast("Certificate uploaded but failed to update record: " + updateErr.message);
+      return;
+    }
+    setRows((rs) =>
+      rs.map((r) =>
+        r.id === row.id
+          ? { ...r, pcc_certificate_path: path, pcc_stage: "Certificate Issued", pcc_status: "Certificate Issued" }
+          : r
+      )
+    );
+    setToast("PCC certificate uploaded");
   };
 
   // Keep Supabase's original public URL, but request the fixed download
@@ -2257,9 +2370,11 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                           pccNo={r.pcc_no}
                           pccStatus={r.pcc_status}
                           pccNotRequired={r.pcc_not_required}
+                          pccCertificatePath={r.pcc_certificate_path}
                           onOpenPortal={() => openPccPortal(r)}
                           onSave={(fields) => updatePccFields(r.id, fields)}
                           onSetNotRequired={(v) => updatePccFields(r.id, { pcc_not_required: v })}
+                          onUploadCertificate={(file) => uploadPccCertificate(r, file)}
                         />
                         {!r.pcc_not_required && <PCCStageDots pccStage={r.pcc_stage} pccCertificatePath={r.pcc_certificate_path} />}
                         {r.pcc_no && !r.pcc_not_required && (
@@ -4244,6 +4359,14 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               {(app.history || []).map((h) => (
                 <div key={h.id} className="text-xs text-slate-500 dark:text-slate-500 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
                   <span className="font-semibold text-slate-700 dark:text-slate-300">{h.status}</span> — {new Date(h.changed_at).toLocaleString()}
+                  {h.status === "Draft Submitted" && app.dealers?.name && (
+                    <div className="text-slate-400 dark:text-slate-500 mt-0.5">
+                      by <span className="font-semibold text-slate-600 dark:text-slate-400">{app.dealers.name}</span>
+                      {app.created_by_staff?.full_name && (
+                        <> — <span className="font-semibold text-slate-600 dark:text-slate-400">{app.created_by_staff.full_name}</span></>
+                      )}
+                    </div>
+                  )}
                   {h.remarks && <div className="text-slate-400 dark:text-slate-500 mt-0.5">{h.remarks}</div>}
                 </div>
               ))}
@@ -4333,13 +4456,36 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           {/* Column 2: service answers, documents, chat */}
           <div>
             <Card title="Service Answers" className="mb-4">
-              {answers.map((row, i) => (
-                <div key={i} className="flex gap-2 mb-2">
-                  <Input placeholder="Field name" value={row.key} onChange={setAnswerKey(i)} className="w-2/5" />
-                  <Input placeholder="Value" value={row.value} onChange={setAnswerValue(i)} />
-                  <button onClick={() => removeAnswer(i)} className="text-rose-500 text-xs font-semibold px-2 shrink-0">Remove</button>
-                </div>
-              ))}
+              {answers.map((row, i) => {
+                // Same loose key match as getLearnerNo — lets staff click the
+                // Learner No value here to jump straight to Sarathi, same as
+                // the "↗ Download Learning" link under Documents below,
+                // instead of only being reachable from there.
+                const isLearnerNo = row.key.replace(/[^a-z]/gi, "").toLowerCase().includes("learnerno");
+                return (
+                  <div key={i} className="flex gap-2 mb-2">
+                    <Input placeholder="Field name" value={row.key} onChange={setAnswerKey(i)} className="w-2/5" />
+                    <Input placeholder="Value" value={row.value} onChange={setAnswerValue(i)} />
+                    {isLearnerNo && row.value && app.application_no && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try { await navigator.clipboard.writeText(row.value); } catch { /* clipboard may be blocked; link still opens */ }
+                          window.open(
+                            `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                            "_blank", "noopener,noreferrer"
+                          );
+                        }}
+                        className="text-blue-600 dark:text-blue-400 hover:text-blue-700 shrink-0 px-1"
+                        title="Open Learning download on Sarathi"
+                      >
+                        <LinkIcon size={14} />
+                      </button>
+                    )}
+                    <button onClick={() => removeAnswer(i)} className="text-rose-500 text-xs font-semibold px-2 shrink-0">Remove</button>
+                  </div>
+                );
+              })}
               <div className="flex items-center justify-between mt-2">
                 <GhostButton onClick={addAnswer}>+ Add Field</GhostButton>
                 <PrimaryButton disabled={savingAnswers} onClick={saveAnswers}>
@@ -4442,6 +4588,14 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               {(app.history || []).map((h) => (
                 <div key={h.id} className="text-xs text-slate-500 dark:text-slate-500 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
                   <span className="font-semibold text-slate-700 dark:text-slate-300">{h.status}</span> — {new Date(h.changed_at).toLocaleString()}
+                  {h.status === "Draft Submitted" && app.dealers?.name && (
+                    <div className="text-slate-400 dark:text-slate-500 mt-0.5">
+                      by <span className="font-semibold text-slate-600 dark:text-slate-400">{app.dealers.name}</span>
+                      {app.created_by_staff?.full_name && (
+                        <> — <span className="font-semibold text-slate-600 dark:text-slate-400">{app.created_by_staff.full_name}</span></>
+                      )}
+                    </div>
+                  )}
                   {h.remarks && <div className="text-slate-400 dark:text-slate-500 mt-0.5">{h.remarks}</div>}
                 </div>
               ))}
@@ -4558,13 +4712,36 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         {OperationalDetailsCard}
 
         <Card title="Service Answers" className="mb-4">
-          {answers.map((row, i) => (
-            <div key={i} className="flex gap-2 mb-2">
-              <Input placeholder="Field name" value={row.key} onChange={setAnswerKey(i)} className="w-2/5" />
-              <Input placeholder="Value" value={row.value} onChange={setAnswerValue(i)} />
-              <button onClick={() => removeAnswer(i)} className="text-rose-500 text-xs font-semibold px-2 shrink-0">Remove</button>
-            </div>
-          ))}
+          {answers.map((row, i) => {
+            // Same loose key match as getLearnerNo — lets staff click the
+            // Learner No value here to jump straight to Sarathi, same as
+            // the "↗ Download Learning" link under Documents below, instead
+            // of only being reachable from there.
+            const isLearnerNo = row.key.replace(/[^a-z]/gi, "").toLowerCase().includes("learnerno");
+            return (
+              <div key={i} className="flex gap-2 mb-2">
+                <Input placeholder="Field name" value={row.key} onChange={setAnswerKey(i)} className="w-2/5" />
+                <Input placeholder="Value" value={row.value} onChange={setAnswerValue(i)} />
+                {isLearnerNo && row.value && app.application_no && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try { await navigator.clipboard.writeText(row.value); } catch { /* clipboard may be blocked; link still opens */ }
+                      window.open(
+                        `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(app.application_no)}`,
+                        "_blank", "noopener,noreferrer"
+                      );
+                    }}
+                    className="text-blue-600 dark:text-blue-400 hover:text-blue-700 shrink-0 px-1"
+                    title="Open Learning download on Sarathi"
+                  >
+                    <LinkIcon size={14} />
+                  </button>
+                )}
+                <button onClick={() => removeAnswer(i)} className="text-rose-500 text-xs font-semibold px-2 shrink-0">Remove</button>
+              </div>
+            );
+          })}
           <div className="flex items-center justify-between mt-2">
             <GhostButton onClick={addAnswer}>+ Add Field</GhostButton>
             <PrimaryButton disabled={savingAnswers} onClick={saveAnswers}>
