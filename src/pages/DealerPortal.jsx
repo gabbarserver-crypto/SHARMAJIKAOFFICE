@@ -788,17 +788,24 @@ function getProcessingStage(row) {
   return "Awaiting Application No. & PCC";
 }
 
-// "Accepted" on its own just means "staff have accepted this and it's
-// being worked on" — it is NOT the same as fully done (that's
-// "Completed", the actual ledger-posting event — see completeApplication
-// in the admin Applications.jsx). So every "Accepted" application, no
-// matter which processing sub-stage getProcessingStage() reports for it
-// (Awaiting Application No. & PCC, PCC Under Process, etc.), belongs in
-// "Under Process" here — only "Completed" belongs in "Approved".
+// The same two earliest computed stages the admin's own "Under Review" tab
+// groups together (see Applications.jsx UNDER_REVIEW_STAGES) — an Accepted
+// application still waiting on its PCC No, with or without an Application
+// No yet. Everything past that point (Application No. generated, PCC Under
+// Process, LL/DL Issued, etc.) is far enough along to count as Approved
+// here, same as it does in the admin's own Approved/Accepted tab.
+const UNDER_REVIEW_STAGES = new Set([
+  "Awaiting Application No. & PCC",
+  "Application No. generated & PCC Pending",
+]);
+
+// "Accepted" alone doesn't say how far along an application actually is —
+// only the two earliest processing stages above still belong in "Under
+// Process" here; every later stage (and "Completed") counts as Approved.
 const DEALER_STATUS_GROUPS = {
-  Draft: (s) => s === "Draft Submitted",
-  Process: (s) => s === "Under Review" || s === "On Hold" || s === "Accepted",
-  Approved: (s) => s === "Completed",
+  Draft: (r) => r.status === "Draft Submitted",
+  Process: (r) => r.status === "Under Review" || r.status === "On Hold" || (r.status === "Accepted" && UNDER_REVIEW_STAGES.has(getProcessingStage(r))),
+  Approved: (r) => r.status === "Completed" || (r.status === "Accepted" && !UNDER_REVIEW_STAGES.has(getProcessingStage(r))),
 };
 
 // This month (or any selected month/year), per-person (dealer owner vs
@@ -1056,8 +1063,8 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
     const y = r.submitted_at ? Number(r.submitted_at.slice(0, 4)) : null;
     return y === currentYear;
   });
-  const draftCount = yearScopedRows.filter((r) => DEALER_STATUS_GROUPS.Draft(r.status)).length;
-  const statusFiltered = statusFilter === "All" ? yearScopedRows : yearScopedRows.filter((r) => DEALER_STATUS_GROUPS[statusFilter](r.status));
+  const draftCount = yearScopedRows.filter((r) => DEALER_STATUS_GROUPS.Draft(r)).length;
+  const statusFiltered = statusFilter === "All" ? yearScopedRows : yearScopedRows.filter((r) => DEALER_STATUS_GROUPS[statusFilter](r));
   const q = search.trim().toLowerCase();
   const visibleRows = !q ? statusFiltered : statusFiltered.filter((r) =>
     [r.applicant_name, r.mobile, r.draft_code, r.application_no].some((v) => (v || "").toLowerCase().includes(q))
