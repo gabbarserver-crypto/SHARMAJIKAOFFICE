@@ -370,7 +370,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
       )}
 
-      <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto box-border p-6 pb-24 md:pb-8">
+      <main className="flex-1 w-full min-w-0 max-w-[1700px] mx-auto box-border p-6 pb-24 md:pb-8">
         {(tab === "Ledger" || (tab === "Applications" && !isDealerOwner) || (tab === "Dashboard" && isDealerOwner)) && (
           <div className="w-full min-w-0 grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 mb-6">
             <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
@@ -761,10 +761,44 @@ function NewApplicationModal({ dealer, identity, onClose, onCreated }) {
   );
 }
 
+// Mirrors getProcessingStage()/pccNeeded()/serviceLabel() from the admin
+// Applications.jsx exactly — same computed (not stored) sub-status text
+// shown under the badge there, now shown the same way to the dealer.
+function pccNeeded(row) {
+  return !!row.services?.pcc_required && !row.pcc_not_required;
+}
+function serviceLabel(s) {
+  if (!s) return "";
+  return s.short_name || s.parent_service;
+}
+function getProcessingStage(row) {
+  if (!row || row.status !== "Accepted") return null;
+  const pccRequired = pccNeeded(row);
+  const lldlRequired = row.services?.ll_dl_no_required !== false;
+  const hasAppNo = !!row.application_no;
+  const hasPccNo = !!row.pcc_no;
+  const hasLldlNo = !!row.ll_dl_no;
+  if (!pccRequired) {
+    if (lldlRequired && hasLldlNo) return `${serviceLabel(row.services)} Issued`;
+    return hasAppNo ? "Application No. generated" : "Awaiting Application No.";
+  }
+  if (hasAppNo && hasPccNo) return "Application No. generated & PCC Under Process";
+  if (hasAppNo && !hasPccNo) return "Application No. generated & PCC Pending";
+  if (!hasAppNo && hasPccNo) return "PCC Under Process";
+  return "Awaiting Application No. & PCC";
+}
+
+// "Accepted" on its own just means "staff have accepted this and it's
+// being worked on" — it is NOT the same as fully done (that's
+// "Completed", the actual ledger-posting event — see completeApplication
+// in the admin Applications.jsx). So every "Accepted" application, no
+// matter which processing sub-stage getProcessingStage() reports for it
+// (Awaiting Application No. & PCC, PCC Under Process, etc.), belongs in
+// "Under Process" here — only "Completed" belongs in "Approved".
 const DEALER_STATUS_GROUPS = {
   Draft: (s) => s === "Draft Submitted",
-  Process: (s) => s === "Under Review" || s === "On Hold",
-  Approved: (s) => s === "Accepted",
+  Process: (s) => s === "Under Review" || s === "On Hold" || s === "Accepted",
+  Approved: (s) => s === "Completed",
 };
 
 // This month (or any selected month/year), per-person (dealer owner vs
@@ -975,7 +1009,7 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
     setLoading(true);
     const { data, error } = await supabase
       .from("applications")
-      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, pcc_status, pcc_stage, pcc_timeline, pcc_certificate_path, pcc_last_synced_at, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days, pcc_required)")
+      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, pcc_status, pcc_stage, pcc_timeline, pcc_certificate_path, pcc_last_synced_at, pcc_not_required, service_answers, services(parent_service, short_name, chat_in_app, next_service_id, next_service_wait_days, pcc_required, ll_dl_no_required)")
       .eq("dealer_id", dealerId)
       .order("submitted_at", { ascending: false });
     if (error) {
@@ -984,7 +1018,33 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
       setLoading(false);
       return;
     }
-    setRows(data || []);
+    // Pull in the uploaded Learning-License / PCC document files (if any)
+    // so the LL No / PCC No columns can tell the dealer whether there's
+    // actually something to download yet (blue = uploaded & downloadable,
+    // orange = number recorded but no file uploaded/verified yet).
+    const appIds = (data || []).map((r) => r.id);
+    let docsByApp = {};
+    if (appIds.length) {
+      const { data: docs, error: docsError } = await supabase
+        .from("application_documents")
+        .select("application_id, name, file_url, status")
+        .in("application_id", appIds);
+      if (docsError) {
+        console.error("Couldn't load application documents:", docsError.message);
+      } else {
+        (docs || []).forEach((d) => {
+          if (!docsByApp[d.application_id]) docsByApp[d.application_id] = [];
+          docsByApp[d.application_id].push(d);
+        });
+      }
+    }
+    const withDocs = (data || []).map((r) => {
+      const docs = docsByApp[r.id] || [];
+      const learningDoc = docs.find((d) => /learn/i.test(d.name) && d.file_url);
+      const pccDoc = docs.find((d) => /pcc/i.test(d.name) && d.file_url);
+      return { ...r, learning_file_url: learningDoc?.file_url || null, pcc_doc_file_url: pccDoc?.file_url || null };
+    });
+    setRows(withDocs);
     setLoading(false);
   }, [dealerId]);
 
@@ -1095,14 +1155,14 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
               <tr>
                 <SortableTh label="Ref No." sortKeyName="ref" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortableTh label="Applicant" sortKeyName="applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Submitted" sortKeyName="submitted_at" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Service" sortKeyName="service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Applicant" sortKeyName="applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th className="text-left font-medium px-3 py-2">LL No</th>
                 <th className="text-left font-medium px-3 py-2">PCC No</th>
-                <th className="text-left font-medium px-3 py-2">PCC Status</th>
                 <th className="text-left font-medium px-3 py-2">Mobile</th>
-                <SortableTh label="Status" sortKeyName="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="text-left font-medium px-3 py-2">Chat</th>
+                <SortableTh label="Status" sortKeyName="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="text-left font-medium px-3 py-2">Appointment</th>
               </tr>
             </thead>
@@ -1118,6 +1178,10 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
                       {r.application_no || r.draft_code}
                     </button>
                   </td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
+                    {r.services?.short_name || r.services?.parent_service || "—"}
+                  </td>
                   <td className="px-3 py-2">
                     <button
                       onClick={() => onSelect?.(r)}
@@ -1126,41 +1190,57 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
                       {r.applicant_name}
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-slate-500 dark:text-slate-500">{r.submitted_at ? new Date(r.submitted_at).toLocaleDateString("en-IN") : "—"}</td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                    {r.services?.short_name || r.services?.parent_service || "—"}
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {r.ll_dl_no ? (
+                      r.learning_file_url ? (
+                        <a
+                          href={r.learning_file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Download the uploaded Learning License copy"
+                          className="text-blue-600 font-semibold hover:underline"
+                        >
+                          {r.ll_dl_no}
+                        </a>
+                      ) : (
+                        <span className="text-orange-500 font-semibold" title="Learning License copy not uploaded yet">
+                          {r.ll_dl_no}
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-slate-300 text-xs">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                    {r.services?.pcc_required ? (r.pcc_no || "—") : <span className="text-slate-300 text-xs">—</span>}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
                     {r.services?.pcc_required ? (
-                      <div className="flex items-center gap-1.5">
-                        {r.pcc_status ? (
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${PCC_STATUS_STYLES[r.pcc_status] || "bg-slate-50 text-slate-500 border-slate-300"}`}>
-                            {r.pcc_status}
-                          </span>
-                        ) : (
-                          <span className="text-slate-300 text-xs">—</span>
-                        )}
-                        {r.pcc_certificate_path && (
+                      r.pcc_no ? (
+                        r.pcc_certificate_path || r.pcc_doc_file_url ? (
                           <a
-                            href={supabase.storage.from("application-documents").getPublicUrl(r.pcc_certificate_path).data.publicUrl}
+                            href={
+                              r.pcc_certificate_path
+                                ? supabase.storage.from("application-documents").getPublicUrl(r.pcc_certificate_path).data.publicUrl
+                                : r.pcc_doc_file_url
+                            }
                             target="_blank"
                             rel="noopener noreferrer"
                             title="Download the PCC certificate"
-                            className="text-emerald-600 hover:text-emerald-700"
+                            className="text-blue-600 font-semibold hover:underline"
                           >
-                            📄
+                            {r.pcc_no}
                           </a>
-                        )}
-                      </div>
+                        ) : (
+                          <span className="text-orange-500 font-semibold" title="PCC certificate not uploaded yet">
+                            {r.pcc_no}
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-slate-300 text-xs">—</span>
+                      )
                     ) : (
                       <span className="text-slate-300 text-xs">—</span>
                     )}
                   </td>
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.mobile || "—"}</td>
-                  <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
                   <td className="px-3 py-2">
                     {r.services?.chat_in_app ? (
                       <button
@@ -1171,6 +1251,12 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
                       </button>
                     ) : (
                       <span className="text-slate-300 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <StatusBadge status={r.status} />
+                    {getProcessingStage(r) && (
+                      <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight mt-0.5">{getProcessingStage(r)}</div>
                     )}
                   </td>
                   <td className="px-3 py-2">
@@ -1296,7 +1382,6 @@ function DealerPccStatus({ dealerId, refreshKey = 0 }) {
                 <th className="text-left font-medium px-3 py-2">Service</th>
                 <th className="text-left font-medium px-3 py-2">PCC No</th>
                 <th className="text-left font-medium px-3 py-2">Status</th>
-                <th className="text-left font-medium px-3 py-2">Link</th>
               </tr>
             </thead>
             <tbody>
@@ -1309,26 +1394,33 @@ function DealerPccStatus({ dealerId, refreshKey = 0 }) {
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">
                     {r.services?.short_name || r.services?.parent_service || "—"}
                   </td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.pcc_no || "—"}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {r.pcc_no ? (
+                      r.pcc_certificate_path ? (
+                        <a
+                          href={supabase.storage.from("application-documents").getPublicUrl(r.pcc_certificate_path).data.publicUrl}
+                          download
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Download PCC certificate"
+                          className="font-semibold text-emerald-600 dark:text-emerald-400 hover:underline"
+                        >
+                          {r.pcc_no}
+                        </a>
+                      ) : r.pcc_status === "Rejected" ? (
+                        <span className="font-semibold text-rose-600 dark:text-rose-400">{r.pcc_no}</span>
+                      ) : (
+                        <span className="font-semibold text-yellow-700 dark:text-yellow-500">{r.pcc_no}</span>
+                      )
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     {r.pcc_status ? (
                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${PCC_STATUS_STYLES[r.pcc_status] || "bg-slate-50 text-slate-500 border-slate-300"}`}>
                         {r.pcc_status}
                       </span>
-                    ) : (
-                      <span className="text-slate-300 text-xs">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {r.pcc_certificate_path ? (
-                      <a
-                        href={supabase.storage.from("application-documents").getPublicUrl(r.pcc_certificate_path).data.publicUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-emerald-600 hover:text-emerald-700 font-semibold text-xs"
-                      >
-                        📄 Download
-                      </a>
                     ) : (
                       <span className="text-slate-300 text-xs">—</span>
                     )}
