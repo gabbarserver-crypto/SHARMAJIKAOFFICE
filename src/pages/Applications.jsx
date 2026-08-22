@@ -623,6 +623,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   // does not (see quickAccept below). null = popup closed.
   const [remarkPrompt, setRemarkPrompt] = useState(null);
   const [chatStatus, setChatStatus] = useState({}); // { [applicationId]: unreadCount } — omitted/0 when nothing's awaiting our reply
+  const [learningDocsByAppId, setLearningDocsByAppId] = useState({}); // { [applicationId]: { id, file_url } } for Learning documents
+  const [learningPopupRow, setLearningPopupRow] = useState(null);
 
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -712,6 +714,37 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     const baseRows = data || [];
     setRows(baseRows);
     setLoading(false);
+
+    // Find uploaded Learning documents for the applications currently in the
+    // list. The LL/DL number becomes a download link when a Learning file exists.
+    try {
+      const appIds = baseRows.filter((r) => r.ll_dl_no).map((r) => r.id);
+      if (appIds.length) {
+        const { data: learningDocs, error: learningDocsError } = await supabase
+          .from("application_documents")
+          .select("id, application_id, name, file_url")
+          .in("application_id", appIds)
+          .ilike("name", "%learning%");
+
+        if (!learningDocsError) {
+          const byAppId = {};
+          for (const doc of learningDocs || []) {
+            if (!byAppId[doc.application_id]) {
+              byAppId[doc.application_id] = { id: doc.id, file_url: doc.file_url || null };
+            } else if (!byAppId[doc.application_id].file_url && doc.file_url) {
+              byAppId[doc.application_id] = { id: doc.id, file_url: doc.file_url };
+            }
+          }
+          setLearningDocsByAppId(byAppId);
+        } else {
+          setLearningDocsByAppId({});
+        }
+      } else {
+        setLearningDocsByAppId({});
+      }
+    } catch {
+      setLearningDocsByAppId({});
+    }
 
     // Chat awaiting-reply flags: fetched separately (and best-effort) so a
     // failure here never blocks the main applications list from loading.
@@ -1225,6 +1258,91 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     }
     const url = `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?as=${encodeURIComponent(row.application_no)}`;
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const openLearningDownloadPage = async (row) => {
+    if (!row.ll_dl_no) {
+      setToast("Enter Learning No. first");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(row.ll_dl_no);
+      setToast("Learning No copied: " + row.ll_dl_no);
+    } catch {
+      // Clipboard may be blocked; the Sarathi page still opens.
+    }
+
+    const url = `https://sarathi.parivahan.gov.in/sarathiservice/applicationredirect.do?q=${encodeURIComponent(row.application_no || row.ll_dl_no)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const uploadLearningFile = async (row, file) => {
+    if (!file) return;
+
+    let learningDoc = learningDocsByAppId[row.id];
+
+    // If the application was created before the Learning document was added
+    // to its service, openDetail() performs the existing document backfill.
+    if (!learningDoc?.id) {
+      await openDetail(row);
+      setToast("Learning document record was missing. Open the application and upload it from Documents.");
+      return;
+    }
+
+    setToast("Uploading Learning file…");
+    const originalExt = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || "pdf").toLowerCase();
+    const path = `${row.id}/${learningDoc.id}-application.${originalExt}`;
+
+    const { error: uploadErr } = await supabase
+      .storage
+      .from("application-documents")
+      .upload(path, file, { upsert: true });
+
+    if (uploadErr) {
+      setToast("Learning upload failed: " + uploadErr.message);
+      return;
+    }
+
+    const { data: urlData } = supabase.storage
+      .from("application-documents")
+      .getPublicUrl(path);
+
+    const { error: updateErr } = await supabase
+      .from("application_documents")
+      .update({
+        file_url: urlData.publicUrl,
+        status: "Pending",
+        reject_reason: null,
+      })
+      .eq("id", learningDoc.id);
+
+    if (updateErr) {
+      setToast("File uploaded but record update failed: " + updateErr.message);
+      return;
+    }
+
+    setLearningDocsByAppId((prev) => ({
+      ...prev,
+      [row.id]: { ...learningDoc, file_url: urlData.publicUrl },
+    }));
+    setLearningPopupRow(null);
+    setToast("Learning file uploaded successfully");
+  };
+
+  // Keep Supabase's original public URL, but request the fixed download
+  // filename "application.<ext>".
+  const learningDownloadUrl = (fileUrl) => {
+    if (!fileUrl) return "";
+    try {
+      const url = new URL(fileUrl);
+      const match = url.pathname.match(/\.([a-z0-9]+)$/i);
+      const ext = (match?.[1] || "pdf").toLowerCase();
+      url.searchParams.set("download", `application.${ext}`);
+      return url.toString();
+    } catch {
+      return fileUrl;
+    }
   };
 
   const openPccPortal = async (row) => {
@@ -2097,17 +2215,38 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                     )}
                   </td>
                 )}
-                {visibleCols.lldl && (
+                                {visibleCols.lldl && (
                   <td className="px-3 py-2">
-                    <EditableCell
-                      width="w-24"
-                      value={r.ll_dl_no}
-                      disabled={r.services?.ll_dl_no_required === false}
-                      readOnly={r.status === "Completed" || !!r.ll_dl_no}
-                      readOnlyTitle={r.status === "Completed" ? "LL/DL No. is locked after completion" : FILLED_LOCK_TITLE}
-                      onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)}
-                      placeholder="LL/DL No."
-                    />
+                    {r.ll_dl_no && learningDocsByAppId[r.id]?.file_url ? (
+                      <a
+                        href={learningDownloadUrl(learningDocsByAppId[r.id].file_url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-blue-600 hover:text-blue-700 hover:underline whitespace-nowrap"
+                        title="Download uploaded Learning file"
+                      >
+                        {r.ll_dl_no}
+                      </a>
+                    ) : r.ll_dl_no ? (
+                      <button
+                        type="button"
+                        onClick={() => setLearningPopupRow(r)}
+                        className="font-medium text-amber-600 hover:text-amber-700 hover:underline whitespace-nowrap"
+                        title="Learning download / upload"
+                      >
+                        {r.ll_dl_no}
+                      </button>
+                    ) : (
+                      <EditableCell
+                        width="w-24"
+                        value={r.ll_dl_no}
+                        disabled={r.services?.ll_dl_no_required === false}
+                        readOnly={r.status === "Completed" || !!r.ll_dl_no}
+                        readOnlyTitle={r.status === "Completed" ? "LL/DL No. is locked after completion" : FILLED_LOCK_TITLE}
+                        onSave={(v) => updateRowField(r.id, "ll_dl_no", v || null)}
+                        placeholder="LL/DL No."
+                      />
+                    )}
                   </td>
                 )}
                 {visibleCols.pccno && (
@@ -2357,7 +2496,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
       {selected && (
         <ApplicationDetailModal
-          app={rows.find((r) => r.id === selected.id) || selected}
+          app={selected}
           mode={modalMode}
           staffList={staffList}
           restricted={restricted}
@@ -2469,6 +2608,57 @@ export default function Applications({ restricted = false, canEdit = true, canAp
       )}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+
+      {learningPopupRow && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-xs rounded-xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700 p-4">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Learning</div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {learningPopupRow.ll_dl_no}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLearningPopupRow(null)}
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 text-lg leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const row = learningPopupRow;
+                  setLearningPopupRow(null);
+                  openLearningDownloadPage(row);
+                }}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+              >
+                Download
+              </button>
+
+              <label className="rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 text-center cursor-pointer">
+                Upload
+                <input
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) uploadLearningFile(learningPopupRow, file);
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
     </CanEditContext.Provider>
   );
