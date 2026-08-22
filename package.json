@@ -31,8 +31,9 @@
     "lucide-react": "^0.383.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "recharts": "^2.15.0",
-    "tesseract.js": "^7.0.0"
+    "recharts": "^2.15.4",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",

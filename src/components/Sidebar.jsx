@@ -28,6 +28,7 @@ import {
 const ICONS = {
   dashboard: LayoutGrid,
   applications: FileOutput,
+  applicationExcel: FileOutput,
   staffApplications: Users,
   staffDraftApplications: Inbox,
   draftApplications: Inbox,

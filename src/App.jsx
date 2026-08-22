@@ -12,6 +12,7 @@ import Welcome from "./pages/Welcome";
 import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
 import Applications, { StaffApplications, StaffDraftApplications, DraftApplications } from "./pages/Applications";
+import ApplicationExcel from "./pages/ApplicationExcel";
 import Payments from "./pages/Payments";
 import Ledger from "./pages/Ledger";import Reports from "./pages/Reports";
 import Masters from "./pages/Masters";
@@ -57,6 +58,7 @@ function AgencyLedgerPage({ initialEntityId, isAdmin }) { return <Ledger only="a
 const NAV = [
   { key: "dashboard", label: "Dashboard", Component: Dashboard },
   { key: "applications", label: "Applications", Component: Applications },
+  { key: "applicationExcel", label: "Application Excel", Component: ApplicationExcel },
   { key: "staffApplications", label: "Applications", Component: StaffApplications },
   { key: "staffDraftApplications", label: "Draft", Component: StaffDraftApplications },
   { key: "draftApplications", label: "Draft", Component: DraftApplications },
@@ -78,6 +80,7 @@ const NAV = [
 const MODULE_BY_NAV_KEY = {
   dashboard: "dashboard",
   applications: "applications",
+  applicationExcel: "applicationExcel",
   staffApplications: "staffApplications",
   // Same restricted permission row as "Applications" (Staff View) above —
   // a staff role that can see the restricted Applications list gets this
@@ -148,7 +151,7 @@ export default function App() {
   const visibleNav = React.useMemo(() => {
     if (!staff) return NAV;
     if (isAdmin) return NAV.filter((n) => n.key !== "staffApplications" && n.key !== "staffDraftApplications");
-    return NAV.filter((n) => permMap[MODULE_BY_NAV_KEY[n.key]]?.can_view);
+    return NAV.filter((n) => n.key !== "applicationExcel" && permMap[MODULE_BY_NAV_KEY[n.key]]?.can_view);
   }, [staff, isAdmin, permMap]);
 
   // If the current tab isn't in the visible set (role changed, or the

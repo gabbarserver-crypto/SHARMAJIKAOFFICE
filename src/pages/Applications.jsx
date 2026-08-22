@@ -6,6 +6,7 @@ import ChatPanel from "../components/ChatPanel";
 import ApplicationChatModal from "../components/ApplicationChatModal";
 import SearchableSelect from "../components/SearchableSelect";
 import { parseCSV, findByLabel } from "../lib/csv";
+import * as XLSX from "xlsx";
 import BookAppointmentModal from "../components/BookAppointmentModal";
 import { identityFor } from "../lib/chat";
 import { isEligibleForAppointment, copyForwardDocuments } from "../lib/nextService";
@@ -397,6 +398,162 @@ function SortableTh({ column, label, sortKey, sortDir, onSort }) {
   );
 }
 
+
+// Excel-style header filter. The table stays inside the application — there is
+// no export/import step. Each header arrow opens sort + value/blank filtering,
+// and date columns also get From/To date filters.
+function ExcelFilterTh({ column, label, sortKey, sortDir, onSort, filterState, setFilterState, options = [], isDate = false }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef(null);
+
+  const current = filterState[column];
+  const hasValueFilter = Array.isArray(current);
+  const hasDateFilter = !!current && !Array.isArray(current) && (current.from || current.to);
+  const active = hasValueFilter || hasDateFilter;
+  const visibleOptions = options.filter((o) =>
+    String(o.label).toLowerCase().includes(query.trim().toLowerCase())
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  const clear = () => {
+    setFilterState((prev) => {
+      const next = { ...prev };
+      delete next[column];
+      return next;
+    });
+    setQuery("");
+  };
+
+  const selectAll = () => {
+    setFilterState((prev) => ({ ...prev, [column]: options.map((o) => o.key) }));
+  };
+
+  const toggleValue = (key) => {
+    const currentKeys = hasValueFilter ? current : options.map((o) => o.key);
+    const nextKeys = currentKeys.includes(key)
+      ? currentKeys.filter((x) => x !== key)
+      : [...currentKeys, key];
+    setFilterState((prev) => ({ ...prev, [column]: nextKeys }));
+  };
+
+  const sortAsc = () => {
+    if (sortKey !== column || sortDir !== "asc") {
+      if (sortKey !== column) onSort(column);
+      else onSort(column);
+    }
+    setOpen(false);
+  };
+
+  const sortDesc = () => {
+    if (sortKey !== column) {
+      onSort(column);
+      onSort(column);
+    } else if (sortDir === "asc") {
+      onSort(column);
+    }
+    setOpen(false);
+  };
+
+  return (
+    <th className="text-left font-medium px-3 py-2 whitespace-nowrap relative" ref={ref}>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onSort(column)}
+          className={`hover:text-slate-700 dark:hover:text-slate-200 ${sortKey === column ? "text-slate-800 dark:text-slate-100 font-semibold" : ""}`}
+          title={`Sort ${label}`}
+        >
+          {label}
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={`inline-flex items-center justify-center w-5 h-5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 ${active ? "text-blue-600 dark:text-blue-400" : "text-slate-400"}`}
+          title={`Filter ${label}`}
+          aria-label={`Filter ${label}`}
+        >
+          <span className="text-[10px] leading-none">▼</span>
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute z-[100] top-full left-0 mt-1 w-72 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xl p-2 text-xs normal-case font-normal">
+          <div className="flex items-center justify-between gap-2 px-1 pb-2">
+            <span className="font-semibold text-slate-700 dark:text-slate-200">Filter: {label}</span>
+            <button type="button" onClick={clear} className="text-blue-600 hover:underline">Clear</button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-1 mb-2">
+            <button type="button" onClick={sortAsc} className="rounded border px-2 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800">
+              ↑ {isDate ? "Oldest to Newest" : "A → Z"}
+            </button>
+            <button type="button" onClick={sortDesc} className="rounded border px-2 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800">
+              ↓ {isDate ? "Newest to Oldest" : "Z → A"}
+            </button>
+          </div>
+
+          {isDate && (
+            <div className="border-t border-slate-100 dark:border-slate-800 pt-2 mb-2 space-y-2">
+              <div>
+                <label className="block text-[10px] text-slate-400 mb-1">From date</label>
+                <input
+                  type="date"
+                  value={current?.from || ""}
+                  onChange={(e) => setFilterState((p) => ({ ...p, [column]: { ...(p[column] || {}), from: e.target.value } }))}
+                  className="w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] text-slate-400 mb-1">To date</label>
+                <input
+                  type="date"
+                  value={current?.to || ""}
+                  onChange={(e) => setFilterState((p) => ({ ...p, [column]: { ...(p[column] || {}), to: e.target.value } }))}
+                  className="w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5"
+                />
+              </div>
+            </div>
+          )}
+
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search..."
+            className="w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 mb-2 outline-none focus:ring-1 focus:ring-blue-400"
+          />
+
+          <div className="flex items-center justify-between px-1 mb-1">
+            <button type="button" onClick={selectAll} className="text-blue-600 hover:underline">Select All</button>
+            <span className="text-slate-400">{options.length} values</span>
+          </div>
+
+          <div className="max-h-56 overflow-y-auto border-t border-slate-100 dark:border-slate-800 pt-1">
+            {visibleOptions.length === 0 ? (
+              <div className="px-2 py-3 text-slate-400">No values found</div>
+            ) : visibleOptions.slice(0, 200).map((o) => {
+              const checked = !hasValueFilter || current.includes(o.key);
+              return (
+                <label key={o.key} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
+                  <input type="checkbox" checked={checked} onChange={() => toggleValue(o.key)} />
+                  <span className="truncate">{o.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </th>
+  );
+}
+
 // Service-answer keys are free text (typed by staff), so "Learner No",
 // "learner no", "Learner No.", " Learner No" etc. can all occur — match
 // loosely instead of requiring an exact key.
@@ -491,6 +648,7 @@ export default function Applications({ restricted = false, canEdit = true, canAp
   const [filterDateTo, setFilterDateTo] = useState("");
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
+  const [columnFilters, setColumnFilters] = useState({});
 
   const toggleSort = (key) => {
     if (sortKey === key) {
@@ -1227,25 +1385,8 @@ export default function Applications({ restricted = false, canEdit = true, canAp
 
   const [bothPendingOnly, setBothPendingOnly] = useState(false);
 
-  const filteredRows = rows.filter((r) => {
-    if (chatOnly && !chatStatus[r.id]) return false;
-    if (pendingOnly && !isPendingData(r)) return false;
-    if (bothPendingOnly && !isBothPending(r)) return false;
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      const haystack = [
-        r.draft_code, r.applicant_name, r.mobile, r.application_no, r.ll_dl_no,
-        r.dealers?.name, r.dealers?.short_name, r.services?.parent_service, r.services?.short_name,
-      ].filter(Boolean).join(" ").toLowerCase();
-      if (!haystack.includes(q)) return false;
-    }
-    return true;
-  });
-
   const profitOf = (r) => Number(r.amount || 0) - Number(r.rto_fee || 0) - Number(r.pcc_fee || 0) - Number(r.agency_fee || 0);
 
-  // Accessor per sortable column header. Numeric columns compare as
-  // numbers; everything else compares as case-insensitive strings.
   const SORT_ACCESSORS = {
     draftId: (r) => r.draft_code || "",
     applicationDate: (r) => r.application_date || "",
@@ -1269,6 +1410,78 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     status: (r) => r.status || "",
   };
 
+  const valueKey = (value) => {
+    if (value === null || value === undefined || value === "") return "__BLANK__";
+    return String(value);
+  };
+
+  const baseRows = useMemo(() => rows.filter((r) => {
+    if (chatOnly && !chatStatus[r.id]) return false;
+    if (pendingOnly && !isPendingData(r)) return false;
+    if (bothPendingOnly && !isBothPending(r)) return false;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const haystack = [
+        r.draft_code, r.applicant_name, r.mobile, r.application_no, r.ll_dl_no,
+        r.dealers?.name, r.dealers?.short_name, r.services?.parent_service, r.services?.short_name,
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  }), [rows, chatOnly, chatStatus, pendingOnly, bothPendingOnly, search]);
+
+  const filteredRows = useMemo(() => baseRows.filter((r) => {
+    return Object.entries(columnFilters).every(([column, filter]) => {
+      if (!filter) return true;
+      const raw = SORT_ACCESSORS[column]?.(r);
+
+      if (!Array.isArray(filter) && (filter.from || filter.to)) {
+        const dateValue = raw ? String(raw).slice(0, 10) : "";
+        if (filter.from && (!dateValue || dateValue < filter.from)) return false;
+        if (filter.to && (!dateValue || dateValue > filter.to)) return false;
+        return true;
+      }
+
+      return Array.isArray(filter) ? filter.includes(valueKey(raw)) : true;
+    });
+  }), [baseRows, columnFilters, rtoList, agencyList]);
+
+  const columnOptions = useMemo(() => {
+    const make = (column, formatter = (v) => v) => {
+      const map = new Map();
+      baseRows.forEach((r) => {
+        const raw = SORT_ACCESSORS[column]?.(r);
+        const key = valueKey(raw);
+        if (!map.has(key)) map.set(key, key === "__BLANK__" ? "(Blanks)" : String(formatter(raw)));
+      });
+      return Array.from(map.entries())
+        .map(([key, label]) => ({ key, label }))
+        .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }));
+    };
+    return {
+      draftId: make("draftId"),
+      applicationDate: make("applicationDate", (v) => v ? isoToDDMMYYYY(v) : ""),
+      amount: make("amount", (v) => Number(v || 0).toLocaleString("en-IN")),
+      dealer: make("dealer"),
+      service: make("service"),
+      applicant: make("applicant"),
+      dob: make("dob", (v) => v ? isoToDDMMYYYY(v) : ""),
+      rtoFee: make("rtoFee", (v) => Number(v || 0).toLocaleString("en-IN")),
+      pccFee: make("pccFee", (v) => Number(v || 0).toLocaleString("en-IN")),
+      agencyFee: make("agencyFee", (v) => Number(v || 0).toLocaleString("en-IN")),
+      profit: make("profit", (v) => Number(v || 0).toLocaleString("en-IN")),
+      application: make("application"),
+      lldl: make("lldl"),
+      pccno: make("pccno"),
+      rto: make("rto"),
+      agency: make("agency"),
+      slot: make("slot"),
+      mobile: make("mobile"),
+      remark: make("remark"),
+      status: make("status"),
+    };
+  }, [baseRows, rtoList, agencyList]);
+
   const sortedRows = useMemo(() => {
     if (!sortKey || !SORT_ACCESSORS[sortKey]) return filteredRows;
     const acc = SORT_ACCESSORS[sortKey];
@@ -1282,15 +1495,15 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredRows, sortKey, sortDir, rtoList, agencyList]);
 
-  // Pagination — 14 rows per page by default. Export CSV still uses the full
-  // sortedRows (unpaginated), only the on-screen table is sliced.
+  // Pagination — 14 rows per page by default. Export/import is intentionally
+  // not part of this view; filtering happens directly in the application table.
   const [pageSize, setPageSize] = useState(14);
   const PAGE_SIZE = pageSize;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
   useEffect(() => {
     setPage(1);
-  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, chatOnly, showAllYears, pendingOnly, bothPendingOnly]);
+  }, [tab, search, filterDealer, filterRto, filterAgency, filterService, filterDateFrom, filterDateTo, chatOnly, showAllYears, pendingOnly, bothPendingOnly, columnFilters]);
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -1299,47 +1512,44 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     [sortedRows, page]
   );
 
-  const exportCSV = () => {
-    const headers = restricted
-      ? ["Draft ID", "Service", "Applicant", "DOB", "Fee", "PCC Fee", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency", "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"]
-      : ["Draft ID", "Amount", "Fee", "PCC Fee", "Agency Fee", "Dealer", "Service",
-      "Applicant", "DOB", "Application No", "LL/DL No", "PCC No", "PCC Status", "RTO", "Agency",
-      "Slot", "Mobile", "Remark", "Application Date", "Status", "Submitted At"];
-    const escapeCsv = (val) => {
-      const s = val === null || val === undefined ? "" : String(val);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const lines = [headers.join(",")];
-    sortedRows.forEach((r) => {
-      const rtoCell = pccNeeded(r) ? "PCC" : rtoList.find((x) => x.id === r.rto_id)?.name;
-      const fullRow = [
-        r.draft_code, r.amount, r.rto_fee, r.pcc_fee, r.agency_fee,
-        dealerLabel(r.dealers), serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
-        r.application_no, r.ll_dl_no, r.pcc_no, r.pcc_status,
-        rtoCell, agencyList.find((x) => x.id === r.agency_id)?.name,
-        r.slot_time, r.mobile, r.remarks, r.application_date ? isoToDDMMYYYY(r.application_date) : "", r.status, r.submitted_at,
-      ];
-      const restrictedRow = [
-        r.draft_code, serviceLabel(r.services), r.applicant_name, isoToDDMMYYYY(r.date_of_birth),
-        r.rto_fee, r.pcc_fee, r.application_no, r.ll_dl_no, r.pcc_no, r.pcc_status,
-        rtoCell, agencyList.find((x) => x.id === r.agency_id)?.name,
-        r.slot_time, r.mobile, r.remarks, r.application_date ? isoToDDMMYYYY(r.application_date) : "", r.status, r.submitted_at,
-      ];
-      lines.push((restricted ? restrictedRow : fullRow).map(escapeCsv).join(","));
-    });
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `applications-${stamp}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+  const clearFilters = () => { setFilterDealer(""); setFilterRto(""); setFilterAgency(""); setFilterService(""); setFilterDateFrom(""); setFilterDateTo(""); setColumnFilters({}); };
+  const exportApplicationsXlsx = () => {
+    const headers = [
+      "Draft ID", "Date", "Amount", "Dealer", "Service", "Applicant", "DOB",
+      "Fee", "PCC Fee", "Agency Fee", "Profit", "Application", "LL/DL No.",
+      "PCC No", "RTO", "Agency", "Slot", "Mobile", "Remark", "Status"
+    ];
+    const data = sortedRows.map((r) => [
+      r.draft_code || "",
+      r.application_date ? isoToDDMMYYYY(r.application_date) : (r.submitted_at ? isoToDDMMYYYY(r.submitted_at) : ""),
+      r.amount ?? "",
+      dealerLabel(r.dealers),
+      serviceLabel(r.services),
+      r.applicant_name || "",
+      r.date_of_birth ? isoToDDMMYYYY(r.date_of_birth) : "",
+      r.rto_fee ?? "",
+      r.pcc_fee ?? "",
+      r.agency_fee ?? "",
+      typeof SORT_ACCESSORS.profit === "function" ? (SORT_ACCESSORS.profit(r) ?? "") : "",
+      r.application_no || "",
+      r.ll_dl_no || "",
+      r.pcc_no || "",
+      SORT_ACCESSORS.rto ? (SORT_ACCESSORS.rto(r) || "") : "",
+      SORT_ACCESSORS.agency ? (SORT_ACCESSORS.agency(r) || "") : "",
+      r.slot_time || "",
+      r.mobile || "",
+      r.remarks || "",
+      r.status || ""
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+    ws["!autofilter"] = { ref: `A1:${XLSX.utils.encode_col(headers.length - 1)}${Math.max(1, data.length + 1)}` };
+    ws["!freeze"] = { xSplit: 0, ySplit: 1 };
+    ws["!cols"] = headers.map((h) => ({ wch: Math.max(12, Math.min(28, h.length + 3)) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Applications");
+    XLSX.writeFile(wb, `applications-${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
-  const clearFilters = () => { setFilterDealer(""); setFilterRto(""); setFilterAgency(""); setFilterService(""); setFilterDateFrom(""); setFilterDateTo(""); };
   const activeFilterCount = [filterDealer, filterRto, filterAgency, filterService, filterDateFrom, filterDateTo].filter(Boolean).length;
 
   const toggleSelected = (id) => {
@@ -1535,9 +1745,6 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 {showAllYears ? "📅 Showing All Years" : `📅 ${currentYear} Only`}
               </button>
             )}
-            <GhostButton onClick={exportCSV}>⬇ Export CSV</GhostButton>
-            {canEdit && !restricted && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
-            {canEdit && !restricted && <GhostButton onClick={() => setShowUpdateCsv(true)}>✎ Update via CSV</GhostButton>}
             {canEdit && <PrimaryButton onClick={() => setShowNew(true)}>+ New Application</PrimaryButton>}
           </div>
           <button
@@ -1563,6 +1770,13 @@ export default function Applications({ restricted = false, canEdit = true, canAp
         <GhostButton onClick={() => setShowFilters((s) => !s)}>
           Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
         </GhostButton>
+        {!restricted && (
+          <GhostButton onClick={exportApplicationsXlsx} title="Export the currently filtered and sorted applications as Excel">
+            ⬇ Export Excel
+          </GhostButton>
+        )}
+        {canEdit && !restricted && <GhostButton onClick={() => setShowImport(true)}>⬆ Import CSV</GhostButton>}
+        {canEdit && !restricted && <GhostButton onClick={() => setShowUpdateCsv(true)}>✎ Update via CSV</GhostButton>}
         {!restricted && !onlyDraft && (
           <div className="relative">
             <GhostButton onClick={() => setShowColumnPicker((s) => !s)}>Columns</GhostButton>
@@ -1653,27 +1867,27 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                   <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllOnPage} title="Select all on this page" />
                 </th>
               )}
-              <SortableTh column="draftId" label="Draft ID" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              {visibleCols.applicationDate && <SortableTh column="applicationDate" label="Date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.amount && <SortableTh column="amount" label="Amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.dealer && <SortableTh column="dealer" label="Dealer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.service && <SortableTh column="service" label="Service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.applicant && <SortableTh column="applicant" label="Applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.dob && <SortableTh column="dob" label="DOB" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.rtoFee && <SortableTh column="rtoFee" label="Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.pccFee && <SortableTh column="pccFee" label="PCC Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.agencyFee && <SortableTh column="agencyFee" label="Agency Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {showRemarkMobile && !restricted && <SortableTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.application && <SortableTh column="application" label="Application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.lldl && <SortableTh column="lldl" label="LL/DL No." sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.pccno && <SortableTh column="pccno" label="PCC No" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.rto && <SortableTh column="rto" label="RTO" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.agency && <SortableTh column="agency" label="Agency" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {visibleCols.slot && <SortableTh column="slot" label="Slot" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {showRemarkMobile && <SortableTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
-              {showRemarkMobile && <SortableTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
+              <ExcelFilterTh column="draftId" label="Draft ID" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.draftId} />
+              {visibleCols.applicationDate && <ExcelFilterTh column="applicationDate" label="Date" isDate sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.applicationDate} />}
+              {visibleCols.amount && <ExcelFilterTh column="amount" label="Amount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.amount} />}
+              {visibleCols.dealer && <ExcelFilterTh column="dealer" label="Dealer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.dealer} />}
+              {visibleCols.service && <ExcelFilterTh column="service" label="Service" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.service} />}
+              {visibleCols.applicant && <ExcelFilterTh column="applicant" label="Applicant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.applicant} />}
+              {visibleCols.dob && <ExcelFilterTh column="dob" label="DOB" isDate sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.dob} />}
+              {visibleCols.rtoFee && <ExcelFilterTh column="rtoFee" label="Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.rtoFee} />}
+              {visibleCols.pccFee && <ExcelFilterTh column="pccFee" label="PCC Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.pccFee} />}
+              {visibleCols.agencyFee && <ExcelFilterTh column="agencyFee" label="Agency Fee" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.agencyFee} />}
+              {showRemarkMobile && !restricted && <ExcelFilterTh column="profit" label="Profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.profit} />}
+              {visibleCols.application && <ExcelFilterTh column="application" label="Application" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.application} />}
+              {visibleCols.lldl && <ExcelFilterTh column="lldl" label="LL/DL No." sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.lldl} />}
+              {visibleCols.pccno && <ExcelFilterTh column="pccno" label="PCC No" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.pccno} />}
+              {visibleCols.rto && <ExcelFilterTh column="rto" label="RTO" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.rto} />}
+              {visibleCols.agency && <ExcelFilterTh column="agency" label="Agency" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.agency} />}
+              {visibleCols.slot && <ExcelFilterTh column="slot" label="Slot" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.slot} />}
+              {showRemarkMobile && <ExcelFilterTh column="mobile" label="Mobile" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.mobile} />}
+              {showRemarkMobile && <ExcelFilterTh column="remark" label="Remark" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.remark} />}
               {onlyDraft && <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Action</th>}
-              <SortableTh column="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <ExcelFilterTh column="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} filterState={columnFilters} setFilterState={setColumnFilters} options={columnOptions.status} />
               <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Appointment</th>
             </tr>
           </thead>
@@ -1858,23 +2072,29 @@ export default function Applications({ restricted = false, canEdit = true, canAp
                 )}
                 {visibleCols.application && (
                   <td className="px-3 py-2">
-                    <div className="flex items-center gap-1.5">
+                    {r.application_no ? (
+                      // Filled → show the number itself as the link. Click
+                      // opens the Sarathi Parivahan status page directly
+                      // (openSarathi builds the "as=<application_no>" URL)
+                      // and copies DOB to the clipboard for pasting there.
+                      <button
+                        type="button"
+                        onClick={() => openSarathi(r)}
+                        title="Open status on Sarathi Parivahan (also copies DOB)"
+                        className="font-medium text-blue-600 hover:underline text-left whitespace-nowrap"
+                      >
+                        {r.application_no}
+                      </button>
+                    ) : (
                       <EditableCell
                         width="w-24"
                         value={r.application_no}
                         disabled={r.services?.application_no_required === false}
-                        readOnly={r.status === "Completed" || !!r.application_no}
-                        readOnlyTitle={r.status === "Completed" ? "Application No. is locked after completion" : FILLED_LOCK_TITLE}
+                        readOnly={r.status === "Completed"}
+                        readOnlyTitle="Application No. is locked after completion"
                         onSave={(v) => updateRowField(r.id, "application_no", v || null)}
                       />
-                      <button
-                        onClick={() => openSarathi(r)}
-                        title="Open on Sarathi Parivahan and copy DOB"
-                        className="text-blue-600 shrink-0"
-                      >
-                        <LinkIcon size={14} />
-                      </button>
-                    </div>
+                    )}
                   </td>
                 )}
                 {visibleCols.lldl && (
