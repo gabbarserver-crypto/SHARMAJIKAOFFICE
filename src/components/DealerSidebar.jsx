@@ -10,6 +10,7 @@ import { useDarkMode } from "../lib/theme";
 import { useSidebarColor, SIDEBAR_COLORS } from "../lib/sidebarColor";
 import logoMark from "../assets/one-infinity-icon-mark.png";
 import {
+  LayoutDashboard,
   FileOutput,
   ShieldCheck,
   MessageSquare,
@@ -30,6 +31,7 @@ import {
 } from "lucide-react";
 
 const ICONS = {
+  Dashboard: LayoutDashboard,
   Applications: FileOutput,
   "PCC Status": ShieldCheck,
   "Call/Chat": MessageSquare,

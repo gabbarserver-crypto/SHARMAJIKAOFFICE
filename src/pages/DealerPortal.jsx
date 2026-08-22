@@ -28,6 +28,7 @@ import QrPaymentPanel from "../components/QrPaymentPanel";
 import PCCStatusCheckModal from "../components/PCCStatusCheckModal";
 import ImageCropModal from "../components/ImageCropModal";
 import DealerBottomTabBar from "../components/DealerBottomTabBar";
+import DealerSidebar from "../components/DealerSidebar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
 import PastelAvatar from "../components/PastelAvatar";
 import { Search, Users } from "lucide-react";
@@ -255,15 +256,40 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
   };
 
   return (
-    <div className="dealer-portal min-h-screen w-full max-w-full min-w-0 overflow-x-hidden bg-slate-100 dark:bg-slate-950">
-      <div className="flex-1 w-full max-w-full min-w-0 flex flex-col">
-      {/* Dealer Portal is mobile-only now — no desktop sidebar/breakpoint
-          switch, always this compact header + DealerBottomTabBar below.
-          flex-wrap + min-w-0/truncate keep this from ever forcing the page
-          wider than the viewport (which was cutting off the cards/button
-          below it) — the icon row simply wraps to its own line if the
-          dealer name eats into the available width. */}
-      <header className="bg-[#0f1b3d] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+    <div className="dealer-portal min-h-screen md:h-screen w-full max-w-full min-w-0 overflow-x-hidden bg-slate-100 dark:bg-slate-950 flex md:overflow-hidden">
+      {/* Desktop-only sidebar — same dark, rounded, color-customizable nav
+          shell as the admin app (see components/Sidebar.jsx). Mobile keeps
+          the compact header + DealerBottomTabBar below, untouched. */}
+      <DealerSidebar
+        dealer={dealer}
+        identity={identity}
+        tabs={visibleTabs}
+        active={tab}
+        onNavigate={(t) => {
+          if (t === "Call/Chat") {
+            // Desktop: same Recent Chats/Recent Calls/New Call/Customer
+            // Chat window the mobile bottom tab bar opens (see
+            // DealerBottomTabBar's onNavigate below).
+            refreshUnreadChats();
+            commsRef.current?.open();
+            return;
+          }
+          setTab(t);
+        }}
+        unreadChats={unreadChats}
+        photoUrl={photoUrl}
+        uploadingPhoto={uploadingPhoto}
+        onUploadPhoto={uploadProfilePhoto}
+        onLogout={onLogout}
+        apkPath={APK_PATH}
+        onOpenGames={openGames}
+        onSetupPasskey={setUpPasskey}
+      />
+      <div className="flex-1 w-full max-w-full min-w-0 flex flex-col md:h-screen md:overflow-y-auto">
+      {/* Mobile-only compact header — on desktop, DealerSidebar above
+          already carries profile/photo, app download, games, passkey,
+          theme toggle, and logout. */}
+      <header className="md:hidden bg-[#0f1b3d] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-3 min-w-0 flex-1 basis-0">
           <input
             type="file"
@@ -344,7 +370,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
         </div>
       )}
 
-      <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto box-border p-6 pb-24">
+      <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto box-border p-6 pb-24 md:pb-8">
         {(tab === "Ledger" || (tab === "Applications" && !isDealerOwner) || (tab === "Dashboard" && isDealerOwner)) && (
           <div className="w-full min-w-0 grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 mb-6">
             <div className="min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 sm:p-5">
