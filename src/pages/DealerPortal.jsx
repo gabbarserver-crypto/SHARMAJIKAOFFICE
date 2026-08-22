@@ -75,7 +75,7 @@ const openGames = async () => {
 // "Service" and "Payments" used to be their own top-level tabs — they're
 // now folded into "Ledger" as an in-page sub-tab strip (My Ledger / Service
 // / Payments), so the bottom nav / sidebar only need to list "Ledger".
-const TABS = ["Applications", "PCC Status", "Call/Chat", "Ledger"];
+const TABS = ["Applications", "Appointment", "PCC Status", "Call/Chat", "Ledger"];
 const LEDGER_SUBTABS = ["My Ledger", "Service", "Payments"];
 
 // Small reusable sortable <th> — click toggles asc/desc on that column,
@@ -410,6 +410,7 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
             onChat={(app) => setChatApp({ id: app.id, label: `${app.draft_code} — ${app.applicant_name}` })}
           />
         )}
+        {tab === "Appointment" && <DealerAppointments dealerId={dealer.id} identity={identity} refreshKey={refreshKey} />}
         {tab === "PCC Status" && <DealerPccStatus dealerId={dealer.id} refreshKey={refreshKey} />}
         {tab === "Call/Chat" && (
           <div className="space-y-5">
@@ -529,12 +530,50 @@ function NewApplicationModal({ dealer, identity, onClose, onCreated }) {
     date_of_birth: "", mobile: "", address: "", police_station: "", stay_since: "",
     already_has_dl_ll: "",
   });
+  const [sourceApplicationId, setSourceApplicationId] = useState(""); // set when a prior linked application is picked below
+  const [linkedApps, setLinkedApps] = useState([]); // applications for whichever service(s) list this one as their next_service_id, with an LL/DL No already on file
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const selectedService = services.find((s) => s.id === f.service_id);
   // "Learner" service = anything whose name mentions Learner Licence (LL) —
   // that's the only place we ask whether the applicant already holds a
   // licence, since it changes which service they actually need.
   const isLearnerService = !!selectedService && /learner|\bll\b/i.test(`${selectedService.parent_service || ""} ${selectedService.short_name || ""}`);
+  // Services that list the selected service as their next_service_id in
+  // Master Service (e.g. an "LL" service configured with next_service_id =
+  // this "DL" service) — that's the actual link, set up per-service in
+  // Master Service, rather than any naming convention.
+  const sourceServiceIds = selectedService ? services.filter((s) => s.next_service_id === selectedService.id).map((s) => s.id) : [];
+
+  useEffect(() => {
+    if (!sourceServiceIds.length) { setLinkedApps([]); setSourceApplicationId(""); return; }
+    (async () => {
+      // Only prior applications that already have an LL/DL No recorded — one
+      // still in progress with no number yet has nothing useful to hand off.
+      const { data } = await supabase
+        .from("applications")
+        .select("id, applicant_name, father_husband_name, date_of_birth, mobile, address, ll_dl_no, service_id")
+        .eq("dealer_id", dealer.id)
+        .in("service_id", sourceServiceIds)
+        .not("ll_dl_no", "is", null)
+        .order("applicant_name");
+      setLinkedApps(data || []);
+    })();
+  }, [selectedService?.id, sourceServiceIds.join(","), dealer.id]);
+
+  const applySource = (id) => {
+    setSourceApplicationId(id);
+    const src = linkedApps.find((a) => a.id === id);
+    if (src) {
+      setF((s) => ({
+        ...s,
+        applicant_name: src.applicant_name || s.applicant_name,
+        father_husband_name: src.father_husband_name || s.father_husband_name,
+        date_of_birth: src.date_of_birth || s.date_of_birth,
+        mobile: src.mobile || s.mobile,
+        address: src.address || s.address,
+      }));
+    }
+  };
 
   const scanAadhaar = async (file) => {
     if (!file) return;
@@ -598,7 +637,7 @@ function NewApplicationModal({ dealer, identity, onClose, onCreated }) {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, age_limit_required, min_age").order("parent_service");
+      const { data } = await supabase.from("services").select("id, parent_service, short_name, pcc_required, age_limit_required, min_age, next_service_id").order("parent_service");
       setServices(data || []);
     })();
   }, []);
@@ -640,6 +679,7 @@ function NewApplicationModal({ dealer, identity, onClose, onCreated }) {
         // server/migrations/006_track_application_creator.sql.
         created_by_dealer_staff_id: identity?.type === "dealer_staff" ? identity.id : null,
         ...(isLearnerService && f.already_has_dl_ll ? { service_answers: { "Already has DL/LL": f.already_has_dl_ll } } : {}),
+        ...(sourceServiceIds.length && sourceApplicationId ? { source_application_id: sourceApplicationId } : {}),
       })
       .select()
       .single();
@@ -726,6 +766,16 @@ function NewApplicationModal({ dealer, identity, onClose, onCreated }) {
             <option value="Yes — has Learner Licence">Yes — has Learner Licence</option>
             <option value="Yes — has Driving Licence">Yes — has Driving Licence</option>
           </Select>
+        </Field>
+      )}
+      {sourceServiceIds.length > 0 && (
+        <Field label="Existing applicant from a prior service (optional)">
+          <SearchableSelect
+            value={sourceApplicationId}
+            options={linkedApps.map((a) => ({ id: a.id, name: `${a.applicant_name}${a.ll_dl_no ? ` (${a.ll_dl_no})` : ""}` }))}
+            onChange={applySource}
+            placeholder="Search by name or LL/DL No — leave blank if new…"
+          />
         </Field>
       )}
       <Field label="Applicant Name" required><Input value={f.applicant_name} onChange={set("applicant_name")} /></Field>
@@ -993,7 +1043,6 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
   const [statusFilter, setStatusFilter] = useState("Draft");
   const [search, setSearch] = useState("");
   const [serviceList, setServiceList] = useState([]);
-  const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null
   const [detailsApp, setDetailsApp] = useState(null); // row whose Father/Husband, Address & Application No. popup is open
   const [toast, setToast] = useState(null);
   const [sortKey, setSortKey] = useState("submitted_at");
@@ -1030,26 +1079,33 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
     // actually something to download yet (blue = uploaded & downloadable,
     // orange = number recorded but no file uploaded/verified yet).
     const appIds = (data || []).map((r) => r.id);
-    let docsByApp = {};
+    let learningByApp = {};
+    let pccByApp = {};
     if (appIds.length) {
-      const { data: docs, error: docsError } = await supabase
-        .from("application_documents")
-        .select("application_id, name, file_url, status")
-        .in("application_id", appIds);
-      if (docsError) {
-        console.error("Couldn't load application documents:", docsError.message);
+      // Two name-filtered queries — mirrors the admin Applications page's
+      // .ilike("name", "%learning%") exactly, instead of pulling every
+      // document row and filtering client-side. If the dealer role can't
+      // read application_documents at all (e.g. a missing/too-narrow RLS
+      // policy), this now shows up as a toast instead of silently leaving
+      // every LL No looking "not uploaded" with no visible error.
+      const [{ data: learningDocs, error: learningErr }, { data: pccDocs, error: pccErr }] = await Promise.all([
+        supabase.from("application_documents").select("application_id, file_url").in("application_id", appIds).ilike("name", "%learning%"),
+        supabase.from("application_documents").select("application_id, file_url").in("application_id", appIds).ilike("name", "%pcc%"),
+      ]);
+      if (learningErr || pccErr) {
+        console.error("Couldn't load application documents:", learningErr?.message || pccErr?.message);
+        setToast("Couldn't check uploaded Learning/PCC files: " + (learningErr?.message || pccErr?.message));
       } else {
-        (docs || []).forEach((d) => {
-          if (!docsByApp[d.application_id]) docsByApp[d.application_id] = [];
-          docsByApp[d.application_id].push(d);
+        (learningDocs || []).forEach((d) => {
+          if (d.file_url && !learningByApp[d.application_id]) learningByApp[d.application_id] = d.file_url;
+        });
+        (pccDocs || []).forEach((d) => {
+          if (d.file_url && !pccByApp[d.application_id]) pccByApp[d.application_id] = d.file_url;
         });
       }
     }
     const withDocs = (data || []).map((r) => {
-      const docs = docsByApp[r.id] || [];
-      const learningDoc = docs.find((d) => /learn/i.test(d.name) && d.file_url);
-      const pccDoc = docs.find((d) => /pcc/i.test(d.name) && d.file_url);
-      return { ...r, learning_file_url: learningDoc?.file_url || null, pcc_doc_file_url: pccDoc?.file_url || null };
+      return { ...r, learning_file_url: learningByApp[r.id] || null, pcc_doc_file_url: pccByApp[r.id] || null };
     });
     setRows(withDocs);
     setLoading(false);
@@ -1085,34 +1141,6 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
     if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
     return String(av).toLowerCase().localeCompare(String(bv).toLowerCase()) * dir;
   });
-  const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
-
-  const bookAppointment = async (payload) => {
-    const { data: newApp, error } = await supabase
-      .from("applications")
-      .insert({
-        ...payload,
-        // Same attribution as new applications — see
-        // server/migrations/006_track_application_creator.sql.
-        created_by_dealer_staff_id: identity?.type === "dealer_staff" ? identity.id : null,
-      })
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
-    if (payload.service_id) {
-      const { data: reqDocs } = await supabase.from("service_documents").select("name, mandatory, post_approval").eq("service_id", payload.service_id);
-      if (reqDocs?.length) {
-        await supabase.from("application_documents").insert(
-          reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" }))
-        );
-      }
-    }
-    await copyForwardDocuments(bookingApp.sourceApp.id, newApp.id);
-    setToast(`Created ${payload.draft_code} from ${bookingApp.sourceApp.draft_code}`);
-    setBookingApp(null);
-    load();
-  };
-
   return (
     <Card title="My Applications" className="w-full min-w-0">
       <div className="flex items-center justify-between -mt-1 mb-3 flex-wrap gap-2">
@@ -1170,7 +1198,6 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
                 <th className="text-left font-medium px-3 py-2">Mobile</th>
                 <th className="text-left font-medium px-3 py-2">Chat</th>
                 <SortableTh label="Status" sortKeyName="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <th className="text-left font-medium px-3 py-2">Appointment</th>
               </tr>
             </thead>
             <tbody>
@@ -1266,34 +1293,14 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
                       <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight mt-0.5">{getProcessingStage(r)}</div>
                     )}
                   </td>
-                  <td className="px-3 py-2">
-                    {isEligibleForAppointment(r, convertedSourceIds) ? (
-                      <button
-                        onClick={() => setBookingApp({ sourceApp: r, nextService: serviceList.find((s) => s.id === r.services.next_service_id) })}
-                        className="text-blue-600 text-xs font-semibold hover:underline"
-                      >
-                        Book Appointment
-                      </button>
-                    ) : (
-                      <span className="text-slate-300 text-xs">—</span>
-                    )}
-                  </td>
                 </tr>
               ))}
               {visibleRows.length === 0 && (
-                <tr><td colSpan={10} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
+                <tr><td colSpan={9} className="text-center text-slate-400 dark:text-slate-500 py-8">No applications in this view</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      )}
-      {bookingApp && (
-        <BookAppointmentModal
-          sourceApp={bookingApp.sourceApp}
-          nextService={bookingApp.nextService}
-          onClose={() => setBookingApp(null)}
-          onBooked={bookAppointment}
-        />
       )}
       {detailsApp && (
         <Modal title={`Details — ${detailsApp.application_no || detailsApp.draft_code}`} onClose={() => setDetailsApp(null)}>
@@ -1327,6 +1334,135 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
 // Deliberately has NO editing controls anywhere (no PCCNoPopup, no status
 // dropdown, nothing clickable to change pcc_status/pcc_no) — staff manage
 // that from the admin Applications page; this tab is view-only for dealers.
+// Its own tab (previously an "Appointment" column inside My Applications) —
+// lists every application eligible to move to its next service (e.g. a
+// Learner Licence issued 30+ days ago that can now go for the Driving
+// Licence test; the 30-day/eligibility rule itself lives in
+// isEligibleForAppointment()/next_service_wait_days, unchanged). "Book
+// Appointment" fetches that source application's data and creates the
+// follow-up draft in one click, same as the old column's button did.
+function DealerAppointments({ dealerId, identity, refreshKey }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [serviceList, setServiceList] = useState([]);
+  const [bookingApp, setBookingApp] = useState(null); // { sourceApp, nextService } | null
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("services").select("id, parent_service, short_name").order("parent_service");
+      setServiceList(data || []);
+    })();
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("applications")
+      .select("id, draft_code, application_no, applicant_name, father_husband_name, date_of_birth, mobile, address, status, submitted_at, service_id, dealer_id, completed_at, source_application_id, ll_dl_no, pcc_no, pcc_status, service_answers, services(parent_service, short_name, next_service_id, next_service_wait_days, pcc_required, ll_dl_no_required)")
+      .eq("dealer_id", dealerId)
+      .order("submitted_at", { ascending: false });
+    if (error) {
+      setToast("Couldn't load applications: " + error.message);
+      setRows([]);
+      setLoading(false);
+      return;
+    }
+    setRows(data || []);
+    setLoading(false);
+  }, [dealerId]);
+
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  const convertedSourceIds = new Set(rows.map((r) => r.source_application_id).filter(Boolean));
+  const eligibleRows = rows.filter((r) => isEligibleForAppointment(r, convertedSourceIds));
+
+  const bookAppointment = async (payload) => {
+    const { data: newApp, error } = await supabase
+      .from("applications")
+      .insert({
+        ...payload,
+        created_by_dealer_staff_id: identity?.type === "dealer_staff" ? identity.id : null,
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    if (payload.service_id) {
+      const { data: reqDocs } = await supabase.from("service_documents").select("name, mandatory, post_approval").eq("service_id", payload.service_id);
+      if (reqDocs?.length) {
+        await supabase.from("application_documents").insert(
+          reqDocs.map((d) => ({ application_id: newApp.id, name: d.name, mandatory: d.mandatory, post_approval: d.post_approval, status: "Pending" }))
+        );
+      }
+    }
+    await copyForwardDocuments(bookingApp.sourceApp.id, newApp.id);
+    setToast(`Created ${payload.draft_code} from ${bookingApp.sourceApp.draft_code}`);
+    setBookingApp(null);
+    load();
+  };
+
+  return (
+    <Card title="Appointment" className="w-full min-w-0">
+      <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">
+        Applications ready for their next service — Learner Licence issued 30+ days ago, and not already booked.
+      </p>
+      {loading ? (
+        <p className="text-slate-400 dark:text-slate-500 text-sm">Loading…</p>
+      ) : eligibleRows.length === 0 ? (
+        <p className="text-slate-400 dark:text-slate-500 text-sm py-6 text-center">No applications are eligible for an appointment right now.</p>
+      ) : (
+        <div className="dealer-scroll-x w-full min-w-0">
+          <table className="scroll-table w-max min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-500">
+              <tr>
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Ref No.</th>
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Service</th>
+                <th className="text-left font-medium px-3 py-2">Applicant</th>
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">LL No</th>
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Mobile</th>
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Next Service</th>
+                <th className="text-left font-medium px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {eligibleRows.map((r) => {
+                const nextService = serviceList.find((s) => s.id === r.services?.next_service_id);
+                return (
+                  <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:bg-slate-800/60">
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.application_no || r.draft_code}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.services?.short_name || r.services?.parent_service || "—"}</td>
+                    <td className="px-3 py-2 text-blue-600 font-semibold">{r.applicant_name}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.ll_dl_no || "—"}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{r.mobile || "—"}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">{nextService?.short_name || nextService?.parent_service || "—"}</td>
+                    <td className="px-3 py-2">
+                      <button
+                        onClick={() => setBookingApp({ sourceApp: r, nextService })}
+                        className="text-blue-600 text-xs font-semibold hover:underline whitespace-nowrap"
+                      >
+                        Book Appointment
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {bookingApp && (
+        <BookAppointmentModal
+          sourceApp={bookingApp.sourceApp}
+          nextService={bookingApp.nextService}
+          onClose={() => setBookingApp(null)}
+          onBooked={bookAppointment}
+        />
+      )}
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+    </Card>
+  );
+}
+
 function DealerPccStatus({ dealerId, refreshKey = 0 }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);

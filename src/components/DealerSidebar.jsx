@@ -28,11 +28,13 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
+  CalendarClock,
 } from "lucide-react";
 
 const ICONS = {
   Dashboard: LayoutDashboard,
   Applications: FileOutput,
+  Appointment: CalendarClock,
   "PCC Status": ShieldCheck,
   "Call/Chat": MessageSquare,
   Ledger: BookOpen,
