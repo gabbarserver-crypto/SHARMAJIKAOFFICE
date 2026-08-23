@@ -1170,6 +1170,24 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
     let learningByApp = {};
     let pccByApp = {};
     if (appIds.length) {
+      // This list has no date filter, so a long-standing dealer's full
+      // history can run into the hundreds/thousands of applications.
+      // Passing every id into one .in(...) call builds a GET URL long
+      // enough to get the connection reset/failed before Supabase even
+      // replies — same issue fixed in the admin Applications.jsx list.
+      // Chunking keeps each request's URL to a safe size.
+      const ID_CHUNK_SIZE = 200;
+      const chunk = (arr, size) => {
+        const out = [];
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+        return out;
+      };
+      const queryInChunks = async (buildQuery, ids) => {
+        const results = await Promise.all(chunk(ids, ID_CHUNK_SIZE).map((idsChunk) => buildQuery(idsChunk)));
+        const firstError = results.find((r) => r.error)?.error || null;
+        const rowsOut = firstError ? null : results.flatMap((r) => r.data || []);
+        return { data: rowsOut, error: firstError };
+      };
       // Two name-filtered queries — mirrors the admin Applications page's
       // .ilike("name", "%learning%") exactly, instead of pulling every
       // document row and filtering client-side. If the dealer role can't
@@ -1177,8 +1195,8 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
       // policy), this now shows up as a toast instead of silently leaving
       // every LL No looking "not uploaded" with no visible error.
       const [{ data: learningDocs, error: learningErr }, { data: pccDocs, error: pccErr }] = await Promise.all([
-        supabase.from("application_documents").select("application_id, file_url").in("application_id", appIds).ilike("name", "%learning%"),
-        supabase.from("application_documents").select("application_id, file_url").in("application_id", appIds).ilike("name", "%pcc%"),
+        queryInChunks((idsChunk) => supabase.from("application_documents").select("application_id, file_url").in("application_id", idsChunk).ilike("name", "%learning%"), appIds),
+        queryInChunks((idsChunk) => supabase.from("application_documents").select("application_id, file_url").in("application_id", idsChunk).ilike("name", "%pcc%"), appIds),
       ]);
       if (learningErr || pccErr) {
         console.error("Couldn't load application documents:", learningErr?.message || pccErr?.message);
