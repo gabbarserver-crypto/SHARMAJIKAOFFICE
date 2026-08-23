@@ -770,16 +770,46 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     setRows(baseRows);
     setLoading(false);
 
+    // With "Showing All Years" (or no filters) this list can run into the
+    // thousands of rows. Passing every id from that into a single .in(...)
+    // call builds a GET URL with thousands of comma-separated UUIDs, which
+    // is long enough that the connection gets reset (net::ERR_CONNECTION_RESET)
+    // before Supabase/PostgREST even replies — rather than a clean error.
+    // Chunking keeps each request's URL to a safe size; 200 ids/request is
+    // comfortably under typical proxy/server URL length limits even with
+    // full-length UUIDs.
+    const ID_CHUNK_SIZE = 200;
+    const chunk = (arr, size) => {
+      const out = [];
+      for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+      return out;
+    };
+    // Runs one .in(column, ids) query per chunk (in parallel) and concatenates
+    // the results. Returns { data, error } shaped like a single Supabase call,
+    // with error set if the FIRST failing chunk failed (rest are still awaited
+    // so we don't leave dangling requests, but we don't need their errors).
+    const queryInChunks = async (buildQuery, ids) => {
+      if (!ids.length) return { data: [], error: null };
+      const results = await Promise.all(chunk(ids, ID_CHUNK_SIZE).map((idsChunk) => buildQuery(idsChunk)));
+      const firstError = results.find((r) => r.error)?.error || null;
+      const data = firstError ? null : results.flatMap((r) => r.data || []);
+      return { data, error: firstError };
+    };
+
     // Find uploaded Learning documents for the applications currently in the
     // list. The LL/DL number becomes a download link when a Learning file exists.
     try {
       const appIds = baseRows.filter((r) => r.ll_dl_no).map((r) => r.id);
       if (appIds.length) {
-        const { data: learningDocs, error: learningDocsError } = await supabase
-          .from("application_documents")
-          .select("id, application_id, name, file_url")
-          .in("application_id", appIds)
-          .ilike("name", "%learning%");
+        const { data: learningDocs, error: learningDocsError } = await queryInChunks(
+          (idsChunk) =>
+            supabase
+              .from("application_documents")
+              .select("id, application_id, name, file_url")
+              .in("application_id", idsChunk)
+              .ilike("name", "%learning%"),
+          appIds
+        );
 
         if (!learningDocsError) {
           const byAppId = {};
@@ -806,18 +836,26 @@ export default function Applications({ restricted = false, canEdit = true, canAp
     const chatAppIds = baseRows.filter((r) => r.services?.chat_in_app).map((r) => r.id);
     if (chatAppIds.length === 0) { setChatStatus({}); return; }
     try {
-      const { data: threads, error: threadsError } = await supabase
-        .from("chat_threads")
-        .select("id, application_id")
-        .in("application_id", chatAppIds);
+      const { data: threads, error: threadsError } = await queryInChunks(
+        (idsChunk) => supabase.from("chat_threads").select("id, application_id").in("application_id", idsChunk),
+        chatAppIds
+      );
       if (threadsError || !threads?.length) { setChatStatus({}); return; }
       const threadIds = threads.map((t) => t.id);
-      const { data: messages, error: messagesError } = await supabase
-        .from("chat_messages")
-        .select("thread_id, sender_type, created_at")
-        .in("thread_id", threadIds)
-        .order("created_at", { ascending: false });
+      const { data: messages, error: messagesError } = await queryInChunks(
+        (idsChunk) =>
+          supabase
+            .from("chat_messages")
+            .select("thread_id, sender_type, created_at")
+            .in("thread_id", idsChunk)
+            .order("created_at", { ascending: false }),
+        threadIds
+      );
       if (messagesError) { setChatStatus({}); return; }
+      // Chunking loses the single-query global ordering, so re-sort newest
+      // first across all chunks before the "unbroken run of non-staff
+      // messages" walk below relies on that order.
+      messages?.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       // Messages are newest-first, so walking from the top and counting the
       // unbroken run of non-staff messages approximates "unread since our
       // last reply" without needing separate read-receipt tracking. This
@@ -4188,7 +4226,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
   // already have it in the table.
   const OperationalDetailsCard = onSaveField ? (
     <Card title="Operational Details" className="mb-4">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-3">
         <Field label="Application Date">
           <EditableCell
             width="w-full"
@@ -4316,7 +4354,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               </Card>
             )}
 
-            <Card title="Update Status">
+            <Card title="Update Status" className="overflow-hidden">
               {showForwardActions || showReject ? (
                 <Field label="Remarks (shown to dealer)">
                   <Input
@@ -4394,7 +4432,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
     return (
       <>
       <Modal title={`Application — ${app.draft_code}`} onClose={onClose} size="xl">
-        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 dark:text-slate-500 mb-4 -mt-1">
+        <div className="rounded-xl border border-slate-800/80 bg-slate-950/30 px-3 py-2.5 mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Dealer:</span> {dealerLabel(app.dealers) || "—"}</span>
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
           <span className="flex items-center gap-1.5">
@@ -4407,11 +4445,11 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
         </div>
         {QuickActionBar}
 
-        <div className="grid md:grid-cols-3 gap-6">
+        <div className="grid lg:grid-cols-[minmax(250px,0.9fr)_minmax(320px,1.15fr)_minmax(240px,0.85fr)] gap-4 items-start">
           {/* Column 1: applicant details + staff assignment */}
           <div>
-            <Card title="Applicant Details" className="mb-4">
-              <div className="grid grid-cols-2 gap-x-4">
+            <Card title="Applicant Details" className="mb-4 overflow-hidden">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
                 <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
                 <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
@@ -4466,7 +4504,8 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
 
           {/* Column 2: service answers, documents, chat */}
           <div>
-            <Card title="Service Answers" className="mb-4">
+            <Card title="Service Answers" className="mb-4 overflow-hidden">
+              <div className="mb-3 rounded-lg border border-blue-100 dark:border-blue-900/40 bg-blue-50/60 dark:bg-blue-950/20 px-3 py-2 text-[11px] text-slate-500 dark:text-slate-400">Application, Learner and PCC numbers can be updated here without opening another screen.</div>
               {answers.map((row, i) => {
                 // Same loose key match as getLearnerNo — lets staff click the
                 // Learner No value here to jump straight to Sarathi, same as
@@ -4474,7 +4513,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
                 // instead of only being reachable from there.
                 const isLearnerNo = row.key.replace(/[^a-z]/gi, "").toLowerCase().includes("learnerno");
                 return (
-                  <div key={i} className="flex gap-2 mb-2">
+                  <div key={i} className="flex items-center gap-2 mb-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 p-1.5">
                     <Input placeholder="Field name" value={row.key} onChange={setAnswerKey(i)} className="w-2/5" />
                     <Input placeholder="Value" value={row.value} onChange={setAnswerValue(i)} />
                     {isLearnerNo && row.value && app.application_no && (
@@ -4505,7 +4544,11 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               </div>
             </Card>
 
-            <Card title="Documents" className="mb-4">
+            <Card title="Documents" className="mb-4 overflow-hidden">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[11px] text-slate-400 dark:text-slate-500">Uploaded files are shown with a larger preview for quick verification.</span>
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{(app.docs || []).filter((d) => !d.post_approval || app.status === "Accepted").length} files</span>
+              </div>
               {pccNeeded(app) && (
                 <button
                   onClick={() => setShowPccLetter(true)}
@@ -4578,11 +4621,13 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
 
           {/* Column 3: fee details, history, update status */}
           <div>
-            <Card title="Fee Details" className="mb-4">
-              <div className="grid grid-cols-2 gap-y-1.5 text-sm">
-                <span className="text-slate-400 dark:text-slate-500">Amount (charged)</span>
-                <span className="text-slate-800 dark:text-slate-100 font-medium">{fee(app.amount)}</span>
-                <span className="text-slate-400 dark:text-slate-500">Fee</span>
+            <Card title="Fee Details" className="mb-4 overflow-hidden">
+              <div className="mb-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 p-3">
+                <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500">Amount charged</div>
+                <div className="text-xl font-bold text-slate-900 dark:text-white mt-0.5">{fee(app.amount)}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-y-2 text-sm">
+                <span className="text-slate-400 dark:text-slate-500">Service Fee</span>
                 <span className="text-slate-700 dark:text-slate-200">{fee(app.rto_fee)}</span>
                 <span className="text-slate-400 dark:text-slate-500">PCC Fee</span>
                 <span className="text-slate-700 dark:text-slate-200">{fee(app.pcc_fee)}</span>
@@ -4593,7 +4638,7 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
               </div>
             </Card>
 
-            <Card title="Application History" className="mb-4">
+            <Card title="Application History" className="mb-4 overflow-hidden">
               <EntryLog app={app} />
               {(app.history || []).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No history yet</p>}
               {(app.history || []).map((h) => (
@@ -4679,8 +4724,8 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           <span><span className="font-semibold text-slate-600 dark:text-slate-300">Service:</span> {serviceLabel(app.services) || "—"}</span>
         </div>
         {QuickActionBar}
-        <Card title="Applicant Details" className="mb-4">
-          <div className="grid grid-cols-2 gap-x-4">
+        <Card title="Applicant Details" className="mb-4 overflow-hidden">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
             <Field label="Name"><Input value={applicant.applicant_name} onChange={setApplicantField("applicant_name")} /></Field>
             <Field label="Father/Husband"><Input value={applicant.father_husband_name} onChange={setApplicantField("father_husband_name")} /></Field>
             <Field label="DOB"><Input type="text" placeholder="DD-MM-YYYY" value={applicant.date_of_birth} onChange={setApplicantField("date_of_birth")}
@@ -4761,7 +4806,11 @@ function ApplicationDetailModal({ app, mode = "customer", staffList, restricted 
           </div>
         </Card>
 
-        <Card title="Documents">
+        <Card title="Documents" className="overflow-hidden">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[11px] text-slate-400 dark:text-slate-500">Larger previews make document checking faster.</span>
+            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{(app.docs || []).filter((d) => !d.post_approval || app.status === "Accepted").length} files</span>
+          </div>
           {pccNeeded(app) && (
             <button
               onClick={() => setShowPccLetter(true)}
@@ -4921,62 +4970,71 @@ function DocumentRow({ doc, applicationId, onChanged }) {
     onChanged?.();
   };
 
+  const isImage = /\.(png|jpe?g|gif|webp|bmp)$/i.test(doc.file_url || "");
+  const isPdf = /\.pdf($|\?)/i.test(doc.file_url || "");
+  const statusClass = DOC_STATUS_STYLES[doc.status] || DOC_STATUS_STYLES.Pending;
+
   return (
-    <div className="py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
-      <div className="flex items-center justify-between text-sm">
-        <div className="flex items-center gap-2">
-          {doc.file_url ? (
-            /\.(png|jpe?g|gif|webp|bmp)$/i.test(doc.file_url) ? (
-              <img
-                src={doc.file_url}
-                alt={doc.name}
-                className="w-10 h-10 rounded border border-slate-200 dark:border-slate-800 object-cover shrink-0"
-              />
-            ) : (
-              <span className="w-10 h-10 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-center text-[9px] font-semibold text-slate-400 dark:text-slate-500 shrink-0">
-                FILE
-              </span>
-            )
-          ) : null}
-          <span className="text-slate-700 dark:text-slate-300">{doc.name}</span>
-          {uploadedFileName && (
-            <span className="text-slate-400 dark:text-slate-500 text-xs truncate max-w-[140px]" title={uploadedFileName}>
-              {uploadedFileName}
-            </span>
+    <div className="mb-3 last:mb-0 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/40 overflow-hidden shadow-sm">
+      <div className="flex gap-3 p-3">
+        <div className="w-24 h-20 sm:w-28 sm:h-24 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 shrink-0 flex items-center justify-center">
+          {doc.file_url && isImage ? (
+            <a href={doc.file_url} target="_blank" rel="noreferrer" className="block w-full h-full" title="Open full-size document">
+              <img src={doc.file_url} alt={doc.name} className="w-full h-full object-cover hover:scale-[1.03] transition-transform" />
+            </a>
+          ) : doc.file_url && isPdf ? (
+            <a href={doc.file_url} target="_blank" rel="noreferrer" className="flex flex-col items-center justify-center w-full h-full text-rose-600 dark:text-rose-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60">
+              <span className="text-lg font-bold">PDF</span>
+              <span className="text-[9px] font-semibold mt-0.5">OPEN</span>
+            </a>
+          ) : doc.file_url ? (
+            <a href={doc.file_url} target="_blank" rel="noreferrer" className="flex flex-col items-center justify-center w-full h-full text-slate-500 dark:text-slate-400">
+              <span className="text-lg font-bold">FILE</span>
+              <span className="text-[9px] mt-0.5">OPEN</span>
+            </a>
+          ) : (
+            <div className="text-center text-rose-500">
+              <div className="text-lg">—</div>
+              <div className="text-[9px] font-semibold">MISSING</div>
+            </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {doc.file_url ? (
-            <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-blue-600 text-xs font-semibold">View</a>
-          ) : (
-            <span className="text-rose-500 text-xs">Missing</span>
-          )}
-          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${DOC_STATUS_STYLES[doc.status] || DOC_STATUS_STYLES.Pending}`}>
-            {doc.status || "Pending"}
-          </span>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate" title={doc.name}>{doc.name}</div>
+              {uploadedFileName ? (
+                <div className="text-[11px] text-slate-400 dark:text-slate-500 truncate mt-0.5" title={uploadedFileName}>{uploadedFileName}</div>
+              ) : (
+                <div className="text-[11px] text-rose-500 mt-0.5">No file uploaded yet</div>
+              )}
+            </div>
+            <span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${statusClass}`}>{doc.status || "Pending"}</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-3">
+            {doc.file_url ? (
+              <a href={doc.file_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">View full size ↗</a>
+            ) : (
+              <span className="text-xs font-semibold text-rose-500">Missing document</span>
+            )}
+            {doc.file_url && doc.status !== "Rejected" && doc.status !== "Verified" && (
+              <button disabled={busy} onClick={() => setStatus("Verified")} className="text-xs font-semibold text-emerald-600 disabled:opacity-50">✓ Verify</button>
+            )}
+            {doc.file_url && doc.status !== "Rejected" && (
+              <button disabled={busy} onClick={() => setStatus("Rejected")} className="text-xs font-semibold text-rose-500 disabled:opacity-50">Reject</button>
+            )}
+          </div>
         </div>
       </div>
-      {doc.file_url && doc.status !== "Rejected" && (
-        <div className="flex gap-2 mt-1.5">
-          {/* Verify is only needed for a doc still sitting at Pending (e.g.
-              one staff uploaded themselves) — a dealer's own upload is
-              already auto-verified. Reject stays available even once
-              Verified, since an auto-verified doc can still turn out to be
-              wrong and needs to be catchable. */}
-          {doc.status !== "Verified" && (
-            <button disabled={busy} onClick={() => setStatus("Verified")} className="text-xs font-semibold text-emerald-600 disabled:opacity-50">Verify</button>
-          )}
-          <button disabled={busy} onClick={() => setStatus("Rejected")} className="text-xs font-semibold text-rose-500 disabled:opacity-50">Reject</button>
-        </div>
-      )}
+
       {doc.status === "Rejected" && doc.reject_reason && (
-        <p className="text-xs text-rose-500 mt-1">Reason: {doc.reject_reason}</p>
+        <div className="mx-3 mb-3 rounded-lg bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40 px-3 py-2 text-xs text-rose-600 dark:text-rose-400">Reason: {doc.reject_reason}</div>
       )}
-      {/* Verified docs are locked to avoid an accidental overwrite of an
-          already-approved file — Reject it first (above) if it genuinely
-          needs replacing. */}
+
       {doc.status !== "Verified" && (
-        <div className="mt-2">
+        <div className="px-3 pb-3">
           <DocUploadDropzone busy={uploading} onFile={uploadFile} />
           {uploadError && <p className="text-rose-500 text-xs mt-1">{uploadError}</p>}
         </div>

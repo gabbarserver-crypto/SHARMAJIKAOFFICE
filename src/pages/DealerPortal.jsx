@@ -32,6 +32,7 @@ import DealerSidebar from "../components/DealerSidebar";
 import DocUploadDropzone from "../components/DocUploadDropzone";
 import PastelAvatar from "../components/PastelAvatar";
 import { Search, Users } from "lucide-react";
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 // (Ledger's description-parsing helpers are gone — dealer_ledger already
 // carries ledger_type / display_name as real columns, so nothing needs
 // importing from Ledger.jsx anymore.)
@@ -193,13 +194,53 @@ export default function DealerPortal({ dealer, identity, call, onLogout }) {
     }
   };
 
-  const visibleTabs = identity?.type === "dealer" ? ["Dashboard", ...TABS, "Staff"] : TABS;
-  // Only the dealer owner login gets a Dashboard tab (see visibleTabs
-  // above) — used below to decide where the Running Balance/Credit
-  // Limit/Pay by QR summary cards live: on Dashboard for the owner
-  // (freeing up the Applications tab for just... applications), but still
-  // on Applications for a dealer_staff sub-login, since they have no
-  // Dashboard tab to move them to.
+  // Dashboard tab (with the team performance graph) always shows for the
+  // dealer owner. For a dealer_staff sub-login, whether they see it is
+  // driven by Settings → Permissions → "Dealer Staff" role → Dashboard →
+  // View — the same permissions matrix already used to gate tabs for
+  // internal ERP staff (see App.jsx's MODULE_BY_NAV_KEY), reused here so
+  // admins get one place to control who sees what, instead of it being
+  // hardcoded per login type.
+  const [dealerStaffCanViewDashboard, setDealerStaffCanViewDashboard] = useState(false);
+  useEffect(() => {
+    if (identity?.type !== "dealer_staff") return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("permissions")
+        .select("can_view, roles!inner(role_name)")
+        .eq("roles.role_name", "Dealer Staff")
+        .eq("module", "dashboard")
+        .maybeSingle();
+      if (error) {
+        // Most likely cause: the `permissions` table's RLS policy only
+        // allows internal `staff` logins to read it, not `dealer_staff`
+        // logins — same class of issue as the application_documents RLS
+        // gap fixed earlier. Logged (not toasted) since defaulting to
+        // "hidden" is a safe fallback, but this would otherwise silently
+        // make the admin's checkbox look broken with no visible reason.
+        console.error("Couldn't check Dealer Staff Dashboard permission (RLS on 'permissions' table?):", error.message);
+      }
+      if (!cancelled) setDealerStaffCanViewDashboard(!!data?.can_view);
+    })();
+    return () => { cancelled = true; };
+  }, [identity?.type]);
+  const showDashboardTab = identity?.type === "dealer" || dealerStaffCanViewDashboard;
+  const visibleTabs = identity?.type === "dealer"
+    ? ["Dashboard", ...TABS, "Staff"]
+    : (showDashboardTab ? ["Dashboard", ...TABS] : TABS);
+
+  // If the current tab drops out of the visible set (e.g. a dealer_staff's
+  // Dashboard permission gets turned off mid-session), fall back to the
+  // first tab that's still available instead of showing a blank pane.
+  useEffect(() => {
+    if (!visibleTabs.includes(tab)) setTab(visibleTabs[0]);
+  }, [visibleTabs.join(","), tab]);
+  // Used below to decide where the Running Balance/Credit Limit/Pay by QR
+  // summary cards live: on Dashboard for the owner (freeing up the
+  // Applications tab for just... applications), but still on Applications
+  // for a dealer_staff sub-login, matching where those cards have always
+  // lived for staff logins.
   const isDealerOwner = identity?.type === "dealer";
   const [dark, toggleDark] = useDarkMode();
   const [passkeyMsg, setPasskeyMsg] = useState("");
@@ -870,6 +911,9 @@ const DEALER_STATUS_GROUPS = {
 // submitted this", so we label those explicitly as "Before tracking
 // started" rather than silently folding them into the owner's count.
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+// Same colors as the admin Dashboard.jsx's status donut/bar charts, so the
+// dealer-side graph reads consistently with the internal ERP one.
+const TEAM_STATUS_COLORS = { pending: "#d97706", completed: "#059669" };
 
 function DealerTeamDashboard({ dealerId, refreshKey }) {
   const now = new Date();
@@ -943,6 +987,14 @@ function DealerTeamDashboard({ dealerId, refreshKey }) {
   );
   const monthLabel = `${MONTH_NAMES[month]} ${year}`;
 
+  // Status donut — mirrors the 3 stat cards above, same source of truth.
+  const statusDonutData = [
+    { name: "Pending", key: "pending", value: totals.pending },
+    { name: "Completed", key: "completed", value: totals.completed },
+  ].filter((d) => d.value > 0);
+  // Per-staff bar chart — top 8 by volume this month, pending/completed stacked.
+  const staffBarData = groupRows.slice(0, 8);
+
   if (error) return <div className="text-center py-10 text-red-500 text-sm">{error}</div>;
 
   return (
@@ -990,6 +1042,42 @@ function DealerTeamDashboard({ dealerId, refreshKey }) {
           <p className="text-xs text-emerald-700/80 dark:text-emerald-400/80 mt-1">Completed</p>
         </div>
       </div>
+
+      {(statusDonutData.length > 0 || staffBarData.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {statusDonutData.length > 0 && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 px-1">Pending vs Completed</p>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie data={statusDonutData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                    {statusDonutData.map((d) => (
+                      <Cell key={d.key} fill={TEAM_STATUS_COLORS[d.key]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend verticalAlign="bottom" height={24} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {staffBarData.length > 0 && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 px-1">By Staff Member ({monthLabel})</p>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={staffBarData} layout="vertical" margin={{ left: 8, right: 8 }}>
+                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="label" width={90} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Legend verticalAlign="bottom" height={24} />
+                  <Bar dataKey="pending" name="Pending" stackId="s" fill={TEAM_STATUS_COLORS.pending} radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="completed" name="Completed" stackId="s" fill={TEAM_STATUS_COLORS.completed} radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
 
       <div>
         <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">By Staff Member</h4>
