@@ -1126,9 +1126,10 @@ const PCC_STATUS_STYLES = {
 function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  // Opens on "Draft" by default (dealer's most actionable bucket — apps
-  // still needing documents/submission) instead of "All".
-  const [statusFilter, setStatusFilter] = useState("Draft");
+  // Opens on "All" by default — a "Draft" default meant dealers/staff with
+  // no drafts pending saw an empty "No applications in this view" screen
+  // even though they had plenty of submitted applications.
+  const [statusFilter, setStatusFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [serviceList, setServiceList] = useState([]);
   const [detailsApp, setDetailsApp] = useState(null); // row whose Father/Husband, Address & Application No. popup is open
