@@ -955,8 +955,14 @@ function DealerTeamDashboard({ dealerId, refreshKey }) {
     })();
   }, [dealerId, month, year, refreshKey]);
 
-  const isPending = (s) => s !== "Completed" && s !== "Rejected";
-  const isCompleted = (s) => s === "Completed";
+  // The app's actual "done" status is "Accepted" (set via
+  // complete_application(), same as the admin Applications.jsx dashboard —
+  // see its Status Donut using status === "Accepted"). "Completed" is a
+  // rare legacy value from before that migration. Treating only literal
+  // "Completed" as done (as this used to) meant every Accepted application
+  // — the vast majority — showed up as "Pending" here.
+  const isCompleted = (s) => s === "Accepted" || s === "Completed";
+  const isPending = (s) => !isCompleted(s) && s !== "Rejected";
 
   // Split into "before tracking started" (created_by_dealer_staff_id is
   // null AND older than this migration) vs the owner's own submissions
