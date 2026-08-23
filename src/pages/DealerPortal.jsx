@@ -1188,25 +1188,32 @@ function DealerApplications({ dealerId, identity, refreshKey, onSelect, onChat }
         const rowsOut = firstError ? null : results.flatMap((r) => r.data || []);
         return { data: rowsOut, error: firstError };
       };
-      // Two name-filtered queries — mirrors the admin Applications page's
-      // .ilike("name", "%learning%") exactly, instead of pulling every
-      // document row and filtering client-side. If the dealer role can't
-      // read application_documents at all (e.g. a missing/too-narrow RLS
-      // policy), this now shows up as a toast instead of silently leaving
-      // every LL No looking "not uploaded" with no visible error.
-      const [{ data: learningDocs, error: learningErr }, { data: pccDocs, error: pccErr }] = await Promise.all([
-        queryInChunks((idsChunk) => supabase.from("application_documents").select("application_id, file_url").in("application_id", idsChunk).ilike("name", "%learning%"), appIds),
-        queryInChunks((idsChunk) => supabase.from("application_documents").select("application_id, file_url").in("application_id", idsChunk).ilike("name", "%pcc%"), appIds),
-      ]);
-      if (learningErr || pccErr) {
-        console.error("Couldn't load application documents:", learningErr?.message || pccErr?.message);
-        setToast("Couldn't check uploaded Learning/PCC files: " + (learningErr?.message || pccErr?.message));
+      // Learning and PCC used to be two separate .ilike() queries per
+      // chunk — combined into one .or() query per chunk (selecting `name`
+      // too, so results can be bucketed client-side) to halve the number
+      // of full-table-scan queries hitting Postgres until the missing
+      // index on application_documents.application_id is added (that
+      // index, not this, is the real fix for the "canceling statement due
+      // to statement timeout" errors — see the SQL shared separately).
+      const { data: docs, error: docsErr } = await queryInChunks(
+        (idsChunk) =>
+          supabase
+            .from("application_documents")
+            .select("application_id, name, file_url")
+            .in("application_id", idsChunk)
+            .or("name.ilike.%learning%,name.ilike.%pcc%"),
+        appIds
+      );
+      if (docsErr) {
+        console.error("Couldn't load application documents:", docsErr.message);
+        setToast("Couldn't check uploaded Learning/PCC files: " + docsErr.message);
       } else {
-        (learningDocs || []).forEach((d) => {
-          if (d.file_url && !learningByApp[d.application_id]) learningByApp[d.application_id] = d.file_url;
-        });
-        (pccDocs || []).forEach((d) => {
-          if (d.file_url && !pccByApp[d.application_id]) pccByApp[d.application_id] = d.file_url;
+        (docs || []).forEach((d) => {
+          if (!d.file_url) return;
+          const isLearning = /learning/i.test(d.name || "");
+          const isPcc = /pcc/i.test(d.name || "");
+          if (isLearning && !learningByApp[d.application_id]) learningByApp[d.application_id] = d.file_url;
+          if (isPcc && !pccByApp[d.application_id]) pccByApp[d.application_id] = d.file_url;
         });
       }
     }
